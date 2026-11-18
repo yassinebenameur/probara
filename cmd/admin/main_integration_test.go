@@ -213,7 +213,7 @@ func TestResetTwoFactorTurnsItOffAndRetiresChallenges(t *testing.T) {
 }
 
 // The break-glass tool must work on a database whose migration job failed
-// before the lockout and session migrations (000117, 000118) ran.
+// before the lockout and session migrations (000116, 000117) ran.
 func TestUpsertSuperadmin_WorksBeforeTheIdentityMigrations(t *testing.T) {
 	ctx := context.Background()
 	client, teardown := testutil.SetupPostgresDB(ctx, t)
@@ -260,7 +260,7 @@ func TestUpsertSuperadmin_WorksBeforeTheIdentityMigrations(t *testing.T) {
 	}
 }
 
-// Migrations 000124 and 000125 go down and back up cleanly, and -reset-2fa
+// Migrations 000123 and 000124 go down and back up cleanly, and -reset-2fa
 // works between them (tokens table present, two-factor columns not).
 func TestAccountMigrationsDownAndUp(t *testing.T) {
 	ctx := context.Background()
@@ -280,19 +280,19 @@ func TestAccountMigrationsDownAndUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := m.Steps(-1); err != nil {
-		t.Fatalf("down 000125: %v", err)
-	}
-	if was, err := resetTwoFactor(ctx, client, "ops"); err != nil || was {
-		t.Fatalf("resetTwoFactor() without 000125 = %v, %v", was, err)
-	}
-	if err := upsertSuperadmin(ctx, client, "ops", "h2"); err != nil {
-		t.Fatalf("upsert without 000125: %v", err)
-	}
-	if err := m.Steps(-1); err != nil {
 		t.Fatalf("down 000124: %v", err)
 	}
-	if err := upsertSuperadmin(ctx, client, "ops", "h3"); err != nil {
+	if was, err := resetTwoFactor(ctx, client, "ops"); err != nil || was {
+		t.Fatalf("resetTwoFactor() without 000124 = %v, %v", was, err)
+	}
+	if err := upsertSuperadmin(ctx, client, "ops", "h2"); err != nil {
 		t.Fatalf("upsert without 000124: %v", err)
+	}
+	if err := m.Steps(-1); err != nil {
+		t.Fatalf("down 000123: %v", err)
+	}
+	if err := upsertSuperadmin(ctx, client, "ops", "h3"); err != nil {
+		t.Fatalf("upsert without 000123: %v", err)
 	}
 	if err := m.Steps(2); err != nil {
 		t.Fatalf("up again: %v", err)

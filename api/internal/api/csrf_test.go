@@ -218,8 +218,8 @@ func TestCookieWritesThroughTheUIProxyWithoutOriginConfiguration(t *testing.T) {
 
 	// What the proxy forwards unchanged: a page on another origin. The
 	// forwarded host is the one the browser sent to (the UI), or -- through
-	// a same-origin proxy on the attacker's origin that passes client headers
-	// (the status page's /_sp_api) -- whatever the attacker's script set.
+	// a same-origin proxy on the attacker's origin that passes client
+	// headers -- whatever the attacker's script set.
 	attacks := map[string]struct {
 		forwardedHost string
 		headers       map[string]string

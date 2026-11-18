@@ -57,9 +57,6 @@ func TestDeletedWorkspaceStatusPagesAreGone(t *testing.T) {
 	if _, _, _, err := svc.GetDraftTemplateBySlug(ctx, "gone-page"); !errors.Is(err, ErrStatusPageNotFound) {
 		t.Fatalf("deleted workspace preview: err = %v, want not found", err)
 	}
-	if _, err := svc.GetTenantIDByStatusPageID(ctx, deletedPage); !errors.Is(err, ErrStatusPageNotFound) {
-		t.Fatalf("deleted workspace page by id: err = %v, want not found", err)
-	}
 
 	store := newPushStore(dbClient.DB)
 	if id, _, err := store.PageIDForSlug(ctx, "gone-page"); err != nil || id != uuid.Nil {
@@ -170,8 +167,5 @@ func TestDeletedWorkspacePagesAreMissingOnEveryRoute(t *testing.T) {
 	}
 	if rec := get("/public/status/doomed-kiosk", session); rec.Code != http.StatusNotFound {
 		t.Fatalf("visitor session of a deleted workspace = %d, want 404", rec.Code)
-	}
-	if _, err := svc.PageVisibilityByID(ctx, publicID); !errors.Is(err, ErrStatusPageNotFound) {
-		t.Fatalf("API proxy lookup of a deleted workspace's page: err = %v, want not found", err)
 	}
 }

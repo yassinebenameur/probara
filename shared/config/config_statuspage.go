@@ -17,7 +17,6 @@ import (
 type StatusPageConfig struct {
 	BaseConfig
 	StatusPageBaseURL string
-	APIBaseURL        string
 	// HTTP server timeouts. These are a safety net only; the public status page
 	// is expected to render well within them. See LoadStatusPageConfig for defaults.
 	ReadTimeout  time.Duration
@@ -61,8 +60,8 @@ type StatusPageConfig struct {
 	CookieSecure *bool
 	// InternalAPIURL is where the service forwards visitors' email
 	// subscription requests (the API stores subscribers; this service stays
-	// read-only): STATUS_PAGE_INTERNAL_API_URL, else STATUS_PAGE_API_BASE_URL.
-	// Empty means no page shows a subscribe form.
+	// read-only): STATUS_PAGE_INTERNAL_API_URL. Empty means no page shows a
+	// subscribe form.
 	InternalAPIURL string
 	// InternalToken is STATUS_PAGE_INTERNAL_TOKEN: the service presents it
 	// on every forwarded subscription request, and the API refuses the
@@ -75,7 +74,7 @@ type StatusPageConfig struct {
 	TrustForwardedHost bool
 	// PlatformHosts is STATUS_PAGE_PLATFORM_HOSTS, normalized: hosts besides
 	// STATUS_PAGE_BASE_URL's that serve the platform routes (every page under
-	// /public/status/, the API proxy, metrics). Every other public hostname
+	// /public/status/, metrics). Every other public hostname
 	// gets a verified custom domain's page or not found.
 	PlatformHosts []string
 }
@@ -128,9 +127,6 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 	// STATUS_PAGE_BASE_URL
 	cfg.StatusPageBaseURL = os.Getenv("STATUS_PAGE_BASE_URL")
 
-	// STATUS_PAGE_API_BASE_URL (optional; enables /_sp_api/* proxy for the in-page customizer)
-	cfg.APIBaseURL = os.Getenv("STATUS_PAGE_API_BASE_URL")
-
 	// HTTP server timeouts (seconds). Optional; defaults are generous so a large
 	// status page never trips the timeout while page generation itself is the real fix.
 	cfg.ReadTimeout = envDurationSeconds("STATUS_PAGE_READ_TIMEOUT_SECONDS", 15*time.Second)
@@ -181,13 +177,7 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 		cfg.PlatformHosts = append(cfg.PlatformHosts, host)
 	}
 
-	// A separate variable from STATUS_PAGE_API_BASE_URL, which also turns
-	// on the /_sp_api customizer proxy: an install can forward subscriptions
-	// to the API without exposing that proxy.
 	cfg.InternalAPIURL = strings.TrimRight(strings.TrimSpace(os.Getenv("STATUS_PAGE_INTERNAL_API_URL")), "/")
-	if cfg.InternalAPIURL == "" {
-		cfg.InternalAPIURL = strings.TrimRight(strings.TrimSpace(cfg.APIBaseURL), "/")
-	}
 
 	if cfg.InternalToken, err = loadStatusPageInternalToken(); err != nil {
 		return nil, err

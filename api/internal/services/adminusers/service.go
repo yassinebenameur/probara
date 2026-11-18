@@ -570,7 +570,7 @@ func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID, ke
 }
 
 // AttachSignInFactors fills HasPassword, TwoFactorEnabled and the
-// second-factor lockout state (migration 000125; before it nobody has a
+// second-factor lockout state (migration 000124; before it nobody has a
 // second factor). Second-factor lockouts older than the window read as none.
 func (r *sqlRepository) AttachSignInFactors(ctx context.Context, users []models.AdminUser) error {
 	if len(users) == 0 {
@@ -616,7 +616,7 @@ func (r *sqlRepository) AttachSignInFactors(ctx context.Context, users []models.
 	return rows.Err()
 }
 
-// AttachLockState fills the sign-in lockout fields (migration 000117): the
+// AttachLockState fills the sign-in lockout fields (migration 000116): the
 // live failure streak, and the lock's end while it is in force (database
 // clock, as the lockout itself). Before the
 // migration nothing is locked.

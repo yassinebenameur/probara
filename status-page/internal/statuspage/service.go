@@ -280,18 +280,6 @@ func NewService(database db.Querier, analytics sharedanalytics.Reader) *Service 
 // it, over the status_pages table unaliased.
 var livePage = tenancy.LiveTenantSQL("status_pages.tenant_id")
 
-func (s *Service) GetTenantIDByStatusPageID(ctx context.Context, statusPageID uuid.UUID) (uuid.UUID, error) {
-	query := `SELECT tenant_id FROM status_pages WHERE id = $1 AND ` + livePage
-	var tenantID uuid.UUID
-	if err := s.db.QueryRowContext(ctx, query, statusPageID).Scan(&tenantID); err != nil {
-		if err == sql.ErrNoRows {
-			return uuid.UUID{}, ErrStatusPageNotFound
-		}
-		return uuid.UUID{}, fmt.Errorf("failed to get tenant id: %w", err)
-	}
-	return tenantID, nil
-}
-
 // getPublishedTemplate returns the published custom template for a page, or
 // ("", 0, nil) when the page renders with the built-in template. A missing
 // status_page_templates table (migration not yet applied) also means "no

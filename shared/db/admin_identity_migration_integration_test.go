@@ -16,9 +16,9 @@ import (
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
-// Migrations 000117 (sign-in lockout columns) and 000118 (session families)
+// Migrations 000116 (sign-in lockout columns) and 000117 (session families)
 // walked down and back up through golang-migrate. Refresh tokens that were
-// live before 000118 each become their own session family, so signed-in
+// live before 000117 each become their own session family, so signed-in
 // users stay signed in; dead tokens keep no family. Going down, tokens of a
 // revoked family stay revoked.
 func TestAdminIdentityMigrationsUpDownUp(t *testing.T) {
@@ -72,10 +72,10 @@ func TestAdminIdentityMigrationsUpDownUp(t *testing.T) {
 	rotated := insertToken("rotated", "rotated")
 	expired := insertToken("expired", "expired")
 
-	migrateTo(117)
+	migrateTo(116)
 	var count int
 	if err := dbc.QueryRowContext(ctx, `SELECT failed_login_count FROM admin_users WHERE id = $1`, user).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("lockout columns after 117: %d/%v", count, err)
+		t.Fatalf("lockout columns after 116: %d/%v", count, err)
 	}
 
 	checkUp := func(phase string) {
@@ -113,14 +113,14 @@ func TestAdminIdentityMigrationsUpDownUp(t *testing.T) {
 		}
 	}
 
-	migrateTo(118)
+	migrateTo(117)
 	checkUp("first up")
 
 	// Revoke the live family, then go down: its token must stay dead.
 	if _, err := dbc.ExecContext(ctx, `UPDATE admin_session_families SET revoked_at = NOW() WHERE id = $1`, live); err != nil {
 		t.Fatal(err)
 	}
-	migrateTo(117)
+	migrateTo(116)
 	var revoked bool
 	if err := dbc.QueryRowContext(ctx, `SELECT revoked_at IS NOT NULL FROM admin_sessions WHERE id = $1`, live).Scan(&revoked); err != nil || !revoked {
 		t.Fatalf("after down: token of a revoked family revoked=%v/%v", revoked, err)
@@ -137,6 +137,6 @@ func TestAdminIdentityMigrationsUpDownUp(t *testing.T) {
 	if _, err := dbc.ExecContext(ctx, `DELETE FROM admin_sessions WHERE refresh_token_hash LIKE '%-old-binary'`); err != nil {
 		t.Fatal(err)
 	}
-	migrateTo(118)
+	migrateTo(117)
 	checkUp("second up")
 }

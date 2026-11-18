@@ -1,5 +1,5 @@
 // Package pagenotify writes the status-page notification outbox
-// (status_page_notification_outbox, migration 000122): one row per page and
+// (status_page_notification_outbox, migration 000121): one row per page and
 // event that the page's email subscribers and push subscribers hear about.
 //
 // The outbox is the single trigger for subscriber mail and incident push.

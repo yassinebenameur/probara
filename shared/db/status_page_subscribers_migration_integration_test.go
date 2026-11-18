@@ -18,7 +18,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
-// Migrations 000121-000123 add status-page email subscribers, the
+// Migrations 000120-000122 add status-page email subscribers, the
 // notification outbox with its deliveries, automatic publication and
 // incident push deliveries. Walk them down and back up through
 // golang-migrate with rows in every table, as a rollback and re-upgrade
@@ -33,7 +33,7 @@ func TestStatusPageSubscribersMigrationsUpDownUp(t *testing.T) {
 
 	_, file, _, _ := runtime.Caller(0)
 	dir := filepath.Join(filepath.Dir(file), "migrations")
-	// The version below 000121, whatever number it has once every branch
+	// The version below 000120, whatever number it has once every branch
 	// is merged.
 	before := uint(0)
 	entries, err := os.ReadDir(dir)
@@ -44,7 +44,7 @@ func TestStatusPageSubscribersMigrationsUpDownUp(t *testing.T) {
 		if len(e.Name()) < 6 {
 			continue
 		}
-		if n, err := strconv.Atoi(e.Name()[:6]); err == nil && n < 121 && uint(n) > before {
+		if n, err := strconv.Atoi(e.Name()[:6]); err == nil && n < 120 && uint(n) > before {
 			before = uint(n)
 		}
 	}
@@ -87,7 +87,7 @@ func TestStatusPageSubscribersMigrationsUpDownUp(t *testing.T) {
 	}
 
 	for round := 0; round < 2; round++ {
-		migrateTo(123)
+		migrateTo(122)
 		subscriber, incident, outbox := uuid.New(), uuid.New(), uuid.New()
 		exec(`INSERT INTO status_page_subscribers (id, tenant_id, status_page_id, email, email_hash, inbox_hash, state) VALUES ($1, $2, $3, 'a@example.com', 'h', 'h', 'confirmed')`,
 			subscriber, tenant, page)
@@ -117,7 +117,7 @@ func TestStatusPageSubscribersMigrationsUpDownUp(t *testing.T) {
 			t.Fatal("subscriber tables still present after rolling back")
 		}
 		if column("incident_status_page_publications", "auto_published") || column("incident_status_page_publications", "public_title") || column("status_page_push_deliveries", "incident_id") {
-			t.Fatal("000123 columns still present after rolling back")
+			t.Fatal("000122 columns still present after rolling back")
 		}
 		var monitorRows int
 		if err := dbc.QueryRowContext(ctx, `SELECT COUNT(*) FROM status_page_push_deliveries WHERE monitor_id = $1`, monitor).Scan(&monitorRows); err != nil || monitorRows != round+1 {
@@ -125,7 +125,7 @@ func TestStatusPageSubscribersMigrationsUpDownUp(t *testing.T) {
 		}
 		exec(`DELETE FROM incidents WHERE id = $1`, incident)
 	}
-	migrateTo(123)
+	migrateTo(122)
 	if !exists("idx_sp_notification_deliveries_due") || !exists("idx_status_page_subscribers_confirm_due") {
 		t.Fatal("indexes missing after re-applying")
 	}

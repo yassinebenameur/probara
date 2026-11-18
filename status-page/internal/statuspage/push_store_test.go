@@ -12,7 +12,7 @@ import (
 	"github.com/lib/pq"
 )
 
-// One migration behind (no 000123 incident column), the claim reads every
+// One migration behind (no 000122 incident column), the claim reads every
 // delivery as a monitor transition instead of failing.
 func TestPushStore_ClaimBeforeIncidentColumn(t *testing.T) {
 	errVariant := errors.New("query variant mismatch")

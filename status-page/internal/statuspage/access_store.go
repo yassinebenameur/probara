@@ -39,17 +39,14 @@ type accessQuery interface {
 	// and a private one cost the same. ErrStatusPageNotFound when no page has
 	// the slug.
 	PageAccess(ctx context.Context, slug, presentedTokenHash string, sessionTokenID uuid.UUID) (*pageAccess, error)
-	// PageVisibilityByID is the visibility of a page named by ID
-	// (ErrStatusPageNotFound when none).
-	PageVisibilityByID(ctx context.Context, id uuid.UUID) (string, error)
 }
 
 var _ accessQuery = (*Service)(nil)
 
-// A deleted workspace's page is not found by any of these lookups, so every
-// sub-route, the unlock form, open streams (stillAuthorized) and the API
-// proxy answer it exactly like a missing slug, and its visitor sessions and
-// kiosk tokens stop working the moment the workspace is deleted.
+// A deleted workspace's page is not found by this lookup, so every
+// sub-route, the unlock form and open streams (stillAuthorized) answer it
+// exactly like a missing slug, and its visitor sessions and kiosk tokens
+// stop working the moment the workspace is deleted.
 var pageAccessQuery = `
 	SELECT sp.id, sp.title, COALESCE(sp.logo_url, ''), COALESCE(sp.primary_color, ''),
 	       sp.visibility, COALESCE(sp.password_hash, ''), sp.password_version,
@@ -84,19 +81,6 @@ func (s *Service) PageAccess(ctx context.Context, slug, presentedTokenHash strin
 		a.PresentedTokenID = presented.UUID
 	}
 	return &a, nil
-}
-
-// PageVisibilityByID implements accessQuery.
-func (s *Service) PageVisibilityByID(ctx context.Context, id uuid.UUID) (string, error) {
-	var visibility string
-	err := s.db.QueryRowContext(ctx, `SELECT visibility FROM status_pages WHERE id = $1 AND `+livePage, id).Scan(&visibility)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", ErrStatusPageNotFound
-		}
-		return "", fmt.Errorf("load status page visibility: %w", err)
-	}
-	return visibility, nil
 }
 
 // HasGatedPages reports whether any page is password or private, for the

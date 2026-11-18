@@ -74,10 +74,9 @@ var MultipartUploadPaths = []string{"/api/v1/monitors/import/preview"}
 //     here.
 //
 // The API itself never believes X-Forwarded-Host from an untrusted peer: a
-// script can set any header on a same-origin request, and a proxy to the API
-// on another origin that passes client headers through (the status page's
-// /_sp_api) turns that into an attacker-chosen forwarded host next to an
-// attacker Origin. A trusted peer's (the UI proxy's, listed in
+// script can set any header on a same-origin request, and any proxy to the
+// API on another origin that passes client headers through turns that into an
+// attacker-chosen forwarded host next to an attacker Origin. A trusted peer's (the UI proxy's, listed in
 // TRUSTED_PROXY_CIDRS) is the browser's host, never a client value. For the
 // same reason Sec-Fetch-Site: same-origin is not taken as proof here when an
 // Origin is present: it compares the page with the URL the browser fetched,

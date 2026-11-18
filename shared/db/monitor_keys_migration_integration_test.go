@@ -15,7 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
-// Migration 000119 adds config-as-code keys: monitors.key, unique per
+// Migration 000118 adds config-as-code keys: monitors.key, unique per
 // workspace among live monitors only, and the "apply" configuration version
 // source. This walks it down (an apply version reads as "api" after) and
 // back up through golang-migrate.
@@ -37,8 +37,8 @@ func TestMonitorKeysMigrationUpDownUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Not m.Close(): the driver would close dbc.DB, which cleanup owns.
-	if err := m.Migrate(119); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate to 119: %v", err)
+	if err := m.Migrate(118); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate to 118: %v", err)
 	}
 
 	checkUp := func(phase string) {
@@ -71,21 +71,21 @@ func TestMonitorKeysMigrationUpDownUp(t *testing.T) {
 	checkUp("up")
 
 	if err := m.Steps(-1); err != nil {
-		t.Fatalf("down 000119: %v", err)
+		t.Fatalf("down 000118: %v", err)
 	}
 	if _, err := dbc.ExecContext(ctx, `SELECT key FROM monitors LIMIT 1`); err == nil {
-		t.Error("down 000119 kept monitors.key")
+		t.Error("down 000118 kept monitors.key")
 	}
 	var source string
 	if err := dbc.QueryRowContext(ctx, `SELECT source FROM monitor_config_versions WHERE monitor_id = $1`, first).Scan(&source); err != nil || source != "api" {
-		t.Errorf("down 000119: apply version source = %q (%v), want api", source, err)
+		t.Errorf("down 000118: apply version source = %q (%v), want api", source, err)
 	}
 	if _, err := dbc.ExecContext(ctx, `DELETE FROM monitor_config_versions WHERE monitor_id = $1`, first); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := m.Steps(1); err != nil {
-		t.Fatalf("re-up 000119: %v", err)
+		t.Fatalf("re-up 000118: %v", err)
 	}
 	checkUp("re-up")
 }

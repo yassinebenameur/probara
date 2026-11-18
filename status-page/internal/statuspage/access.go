@@ -538,33 +538,6 @@ func (h *Handlers) HandleUnlock(w http.ResponseWriter, r *http.Request, slug str
 	http.Redirect(gw, r, pagePath(r, slug), http.StatusSeeOther)
 }
 
-// authorizeProxy applies the gate to /_sp_api calls that name a status page.
-// Visitor sessions are path-scoped to the page, so none reaches /_sp_api: a
-// password or private page's proxy calls are refused outright, and a missing
-// page answers the same. Calls naming no page carry nothing page-specific.
-func (h *Handlers) authorizeProxy(w http.ResponseWriter, r *http.Request, pageID uuid.UUID) bool {
-	if pageID == uuid.Nil {
-		return true
-	}
-	if h.access == nil || h.access.store == nil {
-		http.NotFound(w, r)
-		return false
-	}
-	visibility, err := h.access.store.PageVisibilityByID(r.Context(), pageID)
-	if err != nil {
-		if !errors.Is(err, ErrStatusPageNotFound) {
-			h.logger.WithError(err).Error("Failed to load status page access for API proxy")
-		}
-		http.NotFound(w, r)
-		return false
-	}
-	if pageaccess.Gated(visibility) {
-		http.NotFound(w, r)
-		return false
-	}
-	return true
-}
-
 type pageVisibilityKey struct{}
 
 // withPageVisibility records on r the visibility the gate read, for the

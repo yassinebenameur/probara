@@ -203,9 +203,6 @@ func TestAccessIntegration(t *testing.T) {
 		if _, err := svc.PageAccess(ctx, "nope", "", uuid.Nil); err != ErrStatusPageNotFound {
 			t.Fatalf("missing slug err = %v", err)
 		}
-		if v, err := svc.PageVisibilityByID(ctx, lockedID); err != nil || v != pageaccess.Password {
-			t.Fatalf("visibility by id = %q %v", v, err)
-		}
 	})
 
 	t.Run("pending notifications of a gated page are closed unsent", func(t *testing.T) {

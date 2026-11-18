@@ -58,7 +58,7 @@ rejected even with a live access token).
 
 ## Sign-in lockout and sessions
 
-Migrations 000117 (lockout) and 000118 (session families).
+Migrations 000116 (lockout) and 000117 (session families).
 
 **Lockout** (`api/internal/services/adminauth/lockout.go`, password sign-in
 only): 10 consecutive failures lock the account for 15 minutes, fixed; a
@@ -95,7 +95,7 @@ family id as `sid`. The family's `revoked_at` is the single authority:
 - `AuthMiddleware` checks it for every cookie-authenticated request
   (`middleware/session.go` → `adminauth.SessionActive`, one primary-key
   lookup, no cache, so a revocation is immediate on every replica);
-  `/auth/me` checks it too. Tokens without a `sid` (minted before 000118)
+  `/auth/me` checks it too. Tokens without a `sid` (minted before 000117)
   are honoured until they expire.
 - `RefreshSession` rotates inside the family under the family row lock. A
   token rotated less than 60 s ago (concurrent tabs) earns an access token
@@ -152,7 +152,7 @@ guesser must not be able to sign people out), role and membership changes
 (roles are re-read per request anyway). Revoking an SSO session does not
 sign out of the IdP.
 
-Migration 000118 turns every live refresh token into its own family (id =
+Migration 000117 turns every live refresh token into its own family (id =
 token row id), so signed-in users stay signed in; rotated/expired rows keep
 `family_id NULL` and are never accepted. A trigger gives a family to rows an
 older binary inserts during a rolling deploy. An old binary also honours a
@@ -161,7 +161,7 @@ finish the rollout first. Drop the trigger in a later release.
 
 ## Account links and two-factor
 
-Migrations 000124 (account tokens) and 000125 (TOTP, recovery codes, the
+Migrations 000123 (account tokens) and 000124 (TOTP, recovery codes, the
 session's `second_factor`). Local (password, no `external_subject`)
 accounts only: SSO accounts get no reset, email change, password or second
 factor here.
@@ -222,7 +222,7 @@ logged once) gives the attempt back. A recovery code signs out every other
 session. The rate limiter
 treats `POST /auth/login/mfa` as a sign-in. Disable needs password and code
 and revokes other sessions; superadmin `POST /users/{id}/reset-2fa`;
-`cmd/admin -reset-2fa <username>` (tolerates a database without 000124/125).
+`cmd/admin -reset-2fa <username>` (tolerates a database without 000123/124).
 Notices (enabled, disabled, reset, recovery code used) are mailed in the
 background when account mail is configured.
 
@@ -281,7 +281,7 @@ request's own origin (`Host`, or `X-Forwarded-Host` from a
 be HTTPS). Judged on `Origin`, else `Sec-Fetch-Site` (`same-origin` only),
 else the `Referer`'s origin. `Sec-Fetch-Site: same-origin` never overrides
 an `Origin`: it compares the page with the URL fetched, which may be a proxy
-to the API on another origin (the status page's `/_sp_api`). None of the
+to the API on another origin that forwards client headers. None of the
 three means a non-browser client (`curl` with a cookie jar), which is
 allowed -- and it is what the UI's `/api` proxy sends for its own pages: it
 compares the page's origin with the `Host` it was reached with (one value;
@@ -513,7 +513,7 @@ chart applied without its hooks) can still run them briefly on the old
 schema. All auth queries feature-detect (SQLSTATE 42P01/42703 →
 legacy behavior: everyone superadmin, keys full-access) and the audit
 writer drops rows — the API never crash-loops pre-migration. The exception
-is workspace soft delete (000116): API-key validation, tenant lists and
+is workspace soft delete (000115): API-key validation, tenant lists and
 every background loop name `tenants.deleted_at`, so that migration must run
 before the new binaries serve (the release's upgrade notes say so);
 `identityQuery` alone reads it tolerantly, so a missing column can never

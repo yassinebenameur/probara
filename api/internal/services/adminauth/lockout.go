@@ -15,7 +15,7 @@ import (
 )
 
 // Password sign-in lockout. The streak and the lock live on the user row
-// (migration 000117), so every API replica sees the same state and it
+// (migration 000116), so every API replica sees the same state and it
 // survives restarts, and every time is the database clock's -- the same clock
 // the users list and session expiry read -- so replicas with skewed clocks
 // still agree. Fixed policy, no configuration: LockoutThreshold consecutive
@@ -196,7 +196,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	)
 	switch {
 	case pgerr.IsMissingSchema(err):
-		// Deploy-ordering tolerance: before migration 000117 there is no
+		// Deploy-ordering tolerance: before migration 000116 there is no
 		// lockout state to keep.
 		return s.authenticateWithoutLockout(ctx, username, password)
 	case errors.Is(err, sql.ErrNoRows):
@@ -326,7 +326,7 @@ func (s *Service) VerifyCurrentCredentials(ctx context.Context, userID uuid.UUID
 	reserved, err := s.RecordFailedAttempt(ctx, userID)
 	switch {
 	case pgerr.IsMissingSchema(err):
-		// Before migration 000117 there is no lockout to count against.
+		// Before migration 000116 there is no lockout to count against.
 		reserved = &LoginFailure{UserID: &userID}
 	case err != nil:
 		return "", err
@@ -395,7 +395,7 @@ const recordSecondFactorLockoutQuery = `
 `
 
 // recordSecondFactorLockout counts a second-factor lockout on failure (see
-// recordSecondFactorLockoutQuery). Before migration 000125 it does nothing.
+// recordSecondFactorLockoutQuery). Before migration 000124 it does nothing.
 func (s *Service) recordSecondFactorLockout(ctx context.Context, failure *LoginFailure) error {
 	err := s.db.QueryRowContext(ctx, recordSecondFactorLockoutQuery, *failure.UserID, s.offsetSeconds(),
 		SecondFactorLockoutWindow.Seconds(), SecondFactorLockoutsToHold, heldLockDuration.Seconds()).
@@ -436,7 +436,7 @@ func (s *Service) UnlockUser(ctx context.Context, userID uuid.UUID) (bool, error
 	case errors.Is(err, sql.ErrNoRows):
 		return false, ErrUserNotFound
 	case pgerr.IsMissingSchema(err):
-		// Before migration 000117 nothing is ever locked.
+		// Before migration 000116 nothing is ever locked.
 		if _, err := s.GetAdminByID(ctx, userID); err != nil {
 			return false, ErrUserNotFound
 		}
@@ -454,7 +454,7 @@ func (s *Service) UnlockUser(ctx context.Context, userID uuid.UUID) (bool, error
 }
 
 // authenticateWithoutLockout is the sign-in check for a database that
-// predates migration 000117.
+// predates migration 000116.
 func (s *Service) authenticateWithoutLockout(ctx context.Context, username, password string) (*models.AdminUser, error) {
 	var user models.AdminUser
 	var passwordHash sql.NullString

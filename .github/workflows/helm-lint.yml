@@ -42,6 +42,19 @@ jobs:
           --set 'ingress.tls[0].hosts[0]=probara.example.com' --set statusPage.baseUrl=https://status.example.com)
         helm lint "$chart" "${ingress[@]}"
         helm template rel "$chart" "${ingress[@]}" > "$out/ingress-tls.yaml"
+        domains=(--set 'statusPage.customDomains[0].host=status.acme.example' --set 'statusPage.customDomains[0].tlsSecretName=acme-tls'
+          --set 'statusPage.customDomains[1].host=status.other.example' --set 'statusPage.customDomains[1].tlsSecretName=other-tls')
+        helm lint "$chart" "${ingress[@]}" "${domains[@]}"
+        helm template rel "$chart" "${ingress[@]}" "${domains[@]}" > "$out/custom-domains.yaml"
+        # One Ingress per ingress.hosts entry (the defaults list two) and per
+        # custom domain, each its own YAML document: without a separator
+        # between them the hosts merge into one document and only the last
+        # survives.
+        for want in ingress-tls.yaml=2 custom-domains.yaml=4; do
+          got="$(yq ea '[select(.kind == "Ingress")] | length' "$out/${want%=*}")"
+          [ "$got" = "${want#*=}" ] \
+            || { echo "::error::${want%=*}: $got Ingress documents, want ${want#*=}"; exit 1; }
+        done
         helm lint "$chart" --set secrets.existingSecret=probara-platform
         helm template rel "$chart" --set secrets.existingSecret=probara-platform > "$out/existing-secret.yaml"
         helm template rel "$chart" --set postgresql.existingSecret=probara-postgres-url \

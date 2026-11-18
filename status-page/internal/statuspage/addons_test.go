@@ -97,7 +97,7 @@ var addonTestNow = time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
 
 func renderHead(t *testing.T, data *StatusPageData) string {
 	t.Helper()
-	html, _, err := renderStatusPageHTML(data, false)
+	html, _, err := renderStatusPageHTML(data)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestHeadTags_EscapeHostileText(t *testing.T) {
 func TestCustomTemplateReceivesSEOFields(t *testing.T) {
 	data := addonTestData()
 	data.AllowSearchIndexing = false
-	html, err := renderStatusPageWithSource(data, false,
+	html, err := renderStatusPageWithSource(data,
 		`<head><title>{{.SEOTitle}}</title><meta name="robots" content="{{.Robots}}">`+
 			`<link href="{{.FeedURL}}"><link href="{{.SummaryURL}}"><link href="{{.CanonicalURL}}">`+
 			`<meta content="{{.MetaDescription}}"><meta content="{{.SiteName}}"><meta content="{{.OGImageURL}}"></head>`)
@@ -252,7 +252,7 @@ func TestSummaryGolden(t *testing.T) {
 func TestSummaryUptimeMatchesRenderedValues(t *testing.T) {
 	data := addonTestData()
 	summary := buildPageSummary(data, addonTestNow)
-	view := buildStatusPageRenderView(data, false)
+	view := buildStatusPageRenderView(data)
 	for _, m := range view.Monitors {
 		c, ok := summary.component(m.ID)
 		if !ok {
@@ -420,7 +420,7 @@ func primedHandlers(t *testing.T, data *StatusPageData) *Handlers {
 	t.Helper()
 	cache := newRenderCache(time.Hour)
 	_, _, err := cache.GetPage(data.Slug, func() (renderedPage, error) {
-		view := buildStatusPageRenderView(data, false)
+		view := buildStatusPageRenderView(data)
 		html, _, err := renderStatusPageView(data, view)
 		if err != nil {
 			return renderedPage{}, err

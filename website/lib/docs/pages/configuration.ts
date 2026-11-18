@@ -810,14 +810,9 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications) and each page\'s canonical link, `og:url` and absolute [feed and summary links](/docs/status-pages/#feed-summary-badges); when empty, the notification opens the page via the service worker scope, the head carries no canonical link or `og:url`, and the feed links by path, rather than a guessed host. A page with a verified [custom domain](/docs/status-pages/#custom-domains) uses that domain for all of these instead, and a subscription made there links to it. Its host is never served as a custom domain. The API reads it too: to refuse its host as a custom domain (custom domains stay off until it, or `STATUS_PAGE_PLATFORM_HOSTS`, names a public host) and to hand it to the operator UI (`status_page_base_url` in `GET /api/v1/auth-context`) for its status-page links and template preview, and the UI server reads it for that preview\'s CSP `frame-src`; unset there, the UI links to `:8082` on a localhost UI and to its own origin elsewhere. The base Compose file sets `http://localhost:8082` on the status service only; the release override reads it from `.env` (empty by default, never `localhost`) for the status service, API and frontend; Helm renders `statusPage.baseUrl` into the status service, the API and the frontend.',
             ],
             [
-              '`STATUS_PAGE_API_BASE_URL`',
-              'Empty',
-              'Enables the status service’s restricted API reverse proxy.',
-            ],
-            [
               '`STATUS_PAGE_INTERNAL_API_URL`',
-              '`STATUS_PAGE_API_BASE_URL` when empty',
-              'Where the status service forwards visitors\' [email subscription](/docs/status-pages/#email-subscribers) requests (the API stores subscribers; the status service stays read-only). Empty, and no `STATUS_PAGE_API_BASE_URL` either: no page shows a subscribe form. Helm sets it to the in-cluster API service; Compose to `http://api:8080`.',
+              'Empty',
+              'Where the status service forwards visitors\' [email subscription](/docs/status-pages/#email-subscribers) requests (the API stores subscribers; the status service stays read-only). Empty: no page shows a subscribe form. Helm sets it to the in-cluster API service; Compose to `http://api:8080`; `scripts/start-local-services.sh` to `http://localhost:8080`.',
             ],
             [
               '`STATUS_PAGE_INTERNAL_TOKEN`',
@@ -862,7 +857,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_PLATFORM_HOSTS`',
               'Empty; comma-separated host names, anything else refuses to start',
-              'Hosts besides `STATUS_PAGE_BASE_URL`\'s that serve the platform routes: every page under `/public/status/`, the API proxy, health and metrics. Once one of these or the base URL is a public name, any other public hostname is served only as a verified [custom domain](/docs/status-pages/#custom-domains) and otherwise answers not found; internal names (IP addresses, `localhost`, cluster Service names) always get the platform routes. With neither (development), every host does. Helm: `ingress.hosts` plus `statusPage.platformHosts`. The API reads it too, refuses these hosts as custom domains, and keeps custom domains off while neither it nor `STATUS_PAGE_BASE_URL` is a public name.',
+              'Hosts besides `STATUS_PAGE_BASE_URL`\'s that serve the platform routes: every page under `/public/status/`, health and metrics. Once one of these or the base URL is a public name, any other public hostname is served only as a verified [custom domain](/docs/status-pages/#custom-domains) and otherwise answers not found; internal names (IP addresses, `localhost`, cluster Service names) always get the platform routes. With neither (development), every host does. Helm: `ingress.hosts` plus `statusPage.platformHosts`. The API reads it too, refuses these hosts as custom domains, and keeps custom domains off while neither it nor `STATUS_PAGE_BASE_URL` is a public name.',
             ],
             [
               '`STATUS_PAGE_TRUST_FORWARDED_HOST`',
@@ -914,7 +909,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The restricted proxy permits GET under `/api/v1/monitors` and PATCH under `/api/v1/status-pages/…`; it is not a general API proxy. Helm wires the basic status values, the status base URL, the preview and session secrets, the cookie flag, the VAPID keys and the edge settings, not the API proxy, cache, timeout, or update-subject variables (use `statusPage.extraEnv`).',
+            'Helm wires the basic status values, the status base URL, the preview and session secrets, the cookie flag, the VAPID keys and the edge settings, not the cache, timeout, or update-subject variables (use `statusPage.extraEnv`).',
         },
       ],
     },
@@ -1128,7 +1123,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['Scheduler result ingest', 'Code defaults only', 'Code defaults only'],
             ['Scheduler purge and mesh', 'Code defaults only', 'Code defaults only'],
             ['Worker result stream and AI/notification queues', 'Code defaults only', 'Code defaults only'],
-            ['Status cache, proxy, preview, timeout, update subject', 'API proxy and preview secret (required by the release override); the rest code defaults', 'Preview secret only; the rest through `statusPage.extraEnv`'],
+            ['Status cache, preview, timeout, update subject', 'Preview secret (required by the release override); the rest code defaults', 'Preview secret only; the rest through `statusPage.extraEnv`'],
             ['Trusted proxies, HSTS, API rate limit and CORS allowlist', 'Passed through from the shell to API and status-page (`APP_BASE_URL` to status-page too); the release override pins the API\'s `TRUSTED_PROXY_CIDRS` to the frontend\'s fixed address', 'Top-level `trustedProxyCIDRs` and `security` block rendered into API and status-page; `appBaseURL` into status-page as well'],
             ['Browser artifact sharing', 'Shared volume', 'No shared volume'],
             ['Arbitrary extra environment', 'Requires editing Compose', 'Top-level `extraEnv` (every workload, including the migrations Job; not the local AI pod) and `<service>.extraEnv`'],

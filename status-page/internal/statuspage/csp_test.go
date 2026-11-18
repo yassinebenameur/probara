@@ -22,7 +22,7 @@ var headerNonce = regexp.MustCompile(`script-src 'nonce-([A-Za-z0-9+/=]+)'`)
 // does, returning the response body and headers.
 func renderAndApply(t *testing.T, data *StatusPageData, appBaseURL string) (string, http.Header) {
 	t.Helper()
-	html, _, err := renderStatusPageHTML(data, false)
+	html, _, err := renderStatusPageHTML(data)
 	if err != nil {
 		t.Fatal(err)
 	}

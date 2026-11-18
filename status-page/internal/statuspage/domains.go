@@ -151,7 +151,7 @@ var customHostRoutesQuery = `
 	ORDER BY d.hostname, d.status = 'verified'`
 
 // CustomHostRoutes loads every claimed hostname. Empty before migration
-// 000120.
+// 000119.
 func (s *Service) CustomHostRoutes(ctx context.Context) (map[string]customHostRoute, error) {
 	rows, err := s.db.QueryContext(ctx, customHostRoutesQuery)
 	if err != nil {

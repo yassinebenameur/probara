@@ -21,7 +21,7 @@ FROM incidents i
 WHERE i.id = isp.incident_id AND i.is_auto_created AND isp.public_title IS NULL;
 
 -- Visitor push for incident publications, public updates and resolutions,
--- driven by the notification outbox (000122). Such a delivery names the
+-- driven by the notification outbox (000121). Such a delivery names the
 -- incident instead of a monitor, and its interval_id holds the outbox row's
 -- ID: the existing (status_page_id, interval_id) unique index then keeps it
 -- exactly once per page and event, like a state transition.

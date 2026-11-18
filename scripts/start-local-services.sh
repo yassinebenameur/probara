@@ -245,7 +245,7 @@ start_service worker ./worker/cmd/worker 8083 9092 \
 # TLS -- a plain-HTTP host that is NOT localhost will not.
 start_service status-page ./status-page/cmd/status-page 8082 9093 \
   STATUS_PAGE_BASE_URL="${STATUS_PAGE_BASE_URL:-http://localhost:8082}" \
-  STATUS_PAGE_API_BASE_URL="${STATUS_PAGE_API_BASE_URL:-http://localhost:8080}" \
+  STATUS_PAGE_INTERNAL_API_URL="${STATUS_PAGE_INTERNAL_API_URL:-http://localhost:8080}" \
   STATUS_PAGE_INTERNAL_TOKEN="${STATUS_PAGE_INTERNAL_TOKEN:-dev-status-page-internal-token-change-me}" \
   STATUS_PAGE_VAPID_PUBLIC_KEY="${STATUS_PAGE_VAPID_PUBLIC_KEY:-}" \
   STATUS_PAGE_VAPID_PRIVATE_KEY="${STATUS_PAGE_VAPID_PRIVATE_KEY:-}" \

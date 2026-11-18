@@ -284,7 +284,7 @@ func TestSubscriptionsOffered(t *testing.T) {
 
 func TestDefaultTemplate_SubscribeForm(t *testing.T) {
 	data := &StatusPageData{ID: uuid.NewString(), Slug: "acme", Title: "Acme", SubscribeFormEnabled: true}
-	html, err := renderPublicStatusPage(data, false)
+	html, err := renderPublicStatusPage(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestDefaultTemplate_SubscribeForm(t *testing.T) {
 		t.Fatal("subscribe form missing")
 	}
 	data.SubscribeFormEnabled = false
-	html, err = renderPublicStatusPage(data, false)
+	html, err = renderPublicStatusPage(data)
 	if err != nil {
 		t.Fatal(err)
 	}

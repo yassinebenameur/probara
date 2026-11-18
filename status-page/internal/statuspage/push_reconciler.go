@@ -142,7 +142,7 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 }
 
 // reconcileOutboxNotifications turns recent incident events of the
-// status-page notification outbox (migration 000122) into pending delivery
+// status-page notification outbox (migration 000121) into pending delivery
 // rows: an incident published on a page, a public update posted on it, its
 // resolution. The API writes each outbox row in the same transaction as the
 // change, one row per page the incident is on, so fan-out is to exactly the
@@ -177,7 +177,7 @@ func (s *pushStore) reconcileOutboxNotifications(ctx context.Context) (int64, er
 	`
 	res, err := s.db.ExecContext(ctx, query, pushNotificationHorizon.Seconds())
 	if err != nil && pgerr.IsMissingSchema(err) {
-		// The outbox (000122/000123) is not there yet: nothing to announce.
+		// The outbox (000121/000122) is not there yet: nothing to announce.
 		return 0, nil
 	}
 	if err != nil {

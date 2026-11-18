@@ -192,7 +192,7 @@ func pageSummaryUptime(data *StatusPageData) *summaryUptime {
 // built-in template's {{if .ShowGlobalUptime}} / {{if $.ShowMonitorUptime}}
 // blocks: a hidden figure is null here, never computed.
 func buildPageSummary(data *StatusPageData, now time.Time) *pageSummary {
-	return buildPageSummaryFromView(data, buildStatusPageRenderView(data, false), now)
+	return buildPageSummaryFromView(data, buildStatusPageRenderView(data), now)
 }
 
 // buildPageSummaryFromView is buildPageSummary for the view the page was

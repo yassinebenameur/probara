@@ -41,10 +41,6 @@ func (allPublicAccess) PageAccess(_ context.Context, slug, _ string, _ uuid.UUID
 	return &pageAccess{ID: uuid.NewSHA1(uuid.NameSpaceURL, []byte(slug)), Title: slug, Visibility: pageaccess.Public}, nil
 }
 
-func (allPublicAccess) PageVisibilityByID(context.Context, uuid.UUID) (string, error) {
-	return pageaccess.Public, nil
-}
-
 // fakeAccess is an in-memory accessQuery with the same token semantics as
 // the SQL: a presented hash resolves to a live token of that page, and a
 // session token is live while it belongs to the page and is not revoked.
@@ -81,17 +77,6 @@ func (f *fakeAccess) PageAccess(_ context.Context, slug, presentedHash string, s
 		}
 	}
 	return &cp, nil
-}
-
-func (f *fakeAccess) PageVisibilityByID(_ context.Context, id uuid.UUID) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, p := range f.pages {
-		if p.ID == id {
-			return p.Visibility, nil
-		}
-	}
-	return "", ErrStatusPageNotFound
 }
 
 func (f *fakeAccess) set(slug string, mutate func(p *pageAccess)) {
@@ -213,8 +198,6 @@ const (
 	classNoPageData routeClass = "no-page-data"
 	// classOperational: health and metrics, never page content.
 	classOperational routeClass = "operational"
-	// classProxyGated: the /_sp_api proxy, gated by authorizeProxy.
-	classProxyGated routeClass = "proxy-gated"
 	// classDispatcher: the per-page dispatcher itself.
 	classDispatcher routeClass = "dispatcher"
 	// classSubscriptionLink: a subscriber mail's link routes, exempt from
@@ -238,7 +221,6 @@ var routeTable = []struct {
 	{"/healthz", classOperational, ""},
 	{"/readyz", classOperational, ""},
 	{"/metrics", classOperational, ""},
-	{"/_sp_api/", classProxyGated, ""},
 	{"/public/status/sw.js", classNoPageData, ""},
 	{"/public/status/", classDispatcher, ""},
 
@@ -274,15 +256,10 @@ var routeTable = []struct {
 }
 
 // notRoutes are path-like literals the package compares against that are
-// not routes of their own (prefixes being stripped, API paths the proxy
-// forwards to).
+// not routes of their own (prefixes being stripped).
 var notRoutes = map[string]bool{
-	"/public/status/":       true,
-	"/_sp_api":              true,
-	"/api/v1/":              true,
-	"/api/v1/monitors":      true,
-	"/api/v1/status-pages/": true,
-	"/":                     true,
+	"/public/status/": true,
+	"/":               true,
 }
 
 // TestRouteAccess_EveryRouteIsClassified scans the package's non-test source
@@ -840,47 +817,6 @@ func TestAccess_UnlistedAndPublicHeaders(t *testing.T) {
 	// Same rendered HTML, different bodies: the validators must differ.
 	if unlisted.Header().Get("ETag") == public.Header().Get("ETag") {
 		t.Fatal("unlisted and public pages share an ETag")
-	}
-}
-
-func TestAccess_ProxyRefusesGatedPages(t *testing.T) {
-	f := newAccessFixture(t, testSessionSecret)
-	for slug, wantOK := range map[string]bool{"open": true, "hidden": true, "locked": false, "internal": false} {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPatch, "/_sp_api/api/v1/status-pages/"+f.store.pages[slug].ID.String(), nil)
-		ok := f.h.authorizeProxy(rec, req, f.store.pages[slug].ID)
-		if ok != wantOK {
-			t.Errorf("%s: proxy allowed = %v", slug, ok)
-		}
-	}
-	rec := httptest.NewRecorder()
-	if f.h.authorizeProxy(rec, httptest.NewRequest(http.MethodGet, "/", nil), uuid.New()) || rec.Code != http.StatusNotFound {
-		t.Fatal("unknown page passed the proxy gate")
-	}
-
-	id := uuid.New()
-	cases := []struct {
-		path, header string
-		ok           bool
-		want         uuid.UUID
-	}{
-		{"/api/v1/status-pages/" + id.String(), "", true, id},
-		{"/api/v1/status-pages/" + id.String(), id.String(), true, id},
-		{"/api/v1/status-pages/" + id.String(), uuid.New().String(), false, uuid.Nil},
-		{"/api/v1/status-pages/not-a-uuid", "", false, uuid.Nil},
-		{"/api/v1/status-pages/" + id.String() + "/../" + uuid.New().String(), "", false, uuid.Nil},
-		{"/api/v1/monitors", id.String(), true, id},
-		{"/api/v1/monitors", "", true, uuid.Nil},
-	}
-	for _, c := range cases {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		if c.header != "" {
-			req.Header.Set("X-Status-Page-ID", c.header)
-		}
-		got, ok := proxyStatusPageID(req, c.path)
-		if ok != c.ok || got != c.want {
-			t.Errorf("%s (header %q) = %v %v, want %v %v", c.path, c.header, got, ok, c.want, c.ok)
-		}
 	}
 }
 
