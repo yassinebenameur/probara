@@ -1008,14 +1008,8 @@ func (s *Service) BulkUpdateAlerting(
 		if err := RequireCallPermission(ctx, existing.Type, existing.Config); err != nil {
 			return 0, err
 		}
-		// A save of a domain monitor refuses a failure threshold below the
-		// domain floor (validation.ValidateMonitorUpdate); the bulk edit
-		// changes no location, so only the threshold half of the rule is
-		// asked (location count 0).
-		if threshold != nil && existing.Type == models.MonitorTypeDomain {
-			if err := sharedmodels.ValidateDomainMonitorRules(*threshold, 0); err != nil {
-				return 0, fmt.Errorf("%w: monitor %q: %v; no monitor was changed", ErrBulkAlertingRefused, existing.Name, err)
-			}
+		if err := bulkThresholdAllowed(existing, threshold); err != nil {
+			return 0, err
 		}
 	}
 
@@ -1033,8 +1027,9 @@ func (s *Service) BulkUpdateAlerting(
 	// transaction each with its rows locked first (lock order,
 	// api/internal/dbtx): every monitor of a batch and its version, or none
 	// of them. Batches commit one after the other, so a failure part-way
-	// (only an infrastructure or concurrency error once the checks above
-	// passed) leaves the earlier batches applied; the count says how many.
+	// (an infrastructure or concurrency error, or a type change racing the
+	// checks above) leaves the earlier batches applied; the count says how
+	// many.
 	ordered := sortedIDs(monitorIDs)
 	updated := 0
 	for start := 0; start < len(ordered); start += BulkAlertingBatchSize {
@@ -1044,6 +1039,22 @@ func (s *Service) BulkUpdateAlerting(
 			// (one savepoint each, not one per monitor).
 			if err := s.LockMonitors(ctx, tenantID, batch, nil); err != nil {
 				return err
+			}
+			// The threshold rule again, on the locked rows: a type change
+			// committed since the check above (a monitor made a domain
+			// monitor) must not take a threshold its new type refuses. The
+			// batch then writes nothing, but earlier batches stay applied
+			// and the count reports them, as for any failure part-way.
+			if threshold != nil {
+				for _, monitorID := range batch {
+					locked, err := s.repo.GetByID(ctx, tenantID, monitorID)
+					if err != nil {
+						return err
+					}
+					if err := bulkThresholdAllowed(locked, threshold); err != nil {
+						return err
+					}
+				}
 			}
 			s.CaptureBaselines(ctx, tenantID, batch...)
 			ctx, versions := DeferVersions(ctx)
@@ -1067,6 +1078,20 @@ func (s *Service) BulkUpdateAlerting(
 		updated += len(batch)
 	}
 	return updated, nil
+}
+
+// bulkThresholdAllowed applies the per-type failure-threshold rules a save
+// of the monitor would: a domain monitor's floor (validation.
+// ValidateMonitorUpdate). The bulk edit changes no location, so only the
+// threshold half of the domain rule is asked (location count 0).
+func bulkThresholdAllowed(monitor *models.Monitor, threshold *int) error {
+	if threshold == nil || monitor.Type != models.MonitorTypeDomain {
+		return nil
+	}
+	if err := sharedmodels.ValidateDomainMonitorRules(*threshold, 0); err != nil {
+		return fmt.Errorf("%w: monitor %q: %v", ErrBulkAlertingRefused, monitor.Name, err)
+	}
+	return nil
 }
 
 // generatePushToken generates a unique token for push monitors

@@ -84,8 +84,18 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteNotFoundError(w, "one or more monitors not found")
 			return
 		}
-		if errors.Is(err, monitorservice.ErrChannelsNotInTenant) || errors.Is(err, monitorservice.ErrBulkAlertingRefused) {
+		if errors.Is(err, monitorservice.ErrChannelsNotInTenant) {
 			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
+		if errors.Is(err, monitorservice.ErrBulkAlertingRefused) {
+			// Refused up front (nothing written), or in a later batch after a
+			// racing type change, when the earlier batches stay applied.
+			text := err.Error() + "; no monitor was changed"
+			if updated > 0 {
+				text = err.Error() + "; the remaining monitors were not updated." + partial
+			}
+			apierrors.WriteValidationError(w, text)
 			return
 		}
 		if dbtx.IsConflict(err) {

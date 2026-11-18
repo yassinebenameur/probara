@@ -56,3 +56,65 @@ func TestBulkUpdateAlerting_DomainThresholdFloor(t *testing.T) {
 		t.Fatalf("BulkUpdateAlerting(threshold 2) = %d, %v, want 2, nil", n, err)
 	}
 }
+
+// flippingRepo turns one monitor into a domain monitor right after the bulk
+// edit's up-front check has read every monitor: a type change committed
+// between that check and the batch's row locks.
+type flippingRepo struct {
+	*updateCountingRepo
+	reads, flipAfter int
+	target           uuid.UUID
+}
+
+func (r *flippingRepo) GetByID(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Monitor, error) {
+	r.reads++
+	if r.reads == r.flipAfter+1 {
+		r.monitors[r.target].Type = models.MonitorTypeDomain
+		r.monitors[r.target].Config = json.RawMessage(`{"domain":"example.com"}`)
+	}
+	return r.MockRepository.GetByID(ctx, tenantID, monitorID)
+}
+
+// The rule is asked again on the locked rows: a monitor that became a domain
+// monitor after the up-front check refuses its batch, and the monitors of
+// earlier batches, already committed, are counted.
+func TestBulkUpdateAlerting_DomainThresholdRecheckedInBatch(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		monitors    int
+		wantUpdated int
+	}{
+		{"single batch", 1, 0},
+		{"second batch", BulkAlertingBatchSize + 1, BulkAlertingBatchSize},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := &updateCountingRepo{MockRepository: NewMockRepository()}
+			tenantID := uuid.New()
+			ids := make([]uuid.UUID, 0, tc.monitors)
+			for i := 0; i < tc.monitors; i++ {
+				id := uuid.New()
+				base.monitors[id] = &models.Monitor{ID: id, TenantID: tenantID, Name: "site", Type: models.MonitorTypeHTTP,
+					Config: json.RawMessage(`{"url":"https://example.com"}`), IntervalSeconds: 3600, TimeoutSeconds: 10,
+					ConsecutiveFailuresThreshold: 3, Enabled: true}
+				ids = append(ids, id)
+			}
+			ordered := sortedIDs(ids)
+			repo := &flippingRepo{updateCountingRepo: base, flipAfter: tc.monitors, target: ordered[len(ordered)-1]}
+			svc := &Service{repo: repo, encryptor: secrets.NoOpEncryptor{}}
+
+			one := 1
+			updated, err := svc.BulkUpdateAlerting(context.Background(), tenantID, ids, &one, nil, nil, nil)
+			if !errors.Is(err, ErrBulkAlertingRefused) {
+				t.Fatalf("BulkUpdateAlerting() = %d, %v, want ErrBulkAlertingRefused", updated, err)
+			}
+			if updated != tc.wantUpdated || len(base.updated) != tc.wantUpdated {
+				t.Fatalf("updated = %d (wrote %d), want %d", updated, len(base.updated), tc.wantUpdated)
+			}
+			for _, id := range base.updated {
+				if id == repo.target {
+					t.Fatal("the monitor that became a domain monitor was written")
+				}
+			}
+		})
+	}
+}

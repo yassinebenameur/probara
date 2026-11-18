@@ -193,8 +193,9 @@ var workspacePurgePlan = []purgeStep{
 // order): channel configs (provider tokens, webhook URLs, passwords), monitor
 // config secrets (every field secrets.MonitorSecretFields and
 // MonitorSecretMapFields know, of any type, and the plain maps whose entries
-// can hold credentials: headers, metadata, variables), credentials in monitor
-// URLs (a userinfo password, credential-named query parameters) and push
+// can hold credentials: headers, metadata, variables, and a synthetic API
+// step's request headers), credentials in monitor URLs (a userinfo password,
+// credential-named query parameters) and push
 // tokens, private-location
 // worker credentials, the legacy AI provider key, and status page passwords
 // and kiosk tokens (hashes). Each step updates only
@@ -209,7 +210,7 @@ func workspaceScrubPlan() []purgeStep {
 		{table: "monitors (secrets)", sql: `UPDATE monitors SET config = config - ` + monitorSecretKeysSQL + `, push_token = NULL
 			WHERE ctid = ANY(ARRAY(SELECT ctid FROM monitors
 				WHERE tenant_id = $1 AND (config ?| ` + monitorSecretKeysSQL + ` OR push_token IS NOT NULL) LIMIT $2))`},
-		{table: "monitors (URL credentials)", run: (*workspacePurger).scrubMonitorURLCredentials},
+		{table: "monitors (nested credentials)", run: (*workspacePurger).scrubMonitorNestedCredentials},
 		{table: "locations (secrets)", sql: `UPDATE locations SET worker_credential = NULL
 			WHERE ctid = ANY(ARRAY(SELECT ctid FROM locations
 				WHERE tenant_id = $1 AND worker_credential IS NOT NULL LIMIT $2))`},
@@ -266,26 +267,65 @@ var monitorSecretKeysSQL = func() string {
 	return "ARRAY[" + strings.Join(quoted, ", ") + "]::text[]"
 }()
 
-// monitorURLTypes are the monitor types with URL fields (secrets.URLFields).
-var monitorURLTypes = func() []string {
-	types := make([]string, 0, len(secrets.URLFields))
+// workspacePurgeScrubbedKey marks a monitor config the nested-credential
+// scrub has handled (a deleted workspace's rows only, deleted later in the
+// plan), so the step's pre-filter never selects it again: a masked URL keeps
+// its '@' ("user:***@host") and other text matching the filter stays, so
+// what the scrub leaves behind cannot tell a done row from a pending one.
+const workspacePurgeScrubbedKey = "workspace_purge_scrubbed"
+
+// nestedHeaderPaths are the plain credential maps below the top level
+// (secrets.PlainCredentialPaths: a synthetic API step's request headers),
+// per monitor type; the scrub removes them whole.
+var nestedHeaderPaths = func() map[string][][]string {
+	out := map[string][][]string{}
+	for monitorType, paths := range secrets.PlainCredentialPaths {
+		for _, path := range paths {
+			if len(path) > 1 && path[len(path)-1] == "headers" {
+				out[monitorType] = append(out[monitorType], path)
+			}
+		}
+	}
+	return out
+}()
+
+// nestedScrubTypes are the monitor types the nested-credential scrub reads:
+// those with URL fields (secrets.URLFields) or nested header maps.
+var nestedScrubTypes = func() []string {
+	seen := map[string]bool{}
+	var types []string
 	for monitorType := range secrets.URLFields {
+		seen[monitorType] = true
 		types = append(types, monitorType)
+	}
+	for monitorType := range nestedHeaderPaths {
+		if !seen[monitorType] {
+			types = append(types, monitorType)
+		}
 	}
 	sort.Strings(types)
 	return types
 }()
 
-// scrubMonitorURLCredentials masks the credentials in the workspace's monitor
+// nestedScrubCandidateSQL selects the configs that can hold what the scrub
+// changes, a superset decided on the text: a URL credential needs an '@'
+// (userinfo) or a '?' (query parameters), which jsonb text never escapes,
+// and a nested header map needs its key, quoted, in any case. Configs the
+// scrub has handled carry workspacePurgeScrubbedKey and are skipped, so a
+// finished workspace costs one query that returns nothing.
+const nestedScrubCandidateSQL = `NOT config ? '` + workspacePurgeScrubbedKey + `'
+	AND (strpos(config::text, '@') > 0 OR strpos(config::text, '?') > 0 OR config::text ILIKE '%"headers"%')`
+
+// scrubMonitorNestedCredentials scrubs what no top-level config key names, so
+// the SQL steps cannot reach it: the credentials in the workspace's monitor
 // URL fields (a userinfo password, credential-named query parameters;
-// secrets.MaskURLCredentials), which no config key names, so the SQL steps
-// cannot reach them. Telling a credential from an '@' in a path takes the
-// secrets package's parser, so the rows are read here: the workspace's
-// monitors of the types with URL fields, in id order a batch at a time, and
-// only the configs that change are written. A masked URL does not change
-// again, so the step reports 0 once done; a config saved meanwhile (the
+// secrets.MaskURLCredentials) and the plain header maps inside synthetic API
+// steps (removed whole). Telling a credential from an '@' in a path takes the
+// secrets package's parser, so the candidate rows (nestedScrubCandidateSQL)
+// are read here, in id order a batch at a time, each written back scrubbed
+// and marked; reads never exceed the budget. A config saved meanwhile (the
 // compare-and-set misses it) is left to the next pass.
-func (p *workspacePurger) scrubMonitorURLCredentials(ctx context.Context, conn *sql.Conn, tenantID uuid.UUID, budget int) (int, bool, error) {
+func (p *workspacePurger) scrubMonitorNestedCredentials(ctx context.Context, conn *sql.Conn, tenantID uuid.UUID, budget int) (int, bool, error) {
 	type monitorConfig struct {
 		id     uuid.UUID
 		typ    string
@@ -294,13 +334,14 @@ func (p *workspacePurger) scrubMonitorURLCredentials(ctx context.Context, conn *
 	changed := 0
 	after := uuid.Nil
 	for {
-		if changed >= budget {
+		limit := min(p.opts.BatchSize, budget-changed)
+		if limit <= 0 {
 			return changed, false, nil
 		}
 		rows, err := conn.QueryContext(ctx, `
 			SELECT id, type, config FROM monitors
-			WHERE tenant_id = $1 AND type = ANY($2) AND id > $3
-			ORDER BY id LIMIT $4`, tenantID, pq.Array(monitorURLTypes), after, p.opts.BatchSize)
+			WHERE tenant_id = $1 AND type = ANY($2) AND id > $3 AND `+nestedScrubCandidateSQL+`
+			ORDER BY id LIMIT $4`, tenantID, pq.Array(nestedScrubTypes), after, limit)
 		if err != nil {
 			return changed, false, err
 		}
@@ -318,12 +359,9 @@ func (p *workspacePurger) scrubMonitorURLCredentials(ctx context.Context, conn *
 			return changed, false, err
 		}
 		for _, m := range batch {
-			scrubbed, ok := maskMonitorURLCredentials(m.typ, m.config)
-			if !ok {
-				continue
-			}
-			if changed >= budget {
-				return changed, false, nil
+			scrubbed, err := scrubNestedCredentials(m.typ, m.config)
+			if err != nil {
+				return changed, false, fmt.Errorf("monitor %s: %w", m.id, err)
 			}
 			result, err := conn.ExecContext(ctx, `
 				UPDATE monitors SET config = $1::jsonb
@@ -340,7 +378,7 @@ func (p *workspacePurger) scrubMonitorURLCredentials(ctx context.Context, conn *
 				p.metrics.rows.Add(float64(n))
 			}
 		}
-		if len(batch) < p.opts.BatchSize {
+		if len(batch) < limit {
 			return changed, true, nil
 		}
 		after = batch[len(batch)-1].id
@@ -350,30 +388,53 @@ func (p *workspacePurger) scrubMonitorURLCredentials(ctx context.Context, conn *
 	}
 }
 
-// maskMonitorURLCredentials masks the credentials of a stored config's URL
-// fields; ok is false when there were none (or the config does not decode).
-func maskMonitorURLCredentials(monitorType string, raw []byte) ([]byte, bool) {
+// scrubNestedCredentials masks the credentials of a stored config's URL
+// fields, removes its nested header maps, and marks it scrubbed.
+func scrubNestedCredentials(monitorType string, raw []byte) ([]byte, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber() // re-encoding must not reformat numbers
 	var cfg map[string]any
 	if err := decoder.Decode(&cfg); err != nil || cfg == nil {
-		return nil, false
+		// Not an object: nothing a check could read, and the workspace is
+		// gone, so it is dropped rather than left to stall every pass.
+		cfg = map[string]any{}
 	}
-	changed := false
 	secrets.WalkURLFields(monitorType, cfg, func(_ string, parent map[string]any, key string) {
 		if masked, did := secrets.MaskURLCredentials(parent[key].(string)); did {
 			parent[key] = masked
-			changed = true
 		}
 	})
-	if !changed {
-		return nil, false
+	for _, path := range nestedHeaderPaths[monitorType] {
+		removeConfigPath(cfg, path)
 	}
-	out, err := json.Marshal(cfg)
-	if err != nil {
-		return nil, false
+	cfg[workspacePurgeScrubbedKey] = true
+	return json.Marshal(cfg)
+}
+
+// removeConfigPath deletes the value at path ("*" is every element of an
+// array), matching keys case-insensitively as the credential rules do.
+func removeConfigPath(node any, path []string) {
+	if path[0] == "*" {
+		items, _ := node.([]any)
+		for _, item := range items {
+			removeConfigPath(item, path[1:])
+		}
+		return
 	}
-	return out, true
+	object, ok := node.(map[string]any)
+	if !ok {
+		return
+	}
+	for key, value := range object {
+		if !strings.EqualFold(key, path[0]) {
+			continue
+		}
+		if len(path) == 1 {
+			delete(object, key)
+		} else {
+			removeConfigPath(value, path[1:])
+		}
+	}
 }
 
 // workspacePurgeExempt lists the tenant-scoped tables the purge deliberately
