@@ -12,6 +12,7 @@ import type {
 import { getMonitor, getMonitors } from '@/lib/api';
 import { componentStatus, type ComponentStatus } from '@/lib/status-page-status';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
+import { useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import { pluralize } from '@/lib/format';
 import { isApplePlatform, modalOpen, shortcutLabel } from '@/lib/shortcuts';
 import FormField from '@/components/ui/FormField';
@@ -88,6 +89,7 @@ export default function StatusPageForm({
   loading = false,
 }: StatusPageFormProps) {
   const { state, dispatch } = useStatusPageFormState(statusPage);
+  const statusPageBaseUrl = useStatusPageBaseUrl();
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [monitorsLoading, setMonitorsLoading] = useState(true);
   // Direct members per group. The monitor list omits member_ids, so groups
@@ -324,7 +326,7 @@ export default function StatusPageForm({
   const publicUrl = resolveStatusPagePublicUrl({
     slug: state.basics.slug.trim() || 'your-page',
     public_url: statusPage?.public_url,
-  });
+  }, statusPageBaseUrl);
 
   const sectionCount = state.sections.length;
   const monitorCount = derived.membershipCount;
@@ -493,7 +495,7 @@ export default function StatusPageForm({
         {statusPage && (
           <ShareSection
             statusPage={statusPage}
-            publicUrl={resolveStatusPagePublicUrl(statusPage)}
+            publicUrl={resolveStatusPagePublicUrl(statusPage, statusPageBaseUrl)}
             monitorsById={monitorsById}
           />
         )}

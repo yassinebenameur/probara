@@ -75,7 +75,7 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	want := Claims{Action: ActionAcknowledge, TenantID: tenant, AlertID: alert, ChannelID: channel, ExpiresAt: t0.Add(TTL), KeyVersion: 1}
+	want := Claims{Action: ActionAcknowledge, TenantID: tenant, AlertID: alert, ChannelID: channel, ExpiresAt: t0.Add(TTL), IssuedAt: t0, KeyVersion: 1}
 	if c != want {
 		t.Fatalf("claims = %+v, want %+v", c, want)
 	}
@@ -103,6 +103,30 @@ func TestExpiry(t *testing.T) {
 		if err != nil || !c.ExpiresAt.Equal(t0.Add(TTL)) {
 			t.Fatalf("%s issue time: expires %v (err %v), want %v", name, c.ExpiresAt, err, t0.Add(TTL))
 		}
+	}
+}
+
+// The issue time comes back with the claims, truncated to the second (never
+// later than the real time), for every action: the API ties an acknowledge
+// link to the alert's episode with it.
+func TestIssuedAt(t *testing.T) {
+	issued := t0.Add(-10*time.Hour + 750*time.Millisecond)
+	s := signerAt(keyring{1: key1}, t0)
+	c, err := s.Verify(mint(t, s, issued), ActionAcknowledge)
+	if err != nil || !c.IssuedAt.Equal(issued.Truncate(time.Second)) {
+		t.Fatalf("IssuedAt = %v (err %v), want %v", c.IssuedAt, err, issued.Truncate(time.Second))
+	}
+	tok, err := s.ActionToken(ActionUnsubscribeReport, tenant.String(), alert.String(), channel.String(), issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, err := s.Verify(tok, ActionUnsubscribeReport); err != nil || !c.IssuedAt.Equal(issued.Truncate(time.Second)) {
+		t.Fatalf("unsubscribe IssuedAt = %v (err %v), want %v", c.IssuedAt, err, issued.Truncate(time.Second))
+	}
+	// An expired token keeps it too.
+	if c, err := signerAt(keyring{1: key1}, issued.Add(TTL+time.Hour)).Verify(mint(t, s, issued), ActionAcknowledge); !errors.Is(err, ErrExpired) ||
+		!c.IssuedAt.Equal(issued.Truncate(time.Second)) {
+		t.Fatalf("expired IssuedAt = %v (err %v)", c.IssuedAt, err)
 	}
 }
 

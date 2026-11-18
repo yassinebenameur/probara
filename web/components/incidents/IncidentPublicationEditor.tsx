@@ -6,6 +6,7 @@ import { ArrowUpRight, EyeOff, Globe } from 'lucide-react';
 import { getStatusPages } from '@/lib/api';
 import type { IncidentDetail, StatusPage } from '@/lib/types';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
+import { useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import { sameIdSet } from '@/lib/incident-view';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
@@ -29,6 +30,7 @@ export default function IncidentPublicationEditor({
   onPublish,
   onUnpublish,
 }: IncidentPublicationEditorProps) {
+  const statusPageBaseUrl = useStatusPageBaseUrl();
   const [statusPages, setStatusPages] = useState<StatusPage[]>([]);
   const [selectedStatusPageId, setSelectedStatusPageId] = useState('');
   const [selectedMonitorIds, setSelectedMonitorIds] = useState<string[]>([]);
@@ -132,7 +134,7 @@ export default function IncidentPublicationEditor({
         {publishedCount > 0 && (
           <ul className="glass-well divide-y divide-divider">
             {incident.publications.map((publication) => {
-              const href = resolveStatusPagePublicUrl({ slug: publication.status_page_slug });
+              const href = resolveStatusPagePublicUrl({ slug: publication.status_page_slug }, statusPageBaseUrl);
               return (
                 <li key={publication.status_page_id} className="flex items-center gap-3 py-2.5 pl-3.5 pr-1.5">
                   <Globe className="h-4 w-4 flex-shrink-0 text-emerald-400" strokeWidth={1.75} aria-hidden="true" />

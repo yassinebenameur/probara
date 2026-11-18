@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/ui/Button";
 import BrandMark from "@/components/ui/BrandMark";
@@ -13,11 +14,17 @@ import {
   ssoButtonVisible,
   type BootstrapStatus,
 } from "@/lib/bootstrap";
-import type { OidcStatus } from "@/lib/types";
+import type { MfaChallengeResponse, OidcStatus } from "@/lib/types";
 
 type ApiErrorResponse = {
+  error?: string;
   message?: string;
 };
+
+// The lockout rule, stated alike for every refusal in either step: the API
+// never says whether an account exists or is locked.
+const LOCKOUT_NOTE =
+  "Ten failed attempts in a row lock the account for 15 minutes; an administrator can unlock it sooner.";
 
 type AuthMode = "loading" | "login" | "bootstrap";
 
@@ -61,6 +68,10 @@ function LoginPageInner() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [oidc, setOidc] = useState<OidcStatus>({ enabled: false });
+  // The second step of a two-factor sign-in: the password was right, the
+  // session starts once a code is accepted.
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [code, setCode] = useState("");
   const nextPath = safeNextPath(searchParams.get("next"));
 
   useEffect(() => {
@@ -145,11 +156,20 @@ function LoginPageInner() {
       if (response.status === 401) {
         // The API answers every refusal alike (unknown user, wrong password,
         // locked account), so the lockout rule is stated for all of them.
-        return "Invalid username or password. Ten failed attempts in a row lock the account for 15 minutes; an administrator can unlock it sooner.";
+        return `Invalid username or password. ${LOCKOUT_NOTE}`;
       }
 
       if (!response.ok) {
         return await readErrorMessage(response, "Login failed");
+      }
+
+      const data = (await response.json().catch(() => null)) as Partial<MfaChallengeResponse> | null;
+      if (data?.mfa_required && data.mfa_token) {
+        // Two-factor account: no session yet, ask for the code.
+        setChallenge(data.mfa_token);
+        setCode("");
+        setPassword("");
+        return null;
       }
 
       // Ensure we don't fall back to API-key mode after admin login
@@ -176,8 +196,44 @@ function LoginPageInner() {
     const loginError = await loginWithCredentials(username.trim(), password);
     if (loginError) {
       setError(loginError);
-      setLoading(false);
     }
+    setLoading(false);
+  };
+
+  const handleCodeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!challenge || !code.trim()) {
+      setError("Enter the code from your authenticator app, or a recovery code.");
+      return;
+    }
+    setError("");
+    setLoading(true);
+    try {
+      const response = await fetch("/api/v1/auth/login/mfa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ mfa_token: challenge, code: code.trim() }),
+      });
+      if (response.ok) {
+        clearApiKey();
+        router.push(nextPath);
+        return;
+      }
+      const body = (await response.json().catch(() => ({}))) as ApiErrorResponse;
+      if (response.status === 401 && body.error === "mfa_challenge_invalid") {
+        // Expired (5 minutes), already used, or retired by a password change.
+        setChallenge(null);
+        setError("The sign-in attempt expired. Enter your password again.");
+      } else if (response.status === 401) {
+        setError(`Invalid code. ${LOCKOUT_NOTE}`);
+      } else {
+        setError(body.message || "Sign-in failed. Try again.");
+      }
+    } catch {
+      setError("Failed to sign in. Please try again.");
+    }
+    setLoading(false);
   };
 
   const handleBootstrapSubmit = async (e: React.FormEvent) => {
@@ -263,6 +319,15 @@ function LoginPageInner() {
                 No admin user found. Set up the initial administrator.
               </p>
             </>
+          ) : challenge ? (
+            <>
+              <h1 className="text-2xl font-semibold tracking-tight text-white">
+                Two-factor sign-in
+              </h1>
+              <p className="mt-2 text-sm text-slate-400">
+                Enter the code from your authenticator app, or one of your recovery codes.
+              </p>
+            </>
           ) : (
             <>
               <h1 className="text-2xl font-semibold tracking-tight text-white">
@@ -279,6 +344,61 @@ function LoginPageInner() {
           <div className="py-8 text-center text-sm text-slate-400">
             Checking admin setup...
           </div>
+        ) : challenge ? (
+          <form onSubmit={handleCodeSubmit} className="space-y-5" noValidate>
+            <div>
+              <label
+                htmlFor="mfa-code"
+                className="mb-1.5 block text-ui font-medium text-slate-300"
+              >
+                Code
+              </label>
+              <input
+                id="mfa-code"
+                name="code"
+                type="text"
+                required
+                autoFocus
+                autoComplete="one-time-code"
+                spellCheck={false}
+                className="input font-mono tracking-widest"
+                placeholder="123456"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                disabled={loading}
+              />
+              <p className="mt-1.5 text-xs text-slate-400">
+                Lost your authenticator? Use a recovery code, or ask an administrator to reset two-factor sign-in.
+              </p>
+            </div>
+
+            {error && <Callout tone="danger">{error}</Callout>}
+
+            <Button
+              type="submit"
+              variant="accent"
+              size="sm"
+              loading={loading}
+              disabled={loading}
+              className="!h-10 w-full justify-center !text-sm"
+            >
+              {loading ? "Signing in…" : "Verify and continue"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={loading}
+              className="!h-10 w-full justify-center !text-sm"
+              onClick={() => {
+                setChallenge(null);
+                setCode("");
+                setError("");
+              }}
+            >
+              Back to sign in
+            </Button>
+          </form>
         ) : (
           <form
             onSubmit={
@@ -328,6 +448,13 @@ function LoginPageInner() {
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={loading}
               />
+              {authMode === "login" && (
+                <p className="mt-1.5 text-right text-xs">
+                  <Link href="/forgot-password" className="text-cyan-300 hover:text-cyan-200">
+                    Forgot password?
+                  </Link>
+                </p>
+              )}
             </div>
 
             {authMode === "bootstrap" && (

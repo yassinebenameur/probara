@@ -229,7 +229,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
             "Open the web application at `http://localhost:3000`.",
             "Follow the bootstrap prompt and create the initial account. When the API has `BOOTSTRAP_SETUP_CODE` set (the release installer always sets it), the form also asks for that setup code: the installer prints it when it finishes and keeps it in the install directory's `.env`.",
             "Use a username of 3–64 characters containing letters, numbers, `.`, `_`, or `-`.",
-            "Use a password between 12 and 128 characters.",
+            "Use a password of at least 12 characters and at most 72 bytes (bcrypt hashes no more; accented or non-Latin letters take two to four bytes each).",
             "Sign in and select the initial tenant context.",
           ],
         },

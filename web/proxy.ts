@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { CSP_HEADER, buildWebCsp, newNonce, originOf, statusPageFrameOrigins } from '@/lib/csp';
+import {
+  CSP_HEADER,
+  buildWebCsp,
+  configuredStatusPageUrl,
+  newNonce,
+  originOf,
+  statusPageFrameOrigins,
+} from '@/lib/csp';
 
 // Per-request Content-Security-Policy (lib/csp.ts), report-only for this
 // release. The policy goes on the request too: Next.js reads the nonce from
@@ -12,7 +19,7 @@ export function proxy(request: NextRequest) {
     nonce,
     dev: process.env.NODE_ENV === 'development',
     statusPageOrigins: statusPageFrameOrigins(
-      process.env.NEXT_PUBLIC_STATUS_PAGE_URL,
+      configuredStatusPageUrl(process.env.STATUS_PAGE_BASE_URL, process.env.NEXT_PUBLIC_STATUS_PAGE_URL),
       request.nextUrl.hostname,
       request.nextUrl.protocol
     ),

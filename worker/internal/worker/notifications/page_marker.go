@@ -35,7 +35,9 @@ import (
 // relapsed claim rewrites last_sent_at, the resolve claim's does not
 // survive it). A page's marker goes once the episode's resolve reaches the
 // channel; a delivered resolve keeps its own (a redelivery after a lost ack,
-// met by a relapse, must read as possibly reached); every marker goes with
+// met by a relapse, must read as possibly reached, and a held relapse notice
+// reads it to tell whether the row it replaced heard that recovery:
+// recoveryReached); every marker goes with
 // the alert otherwise (the ledger cascades).
 
 // markTimeout bounds marker writes that must not ride the dispatch deadline:

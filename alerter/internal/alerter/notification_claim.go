@@ -111,6 +111,17 @@ func (a *Alerter) deliverNotification(
 	if eventType == "resolved" {
 		alert.ResolvedAt = resolvedAt
 	}
+	// The caller takes now once for its whole loop, so another replica can
+	// recover and reopen the alert while it runs, and this send then belongs
+	// to an episode that began after now. The claim's time is the event's
+	// timestamp and the acknowledge link's issue time, which the API checks
+	// against the episode (a link issued before it is refused), so it never
+	// predates the episode read under this lock. Due rules are unaffected: a
+	// page or relapse notice claims whatever its time, and a reminder needs
+	// a full interval past the reopen (DispatchResumedAtExpr) either way.
+	if alert.ReopenedAt != nil && now.Before(*alert.ReopenedAt) {
+		now = *alert.ReopenedAt
+	}
 
 	claim, err := claimNotificationTx(ctx, tx, alert.ID, channel.ID, eventType, now, reminderInterval, alert.RelapseCount)
 	if err != nil {

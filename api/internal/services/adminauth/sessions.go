@@ -23,7 +23,8 @@ import (
 // replica, with no cache to wait out.
 //
 // Every query here tolerates a database that predates the migration
-// (42P01/42703, the post-upgrade migration job): sessions then work as
+// (42P01/42703: a deployment that starts the binary before migrating; the
+// chart and Compose migrate first): sessions then work as
 // before, without families, and access tokens carry no sid.
 
 // Auth methods recorded on a family.
@@ -39,6 +40,9 @@ const (
 	RevokeReasonAdmin         = "admin"
 	RevokeReasonPasswordReset = "password_reset"
 	RevokeReasonRefreshReuse  = "refresh_reuse"
+	// RevokeReasonRecoveryCode: a recovery code signed in (a lost device),
+	// so the user's other sessions ended.
+	RevokeReasonRecoveryCode = "recovery_code"
 )
 
 // refreshReuseGrace is how long a rotated refresh token still earns an access
@@ -376,13 +380,18 @@ func RevokeUserSessions(ctx context.Context, q SessionQuerier, adminID, keep uui
 // with current (the caller's own, uuid.Nil for none) marked. Empty before
 // migration 000118.
 func (s *Service) ListSessions(ctx context.Context, adminID, current uuid.UUID) ([]models.AdminSession, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, COALESCE(auth_method, ''), created_at, last_used_at, expires_at,
+	const listSessions = `
+		SELECT id, COALESCE(auth_method, ''), %s, created_at, last_used_at, expires_at,
 		       COALESCE(ip, ''), COALESCE(user_agent, '')
 		FROM admin_session_families
 		WHERE admin_user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
 		ORDER BY last_used_at DESC, created_at DESC
-	`, adminID)
+	`
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(listSessions, `COALESCE(second_factor, '')`), adminID)
+	if pgerr.IsUndefinedColumn(err) {
+		// Before migration 000125: no second factor to show.
+		rows, err = s.db.QueryContext(ctx, fmt.Sprintf(listSessions, `''`), adminID)
+	}
 	if pgerr.IsMissingSchema(err) {
 		return []models.AdminSession{}, nil
 	}
@@ -394,7 +403,7 @@ func (s *Service) ListSessions(ctx context.Context, adminID, current uuid.UUID) 
 	sessions := make([]models.AdminSession, 0)
 	for rows.Next() {
 		var item models.AdminSession
-		if err := rows.Scan(&item.ID, &item.AuthMethod, &item.CreatedAt, &item.LastUsedAt, &item.ExpiresAt, &item.IP, &item.UserAgent); err != nil {
+		if err := rows.Scan(&item.ID, &item.AuthMethod, &item.SecondFactor, &item.CreatedAt, &item.LastUsedAt, &item.ExpiresAt, &item.IP, &item.UserAgent); err != nil {
 			return nil, fmt.Errorf("failed to scan session: %w", err)
 		}
 		item.Client = SummarizeUserAgent(item.UserAgent)

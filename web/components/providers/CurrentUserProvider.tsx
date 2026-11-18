@@ -21,6 +21,12 @@ interface CurrentUserValue {
   isSuperadmin: boolean;
   /** Whether the current credential may perform mutations. */
   canWrite: boolean;
+  /**
+   * The deployment's public status-page origin (STATUS_PAGE_BASE_URL on the
+   * API), null when unset or not reported. Runtime configuration rides on
+   * /v1/auth-context because the UI image is built once for every install.
+   */
+  statusPageBaseUrl: string | null;
   loading: boolean;
   refresh: () => void;
 }
@@ -33,6 +39,7 @@ const permissiveDefault: CurrentUserValue = {
   role: null,
   isSuperadmin: true,
   canWrite: true,
+  statusPageBaseUrl: null,
   loading: false,
   refresh: () => {},
 };
@@ -51,6 +58,14 @@ export function useCurrentUser(): CurrentUserValue {
 export function useCanWrite(): boolean {
   const { canWrite, loading } = useCurrentUser();
   return canWrite && !loading;
+}
+
+/**
+ * The status-page origin for lib/statusPageUrl.ts. A hook, so links rendered
+ * before /v1/auth-context answers are redrawn once it does.
+ */
+export function useStatusPageBaseUrl(): string | null {
+  return useCurrentUser().statusPageBaseUrl;
 }
 
 /**
@@ -100,6 +115,7 @@ export function CurrentUserProvider({ children }: { children: React.ReactNode })
         role: authContext.role ?? null,
         isSuperadmin: authContext.platform_role === 'superadmin',
         canWrite: authContext.can_write,
+        statusPageBaseUrl: authContext.status_page_base_url || null,
         loading: false,
         refresh,
       });

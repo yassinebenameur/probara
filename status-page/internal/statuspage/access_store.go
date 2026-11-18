@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
-	"github.com/yassinebenameur/probara/shared/pageaccess"
 	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
@@ -61,13 +60,6 @@ var pageAccessQuery = `
 	FROM status_pages sp
 	WHERE sp.slug = $1 AND ` + tenancy.LiveTenantSQL("sp.tenant_id")
 
-// legacyPageAccessQuery serves while migration 000114 has not run yet: with
-// no visibility column no page can be gated, so every page is public.
-var legacyPageAccessQuery = `
-	SELECT id, title, COALESCE(logo_url, ''), COALESCE(primary_color, '')
-	FROM status_pages
-	WHERE slug = $1 AND ` + livePage
-
 // PageAccess implements accessQuery. The presented token is looked up by
 // hash, so the token itself never reaches the database or a log.
 func (s *Service) PageAccess(ctx context.Context, slug, presentedTokenHash string, sessionTokenID uuid.UUID) (*pageAccess, error) {
@@ -82,10 +74,6 @@ func (s *Service) PageAccess(ctx context.Context, slug, presentedTokenHash strin
 		&a.Visibility, &a.PasswordHash, &a.PasswordVersion,
 		&presented, &a.SessionTokenLive,
 	)
-	if err != nil && pgerr.IsMissingSchema(err) {
-		a = pageAccess{Visibility: pageaccess.Public}
-		err = s.db.QueryRowContext(ctx, legacyPageAccessQuery, slug).Scan(&a.ID, &a.Title, &a.LogoURL, &a.PrimaryColor)
-	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrStatusPageNotFound
@@ -102,10 +90,6 @@ func (s *Service) PageAccess(ctx context.Context, slug, presentedTokenHash strin
 func (s *Service) PageVisibilityByID(ctx context.Context, id uuid.UUID) (string, error) {
 	var visibility string
 	err := s.db.QueryRowContext(ctx, `SELECT visibility FROM status_pages WHERE id = $1 AND `+livePage, id).Scan(&visibility)
-	if err != nil && pgerr.IsMissingSchema(err) {
-		visibility = pageaccess.Public
-		err = s.db.QueryRowContext(ctx, `SELECT 'public' FROM status_pages WHERE id = $1 AND `+livePage, id).Scan(&visibility)
-	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrStatusPageNotFound

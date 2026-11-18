@@ -41,7 +41,13 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   unpaired file, or a gap not in `knownMigrationGaps`), applied by
   `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
-  Compose job, Helm a post-install/upgrade hook Job
+  Compose job, Helm a `post-install,pre-upgrade` hook Job
+  (`job-migrations.yaml`, with its own hook Secret for a chart-composed DSN,
+  since the release Secret is not updated yet), so new pods never start on
+  an old schema and code may rely on its release's migrations; Compose
+  services wait for `migrations` (`service_completed_successfully`). Old
+  pods run briefly on the new schema: keep migrations additive. The API's
+  startup migration is a safety net only
 - `cmd/` — `migrate`, `discovery-collector` (the in-cluster Kubernetes
   inventory collector, own image), plus one-off admin tools in `cmd/admin/`
   (`cmd/admin` itself upserts a superadmin, like the first-user form; VAPID
@@ -631,7 +637,7 @@ or imported groups come back empty. Any other path that creates groups through
   `status_page_preview_secret`, `bootstrap_setup_code`, `status_page_session_secret`) are the contract external secret managers
   fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
   (the api signs preview tokens, status-page verifies them) and is `optional`
-  in the Secret. `ADMIN_COOKIE_SECURE` comes from the
+  only without a per-field Secret (as `BOOTSTRAP_SETUP_CODE`). `ADMIN_COOKIE_SECURE` comes from the
   `monitoring-platform.adminCookieSecure` helper: `api.cookieSecure` if set,
   else true exactly when `api.publicBaseURL` is https.
   Helm cannot read Secrets, so anything the chart *composes* from a
@@ -666,7 +672,36 @@ or imported groups come back empty. Any other path that creates groups through
   the api trusts only the frontend's fixed address `PROBARA_FRONTEND_IP/32`
   (`TRUSTED_PROXY_CIDRS`). `edge`, frontend and api share `probara-front`,
   which the worker (tenant-defined requests, arbitrary headers) must never
-  join; never trust a whole network the worker is on.
+  join; never trust a whole network the worker is on. Public origins
+  (`APP_BASE_URL`, `STATUS_PAGE_BASE_URL`) default to empty, never
+  localhost; the installer writes them empty and names them in its closing
+  text.
+- **Status-page origin in the operator UI**: the published UI image is built
+  once, so `NEXT_PUBLIC_STATUS_PAGE_URL` is a dev fallback only. The api
+  reads `STATUS_PAGE_BASE_URL` and returns it as `status_page_base_url` on
+  `GET /auth-context`; `useStatusPageBaseUrl()` (CurrentUserProvider) feeds
+  `lib/statusPageUrl.ts`, and every call site passes it; anything that loads
+  such a URL by itself (the template preview iframe, which may carry a
+  preview token) waits for `useCurrentUser().loading` to clear. The UI server reads
+  the same variable at runtime for its CSP `frame-src`
+  (`configuredStatusPageUrl`, `lib/csp.ts`). The api reads it once, as
+  `StatusPagePublicBaseURL` (`config_api_domains.go`), which also gates
+  custom domains. Helm renders `statusPage.baseUrl` into status-page, api
+  and frontend (`frontend.statusPageUrl` is deprecated and ignored);
+  release Compose passes `.env`'s value to the same three.
+- **Result ingest never acks a platform failure**
+  (`scheduler/internal/ingest`): a location result is acked unprocessed
+  only when verification fails with `errRejected` (subject/payload
+  mismatch, unknown or disabled location, bad signature); a database error
+  or a schema behind the code NAKs with `retryDelay` (explicit NAKs bypass
+  the consumer's BackOff), as do persist failures. Every retry is bounded
+  (`retryOrGiveUp`: ~15 min for database/schema errors, 3 deliveries for a
+  credential the configured key cannot decrypt), then TERMed
+  (`queue.Terminate`) and counted in `result_ingest_abandoned_total`: a
+  delayed NAK stays in the ack-pending set, and at the consumer's
+  `MaxAckPending` (set deliberately, `resultIngestMaxAckPending`) no new
+  result is delivered for any tenant. Core-NATS heartbeats
+  cannot be redelivered and only log the difference.
 - **NATS websocket listener** (port 8443, plaintext; TLS terminates at the
   ingress or proxy) lets private locations dial `wss://` on 443. Helm
   `nats.websocket.*`: its own Ingress (`ingress-nats-websocket.yaml`, never a
@@ -744,6 +779,27 @@ or imported groups come back empty. Any other path that creates groups through
   each heartbeat and end at `CredentialExpiry`; a new stream must too. The
   `admin_sessions_default_family` trigger (000118) is rolling-deploy
   compatibility only: drop it in a later release's migration.
+- **Account links and two-factor** (local password accounts only; an SSO
+  account never gets a reset, email change, password or second factor
+  here): invite / reset / email-change links and the sign-in challenge are
+  single-use rows in `admin_account_tokens` (random, SHA-256 stored,
+  purpose-bound; `adminauth/tokens.go`), never `shared/actionlink`. Every
+  path that sets a password or resets two-factor retires the user's open
+  tokens (`RetireAccountTokens`; `cmd/admin` does it in SQL), or a pending
+  email change survives the recovery. Link tokens ride in the URL fragment
+  and `X-Action-Token`; the pages are in `web/lib/public-routes.ts`. Without
+  `SMTP_*` + `APP_BASE_URL` on the API (`accountmail.Enabled`) only a
+  superadmin's response carries a link. TOTP secrets are sealed with
+  `PROBARA_SECRETS_KEY` (no key, no enrolment; never the no-op encryptor).
+  Failed second factors and account-page password checks reserve an attempt
+  through the lockout before comparing; a correct password releases only its
+  own count, an internal error gives the attempt back, and a reset keeps a
+  two-factor account's ordinary lock (repeated second-factor lockouts hold
+  it until unlock or reset). Every password set also revokes the user's MCP
+  OAuth grants (`RevokeMCPAccess`), and an address change retires mailed
+  links. Passwords are capped at 72 bytes (bcrypt) in
+  `auth.ValidatePassword` and `web/lib/password.ts`. The rules and expiries:
+  `docs/auth-and-rbac.md`.
 
 ## MCP server
 
@@ -848,7 +904,9 @@ or imported groups come back empty. Any other path that creates groups through
   under their delivery key, which carries the episode
   (`releaseSupersededResolveClaim` and the relapse branch of
   `releaseMutedClaim` read it); a held relapse notice is handed back to the
-  exact row its claim replaced (`DispatchEnvelope.Release`). Dispatch message ids are the idempotency key plus the
+  exact row its claim replaced (`DispatchEnvelope.Release`), except a
+  `resolved` whose resolve never reached the channel, which goes back as
+  `created` (`recoveryReached`, the resolve's own marker). Dispatch message ids are the idempotency key plus the
   claim's `dispatchRound` (`notification_claim.go`): what a rolled-back claim
   finds again on retry (the resume clock for a page, `relapsed:` plus it
   for a relapse notice, the round for a reminder, `acknowledged_at` for an
@@ -973,7 +1031,10 @@ or imported groups come back empty. Any other path that creates groups through
   request logs and metric labels cannot record it; the public API routes are
   `api/internal/handlers/alertactions` (GET reads, only POST acknowledges).
   Paging plugins (PagerDuty, Opsgenie) never render it; SMS drops the deep
-  link when it has one.
+  link when it has one. A link acts only on its alert episode: the handler
+  refuses one issued (`actionlink.Claims.IssuedAt`, derived from the fixed
+  TTL) before the latest relapse's recovery (`issuedInEarlierEpisode`), so
+  changing an action's TTL shifts every outstanding link's issue time.
 - **Delivery history** (`alert_notification_deliveries`, 90 days) is written
   only through `shared/notifications/deliverylog`, from exactly two send
   paths — `deliverNotification` (`alerter/.../delivery_log.go`: in the claim
@@ -1439,7 +1500,10 @@ or imported groups come back empty. Any other path that creates groups through
 - Compose: `docker compose config` validates env wiring; for the release
   override, `docker compose -f docker-compose.yml -f docker-compose.release.yml
   config -q` under dummy values for its required variables, and
-  `bash scripts/test-install.sh` (needs only the docker CLI).
+  `bash scripts/test-install.sh` (needs only the docker CLI). CI runs both
+  (`Release Compose and installer` in `build-test.yml`), and `helm-lint.yml`
+  renders four value sets and fails unless the migrations Job keeps its
+  `post-install,pre-upgrade` hook.
 - ai-service: from the repo root with the hash-locked deps installed
   (`docs/local-ai.md`), `PYTHONDONTWRITEBYTECODE=1
   PYTHONPATH=ai-service:ai-service/training python -m pytest ai-service/tests

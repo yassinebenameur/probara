@@ -103,6 +103,9 @@ func mountUserRoutes(r chi.Router, adminUsersHandlers *userhandlers.Handlers) {
 		r.Get("/{id}/sessions", adminUsersHandlers.ListUserSessions)
 		r.Delete("/{id}/sessions", adminUsersHandlers.RevokeUserSessions)
 		r.Delete("/{id}/sessions/{sessionId}", adminUsersHandlers.RevokeUserSession)
+		r.Post("/{id}/invite", adminUsersHandlers.SendInvite)
+		r.Post("/{id}/password-reset", adminUsersHandlers.GeneratePasswordReset)
+		r.Post("/{id}/reset-2fa", adminUsersHandlers.ResetTwoFactor)
 	})
 }
 

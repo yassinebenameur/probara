@@ -5,7 +5,9 @@
 //	POST /api/v1/alert-actions/acknowledge  acknowledges it
 //
 // The routes are public: the token is the credential, bound to one tenant,
-// alert and channel and valid for 72 hours. GET never changes anything,
+// alert and channel and valid for 72 hours, and only in the alert episode it
+// was sent in: once the alert relapses, a link from an earlier page reads as
+// invalid (issuedInEarlierEpisode). GET never changes anything,
 // because mail scanners and link previewers fetch every link they see; the
 // operator UI's confirm page (/alert-action) POSTs on a button press.
 //
@@ -58,7 +60,8 @@ const (
 	// StateExpired: an authentic token past its lifetime.
 	StateExpired = "expired"
 	// StateInvalid: a missing, malformed, forged or revoked token (retired
-	// key version, deleted channel or alert).
+	// key version, deleted channel or alert, or a link from an alert
+	// episode that has since relapsed).
 	StateInvalid = "invalid"
 )
 
@@ -257,6 +260,13 @@ func (h *Handlers) reload(ctx context.Context, l lookup) (lookup, error) {
 	if err != nil {
 		return l, err
 	}
+	if issuedInEarlierEpisode(l.claims.IssuedAt, alert) {
+		// A link acts only on the episode it was sent for: whoever holds an
+		// old page has not seen this relapse, so acknowledging it from there
+		// would silence the new outage on a stale reading.
+		l.alert, l.state = nil, StateInvalid
+		return l, nil
+	}
 	l.alert = alert
 	switch alert.Status {
 	case models.AlertStatusActive:
@@ -267,6 +277,30 @@ func (h *Handlers) reload(ctx context.Context, l lookup) (lookup, error) {
 		l.state = StateResolved
 	}
 	return l, nil
+}
+
+// issuedInEarlierEpisode reports whether a link issued at issuedAt (whole
+// seconds, rounded down: actionlink.Claims.IssuedAt) was sent before the
+// alert's current episode. The cut-off is the recovery that ended the
+// previous episode (the latest relapse's recovered_at), not the reopen:
+// every page of an earlier episode was built before that recovery, and every
+// page of this one after the reopen, at least one evaluation later, so the
+// second rounding and the gap between the database clock (these times) and
+// the sender's (the link's) fall inside that gap instead of refusing a link
+// built just after the reopen. An alert that never relapsed is unaffected.
+func issuedInEarlierEpisode(issuedAt time.Time, alert *models.AlertWithDetails) bool {
+	if alert.RelapseCount == 0 {
+		return false
+	}
+	var cutoff time.Time
+	if n := len(alert.Relapses); n > 0 {
+		cutoff = alert.Relapses[n-1].RecoveredAt
+	} else if alert.ReopenedAt != nil {
+		// No history row to read (it is written with the reopen, so this is
+		// defensive): the reopen, to the second the link carries.
+		cutoff = alert.ReopenedAt.Truncate(time.Second)
+	}
+	return issuedAt.Before(cutoff)
 }
 
 // statusFor maps a state to its HTTP status. Refusals of the link itself are
