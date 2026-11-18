@@ -298,12 +298,16 @@ func TestDeletedWorkspaceCredentialsAreRefused(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, enabled)
 
-	var memberships, grants int
+	var memberships, grants, keys, liveKeys int
 	require.NoError(t, f.db.QueryRowContext(f.ctx, `
 		SELECT (SELECT COUNT(*) FROM tenant_memberships WHERE tenant_id = $1),
-		       (SELECT COUNT(*) FROM mcp_oauth_grants WHERE tenant_id = $1 AND revoked_at IS NULL)`, doomed).Scan(&memberships, &grants))
+		       (SELECT COUNT(*) FROM mcp_oauth_grants WHERE tenant_id = $1 AND revoked_at IS NULL),
+		       (SELECT COUNT(*) FROM api_keys WHERE tenant_id = $1 AND revoked_at IS NULL),
+		       (SELECT COUNT(*) FROM api_keys WHERE tenant_id = $2 AND revoked_at IS NULL)`, doomed, live).Scan(&memberships, &grants, &keys, &liveKeys))
 	require.Zero(t, memberships, "memberships go with the delete")
 	require.Zero(t, grants, "MCP connections are revoked with the delete")
+	require.Zero(t, keys, "API keys are revoked with the delete")
+	require.Equal(t, 1, liveKeys, "another workspace's keys are untouched")
 }
 
 // A tenant ID that does not name a workspace the caller can open gets one

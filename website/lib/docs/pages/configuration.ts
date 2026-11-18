@@ -186,14 +186,14 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`API_ALLOWED_ORIGINS`',
               'Empty; comma-separated `scheme://host[:port]`; `*` and paths are refused',
-              'Browser origins allowed credentialed [cross-origin](/docs/security/#passwords-api-keys-sessions) API calls. Empty means the `APP_BASE_URL` origin, or same-origin only when that is unset too. Compose passes it through; Helm renders `security.apiAllowedOrigins`.',
+              'Browser origins allowed credentialed [cross-origin](/docs/security/#passwords-api-keys-sessions) API calls. Empty means the `APP_BASE_URL` origin, or same-origin only when that is unset too. The listed origins, `APP_BASE_URL` and `PUBLIC_BASE_URL` are also the origins a browser may write from with the session cookie (cross-site request forgery check). Compose passes it through; Helm renders `security.apiAllowedOrigins`.',
             ],
           ],
         },
         {
           type: 'paragraph',
           text:
-            'The access cookie is HttpOnly and SameSite=Lax. `ADMIN_COOKIE_SECURE` controls its Secure attribute. Access and refresh TTL values are only parsed as integers; the loader does not reject zero or negative values, so use deliberate positive settings.',
+            'The access cookie is HttpOnly and SameSite=Lax; writes made with it are checked by [origin](/docs/security/#passwords-api-keys-sessions) as well. `ADMIN_COOKIE_SECURE` controls its Secure attribute. Access and refresh TTL values are only parsed as integers; the loader does not reject zero or negative values, so use deliberate positive settings.',
         },
       ],
     },
@@ -950,6 +950,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`API_PROXY_TRUST_FORWARDED_FOR`',
               '`false`',
               'The `/api` proxy drops a client-sent `X-Forwarded-For` / `X-Real-IP` unless this is `true`; set it only when a proxy you run in front of the UI sets that header, and then list the frontend in the API’s `TRUSTED_PROXY_CIDRS` ([trusted proxies](/docs/security/#audit-proxy-trust)). Runtime. The release Compose override sets it to `true` (its `edge` proxy rewrites the header, and the API trusts only the frontend\'s fixed address); Helm does not set it (use `frontend.extraEnv`).',
+            ],
+            [
+              '`API_PROXY_TRUST_FORWARDED_HOST`',
+              '`false`',
+              'The `/api` proxy takes the host the browser addressed from its `Host` header, which port-forward, Caddy (the release edge) and nginx-ingress keep; it uses that host to accept the UI’s own writes ([cross-site request forgery](/docs/security/#passwords-api-keys-sessions)) and passes it to the API as `X-Forwarded-Host`, ignoring any client-sent value. Set `true` only when a proxy you run in front of the UI rewrites `Host` and overwrites `X-Forwarded-Host` with the browser’s host: then that header alone counts. Runtime; not wired by Compose or Helm (use `frontend.extraEnv`).',
             ],
             [
               '`NEXT_PUBLIC_DEBUG_INGEST_URL`',

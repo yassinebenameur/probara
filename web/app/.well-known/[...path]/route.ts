@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { API_PROXY_TARGET, type ProxyRouteContext as RouteContext } from '@/lib/api-proxy';
+import { API_PROXY_TARGET, browserHost, type ProxyRouteContext as RouteContext } from '@/lib/api-proxy';
 
 // MCP clients discover the OAuth authorization server at root well-known
 // paths (RFC 9728 / RFC 8414). Ingress sends everything outside /api to this
@@ -18,7 +18,8 @@ async function forward(req: NextRequest, ctx: RouteContext): Promise<Response> {
       method: req.method,
       headers: {
         accept: 'application/json',
-        'x-forwarded-host': req.headers.get('x-forwarded-host') || incoming.host,
+        // The browser's host, never a client-chosen X-Forwarded-Host (lib/api-proxy.ts).
+        'x-forwarded-host': browserHost(req.headers) || incoming.host,
         'x-forwarded-proto': req.headers.get('x-forwarded-proto') || incoming.protocol.replace(':', ''),
       },
       cache: 'no-store',

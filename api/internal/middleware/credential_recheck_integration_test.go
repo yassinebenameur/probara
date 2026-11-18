@@ -47,7 +47,7 @@ func TestAuthMiddlewareLeavesAStreamRecheck(t *testing.T) {
 		return family
 	}
 	const secret = "recheck-test-secret"
-	mw := AuthMiddleware(dbClient, logger.New("test", "error"), secret)
+	mw := AuthMiddleware(dbClient, logger.New("test", "error"), secret, nil)
 
 	serve := func(family uuid.UUID) context.Context {
 		t.Helper()
@@ -88,5 +88,33 @@ func TestAuthMiddlewareLeavesAStreamRecheck(t *testing.T) {
 	}
 	if err := StillAuthorized(streamCtx); !errors.Is(err, ErrCredentialRevoked) {
 		t.Fatalf("after removing the membership: %v, want ErrCredentialRevoked", err)
+	}
+}
+
+// An API key's stream re-check follows auth.ValidateAPIKey: a key whose
+// workspace is deleted closes the stream at the next heartbeat even while the
+// key row itself is still unrevoked (the window before the delete
+// transaction's own revocation, or a row written by a racing request).
+func TestAPIKeyRecheckEndsWithItsWorkspace(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+	tenant := testutil.InsertTenant(ctx, t, dbClient, "key-recheck")
+	var keyID string
+	if err := dbClient.QueryRowContext(ctx, `
+		INSERT INTO api_keys (tenant_id, name, key_hash, key_prefix, scope) VALUES ($1, 'stream', 'x', 'prefix', 'read')
+		RETURNING id
+	`, tenant).Scan(&keyID); err != nil {
+		t.Fatal(err)
+	}
+	recheck := apiKeyRecheck(dbClient, keyID)
+	if err := recheck(ctx); err != nil {
+		t.Fatalf("live workspace: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE tenants SET deleted_at = NOW() WHERE id = $1`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if err := recheck(ctx); !errors.Is(err, ErrCredentialRevoked) {
+		t.Fatalf("deleted workspace, key not revoked: %v, want ErrCredentialRevoked", err)
 	}
 }

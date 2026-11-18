@@ -46,7 +46,7 @@ func TestAccountChangesAndStreamRechecks(t *testing.T) {
 	}
 	svc := adminauth.NewService(dbClient, 4)
 	const secret = "recheck-test-secret"
-	mw := AuthMiddleware(dbClient, logger.New("test", "error"), secret)
+	mw := AuthMiddleware(dbClient, logger.New("test", "error"), secret, nil)
 	stream := func() (uuid.UUID, context.Context) {
 		t.Helper()
 		family, err := svc.CreateSession(ctx, user, uuid.NewString(), time.Now().Add(time.Hour), "", "", adminauth.AuthMethodPassword)

@@ -19,6 +19,7 @@ import (
 
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
+	apimiddleware "github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/api/internal/services/mcpoauth"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
@@ -38,10 +39,19 @@ type Handlers struct {
 	audit         *audit.Recorder
 	publicBaseURL string
 	appBaseURL    string
+	origins       *apimiddleware.OriginPolicy
 }
 
 func NewHandlers(svc *mcpoauth.Service, log *logger.Logger, recorder *audit.Recorder, publicBaseURL, appBaseURL string) *Handlers {
 	return &Handlers{svc: svc, log: log, audit: recorder, publicBaseURL: publicBaseURL, appBaseURL: appBaseURL}
+}
+
+// WithOriginPolicy sets the origins a consent decision may come from: the
+// same policy the auth middleware applies to every cookie-authenticated
+// write. Without one, only the API's own origin is trusted.
+func (h *Handlers) WithOriginPolicy(origins *apimiddleware.OriginPolicy) *Handlers {
+	h.origins = origins
+	return h
 }
 
 // BaseURL is the public origin of the API: PUBLIC_BASE_URL when set, else
@@ -284,30 +294,12 @@ func (h *Handlers) Decide(w http.ResponseWriter, r *http.Request) {
 	writeJSONNoStore(w, http.StatusOK, map[string]string{"redirect_to": appendQuery(req.RedirectURI, q2)})
 }
 
-// sameOrigin rejects a consent POST whose Origin is neither the API's nor
-// the operator UI's. Cookies are SameSite=Lax already; this is the second
-// lock on the door that mints credentials.
+// sameOrigin rejects a consent POST from an origin the session cookie is
+// not accepted from (middleware.OriginPolicy). The auth middleware already
+// refused such a request; this is the second lock on the door that mints
+// credentials.
 func (h *Handlers) sameOrigin(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	o, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	allowed := []string{r.Host, firstHeaderValue(r.Header.Get("X-Forwarded-Host"))}
-	for _, base := range []string{h.appBaseURL, h.publicBaseURL} {
-		if u, err := url.Parse(base); err == nil && u.Host != "" {
-			allowed = append(allowed, u.Host)
-		}
-	}
-	for _, host := range allowed {
-		if host != "" && strings.EqualFold(o.Host, host) {
-			return true
-		}
-	}
-	return false
+	return h.origins.Allows(r)
 }
 
 // Token is the token endpoint (authorization_code, refresh_token).

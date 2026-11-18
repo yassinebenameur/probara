@@ -34,7 +34,10 @@ import (
 //     expired less than the refresh lifetime ago, on a request carrying no
 //     bearer credential. That 401 always goes out, so the client refreshes.
 //   - The refresh route with a refresh cookie: keyed on a hash of the cookie;
-//     a 401 (the cookie was not valid) is a failure charged as above.
+//     a 401 (the cookie was not valid) is a failure charged as above. With a
+//     signed access cookie alongside (live, or expired within the refresh
+//     lifetime) it is keyed on that user instead, skips the failure
+//     pre-check, and its 401 is never turned into a 429.
 //   - Token-path routes (push heartbeats, discovery collectors): a valid
 //     token is not limited here; a 401/404 answer is a failure charged as
 //     above.
@@ -55,8 +58,9 @@ import (
 // way; nor is a refreshing session. A sign-in is refused whatever cookie it
 // carries. A key or token that verified successfully in the last ten minutes
 // on this replica is not refused either (verifiedCredentials: a keyed hash,
-// never the value; dropped at its first failure), so valid machines and
-// sessions behind a flooded address keep working. A valid credential the
+// never the value; dropped at its first failure), nor a refresh cookie this
+// replica issued within the access-token lifetime plus ten minutes, so valid
+// machines and sessions behind a flooded address keep working. A valid credential the
 // replica has not seen succeed recently still waits until the address has
 // budget again: telling it from a guess would take the lookup.
 //
@@ -83,6 +87,9 @@ type RateLimiter struct {
 	// how long after expiry one still counts as a refreshing session.
 	sessionSecret          string
 	sessionRefreshLifetime time.Duration
+	// accessTokenLifetime is ADMIN_ACCESS_TTL_MINUTES: how long after a
+	// refresh the browser presents the refresh cookie it was given.
+	accessTokenLifetime time.Duration
 
 	mu         sync.Mutex
 	buckets    map[string]*rateBucket
@@ -157,6 +164,15 @@ func (l *RateLimiter) SetSessionSecret(secret string, refreshLifetime time.Durat
 	if l != nil {
 		l.sessionSecret = secret
 		l.sessionRefreshLifetime = refreshLifetime
+	}
+}
+
+// SetAccessTokenLifetime tells the limiter the access-token lifetime
+// (ADMIN_ACCESS_TTL_MINUTES), which sizes how long an issued refresh cookie
+// stays vouched for (issuedRefreshCookieTTL).
+func (l *RateLimiter) SetAccessTokenLifetime(d time.Duration) {
+	if l != nil {
+		l.accessTokenLifetime = d
 	}
 }
 
@@ -250,18 +266,40 @@ func (l *RateLimiter) Anonymous(next http.Handler) http.Handler {
 		}
 		if path == refreshPath {
 			if c, err := r.Cookie(refreshCookieName); err == nil && c.Value != "" {
+				cred := refreshCredential(c.Value)
+				// The refresh cookie is opaque: only the database tells a
+				// real one from a guess, and a replica that did not issue it
+				// has no record of it. The access cookie a browser sends with
+				// its refresh is not opaque: one this server signed (live, or
+				// expired within the refresh lifetime) names a user without a
+				// lookup. Such a refresh skips the failure pre-check on every
+				// replica and is charged to that user's refresh bucket, not
+				// the cookie's, so a signed-in user cannot buy unlimited
+				// lookups with random refresh cookies and an anonymous
+				// guesser cannot forge the signature. Whether the two cookies
+				// belong to the same session is the handler's lookup to
+				// settle; the limiter only bounds how often it runs.
+				user, session := l.sessionCookie(r)
+				vouched := session != sessionNone
 				// Checked before the cookie's own bucket exists, so a
 				// stream of random cookies cannot mint buckets (or lookups)
 				// once the address has failed enough.
-				cred := refreshCredential(c.Value)
-				if l.refuseWhileFailing(w, r, cred) {
+				if !vouched && l.refuseWhileFailing(w, r, cred) {
 					return
 				}
-				if ok, wait := l.take("refresh:" + hashCredential(c.Value)); !ok {
+				bucket := "refresh:" + hashCredential(c.Value)
+				if vouched {
+					bucket = "refresh-user:" + user
+				}
+				if ok, wait := l.take(bucket); !ok {
 					writeRateLimited(w, wait)
 					return
 				}
-				l.serveChargingFailures(w, r, next, cred)
+				if vouched {
+					l.serveChargingFailuresKeeping401(w, r, next, cred)
+				} else {
+					l.serveChargingFailures(w, r, next, cred)
+				}
 				return
 			}
 		}
@@ -318,21 +356,43 @@ func (l *RateLimiter) refuseWhileFailing(w http.ResponseWriter, r *http.Request,
 // response issues (refresh rotates it, sign-in issues one): the next refresh
 // presents that one. Any other answer goes out unchanged and uncharged.
 func (l *RateLimiter) serveChargingFailures(w http.ResponseWriter, r *http.Request, next http.Handler, cred string) {
+	l.serveCharging(w, r, next, cred, false)
+}
+
+// serveChargingFailuresKeeping401 is serveChargingFailures for a refresh a
+// signed access cookie vouches for: a failure is still charged, but its 401
+// always goes out -- it is what tells the browser the session is over, and a
+// 429 there would leave a signed-out user retrying forever.
+func (l *RateLimiter) serveChargingFailuresKeeping401(w http.ResponseWriter, r *http.Request, next http.Handler, cred string) {
+	l.serveCharging(w, r, next, cred, true)
+}
+
+func (l *RateLimiter) serveCharging(w http.ResponseWriter, r *http.Request, next http.Handler, cred string, keep401 bool) {
 	held := &heldResponse{header: http.Header{}}
 	next.ServeHTTP(held, r)
 	if held.status >= 200 && held.status < 300 {
 		now := l.now()
 		l.verified.remember(cred, now)
-		l.verified.remember(refreshCredential(issuedRefreshCookie(held.header)), now)
+		l.verified.rememberFor(refreshCredential(issuedRefreshCookie(held.header)), now, l.issuedRefreshCookieTTL())
 	}
 	if held.status == http.StatusUnauthorized || held.status == http.StatusNotFound {
 		l.verified.forget(cred)
-		if ok, wait := l.chargeFailure(r); !ok {
+		if ok, wait := l.chargeFailure(r); !ok && !(keep401 && held.status == http.StatusUnauthorized) {
 			writeRateLimited(w, wait)
 			return
 		}
 	}
 	held.flush(w)
+}
+
+// issuedRefreshCookieTTL is how long a refresh cookie this replica issued is
+// vouched for. The browser presents it only once its access token has
+// expired, so the entry must outlive the access-token lifetime
+// (ADMIN_ACCESS_TTL_MINUTES) -- with the default 15 minutes a 10-minute
+// entry was always gone by then -- plus verifiedCredentialTTL of margin for a
+// tab that was idle when the token lapsed.
+func (l *RateLimiter) issuedRefreshCookieTTL() time.Duration {
+	return l.accessTokenLifetime + verifiedCredentialTTL
 }
 
 // chargeFailure spends one token from the address's auth-failure bucket. An
@@ -388,6 +448,7 @@ func (g *authGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// whether it let the request through.
 	held := &heldResponse{header: http.Header{}}
 	passed := false
+	r, refused := withRefusalSlot(r)
 	g.authenticate(http.HandlerFunc(func(_ http.ResponseWriter, ar *http.Request) {
 		passed = true
 		g.l.verified.remember(cred, g.l.now())
@@ -406,6 +467,14 @@ func (g *authGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})).ServeHTTP(held, r)
 	if passed {
 		return
+	}
+	// Authenticated, then refused (ratelimit_refusal.go): the credential's
+	// own bucket pays, exempt route or not -- nothing was served.
+	if refused.key != "" {
+		if ok, wait := g.l.take(refused.key); !ok {
+			writeRateLimited(w, wait)
+			return
+		}
 	}
 	if held.status == http.StatusUnauthorized && !refreshing {
 		g.l.verified.forget(cred)

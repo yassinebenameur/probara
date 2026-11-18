@@ -755,7 +755,12 @@ or imported groups come back empty. Any other path that creates groups through
   on this replica in the last 10 min (`verifiedCredentials`,
   `ratelimit_verified.go`: keyed HMAC only, bounded LRU, TTL restarted per
   success, forgotten at first failure; a refresh's rotated cookie is
-  recorded from its Set-Cookie). A never-seen valid credential and every
+  recorded from its Set-Cookie and kept for the access TTL + 10 min). A
+  refresh carrying a signed access cookie skips the pre-check, charged per
+  user, its 401 kept (the access cookie's Max-Age is the refresh lifetime,
+  not the token's, so browsers send it expired; keep it so). A request that authenticates and is then refused (bad
+  tenant id, `workspace_not_found`) spends its credential's bucket
+  (`ratelimit_refusal.go`). A never-seen valid credential and every
   sign-in wait for budget -- accepted. The cookie check is
   `classifySessionToken`, unexported in `middleware` -- never authentication. Address buckets exist only for
   `clientip.Attributable` addresses (trusted-proxy-forwarded or public
@@ -763,6 +768,20 @@ or imported groups come back empty. Any other path that creates groups through
   `RawPath`, as chi routes), so new routes need no list. Never echo `Origin` in a handler. The env rides
   Compose and the chart's `trustedProxyCIDRs` + `security:` block
   (`monitoring-platform.edgeEnv`) together.
+- **CSRF**: `middleware.OriginPolicy` (`origin.go`) is the one origin check.
+  `AuthMiddleware` applies it to every unsafe request the session cookie
+  authenticates (403 `cross_origin_refused`; non-JSON body 415, multipart
+  only on `MultipartUploadPaths`, pinned to the MCP catalog by
+  `TestMultipartUploadPathsMatchCatalog`); sign-in (both steps), refresh,
+  sign-out and the mailed-link POSTs wear `RequireTrustedOrigin` (same
+  origin + JSON rule), OAuth consent re-checks it. The UI's `/api` proxy
+  vouches for its own origin's writes by dropping Origin/Referer/
+  Sec-Fetch-Site (`vouchForSameOriginWrite`, `web/lib/api-proxy.ts`), which
+  is why no origin configuration is needed. It judges by its `Host` header
+  only (`browserHost`) and never reads or forwards a client
+  `X-Forwarded-Host` unless `API_PROXY_TRUST_FORWARDED_HOST=true`; the API
+  never believes an untrusted peer's `X-Forwarded-Host`. A new cookie-setting route takes
+  `RequireTrustedOrigin`. Reasoning: the `OriginPolicy` comment.
 - **Session identity**: one `admin_session_families` row per sign-in
   (password or SSO); refresh tokens rotate inside it and the access JWT's
   `sid` claim names it. The family's `revoked_at` is the only authority:
@@ -1202,7 +1221,9 @@ or imported groups come back empty. Any other path that creates groups through
   platform-scoped). A change to the workspace list (create, rename, delete,
   or a `workspace_not_found` answer, handled in `lib/api/core.ts`) emits
   `TENANTS_CHANGED_EVENT`, which only `TenantSwitcher` listens to: it reloads
-  the list and settles the selection again.
+  the list and settles the selection again. Platform-scoped API paths are
+  `PLATFORM_PATHS` in `lib/api/core.ts` (never `X-Tenant-ID`, never the
+  no-workspace error); add a new platform route there.
 - **Folded routes stay as redirects**: Mesh is a tab of Locations and
   the alert channel list is a tab of Settings (`?tab=`, via
   `components/ui/Tabs.tsx` `useUrlTab`). `/mesh` and `/alert-channels` are

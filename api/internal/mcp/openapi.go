@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"reflect"
 	"sort"
 	"strconv"
@@ -202,7 +203,11 @@ var securitySchemes = map[string]any{
 		"in":   "cookie",
 		"name": "admin_access",
 		"description": "Operator session cookie, set by the operator UI's sign-in. Select the workspace with the " +
-			"tenant_id query parameter or the X-Tenant-ID header. Roles come from the user's workspace membership.",
+			"tenant_id query parameter or the X-Tenant-ID header. Roles come from the user's workspace membership. " +
+			"A browser's write (any method but GET, HEAD, OPTIONS) with this cookie must come from the operator UI's " +
+			"origin, the API's own origin or an API_ALLOWED_ORIGINS entry (403 cross_origin_refused otherwise; a client " +
+			"that sends no Origin, Sec-Fetch-Site or Referer header is not a browser and is not checked), and a body " +
+			"must be JSON (415 unsupported_media_type), multipart on the import preview.",
 	},
 	"apiKey": map[string]any{
 		"type":         "http",
@@ -221,7 +226,9 @@ var tenantParameter = map[string]any{
 	"schema":   map[string]any{"type": "string", "format": "uuid"},
 	"description": "Workspace to act in, for a session (the X-Tenant-ID header does the same and wins when both " +
 		"are sent). Ignored for API keys, which stay in their own workspace. A malformed value is answered 400; a " +
-		"workspace the user is not a member of, 403; no workspace at all on a workspace-scoped operation, 401.",
+		"workspace the caller cannot open -- deleted, unknown, or (for a member) one they do not belong to -- 404 " +
+		"with error workspace_not_found, the same answer in every case; no workspace at all on a workspace-scoped " +
+		"operation, 401.",
 }
 
 var retryAfterHeader = map[string]any{
@@ -244,8 +251,15 @@ func errorResponses(errSchema any) map[string]any {
 			"rejected (validation_error)."),
 		"Unauthorized": jsonError("No valid credential (missing, expired or revoked session or API key), or a " +
 			"workspace-scoped operation called without a workspace."),
-		"Forbidden": jsonError("The credential may not do this: a viewer or read-scope API key on a write, a " +
-			"workspace the user is not a member of, or an operation that needs a tenant admin or superadmin session."),
+		"Forbidden": jsonError("The credential may not do this: a viewer or read-scope API key on a write, or an " +
+			"operation that needs a tenant admin or superadmin session. A session-cookie write from a browser origin " +
+			"the API does not trust (not the operator UI, the API's own origin or API_ALLOWED_ORIGINS) is refused with " +
+			"error cross_origin_refused."),
+		"NotFound": jsonError("error workspace_not_found: the selected workspace (tenant_id or X-Tenant-ID) is " +
+			"deleted, unknown, or for a member one they do not belong to; or error not_found: the addressed resource " +
+			"does not exist in the workspace."),
+		"UnsupportedMediaType": jsonError("A session-cookie write whose body is not application/json (multipart on " +
+			"the import preview); error unsupported_media_type. API keys are not checked."),
 		"TooManyRequests": tooMany,
 		"Error": map[string]any{
 			"description": "Any other error: 404 not_found, 409 on a conflicting change, 500 internal_error, 503 " +
@@ -714,6 +728,12 @@ func (b *docBuilder) responses(op operation, public bool) (map[string]any, error
 		setDefault("400", "BadRequest")
 		setDefault("401", "Unauthorized")
 		setDefault("403", "Forbidden")
+		if !op.spec.Platform {
+			setDefault("404", "NotFound")
+		}
+		if op.spec.Method != http.MethodGet {
+			setDefault("415", "UnsupportedMediaType")
+		}
 	}
 	setDefault("429", "TooManyRequests")
 	out["default"] = refTo("Error")
