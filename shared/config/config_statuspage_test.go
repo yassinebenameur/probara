@@ -67,3 +67,44 @@ func TestLoadStatusPageConfig_CookieSecure(t *testing.T) {
 		t.Fatalf("invalid value: err = %v", err)
 	}
 }
+
+// STATUS_PAGE_PLATFORM_HOSTS lists extra platform hosts, normalized.
+func TestLoadStatusPageConfig_PlatformHosts(t *testing.T) {
+	setRequiredStatusPageEnv(t)
+	t.Setenv("STATUS_PAGE_PLATFORM_HOSTS", " Probara.Example.com , status.example.com:443,")
+	cfg, err := LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.PlatformHosts, ",") != "probara.example.com,status.example.com" {
+		t.Fatalf("platform hosts = %v", cfg.PlatformHosts)
+	}
+	for _, bad := range []string{"https://x.example.com/", "a b", "user@x.example.com"} {
+		t.Setenv("STATUS_PAGE_PLATFORM_HOSTS", bad)
+		if _, err := LoadStatusPageConfig(); err == nil || !strings.Contains(err.Error(), "STATUS_PAGE_PLATFORM_HOSTS") {
+			t.Errorf("%q: err = %v", bad, err)
+		}
+	}
+}
+
+// X-Forwarded-Host is believed only when STATUS_PAGE_TRUST_FORWARDED_HOST
+// says so (default off).
+func TestLoadStatusPageConfig_TrustForwardedHost(t *testing.T) {
+	setRequiredStatusPageEnv(t)
+	t.Setenv("STATUS_PAGE_TRUST_FORWARDED_HOST", "")
+	cfg, err := LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TrustForwardedHost {
+		t.Fatal("trusted X-Forwarded-Host by default")
+	}
+	t.Setenv("STATUS_PAGE_TRUST_FORWARDED_HOST", "true")
+	if cfg, err = LoadStatusPageConfig(); err != nil || !cfg.TrustForwardedHost {
+		t.Fatalf("true: trust=%v err=%v", cfg != nil && cfg.TrustForwardedHost, err)
+	}
+	t.Setenv("STATUS_PAGE_TRUST_FORWARDED_HOST", "maybe")
+	if _, err := LoadStatusPageConfig(); err == nil || !strings.Contains(err.Error(), "STATUS_PAGE_TRUST_FORWARDED_HOST") {
+		t.Fatalf("invalid value: err = %v", err)
+	}
+}

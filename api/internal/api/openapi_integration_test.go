@@ -52,7 +52,12 @@ func TestOpenAPIServedToAPIKeys(t *testing.T) {
 // carries a documented media type.
 func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 	natsURL := startJetStream(t)
-	f := newMCPFixtureWith(t, func(cfg *config.APIConfig) { cfg.NATSURL = natsURL })
+	f := newMCPFixtureWith(t, func(cfg *config.APIConfig) {
+		cfg.NATSURL = natsURL
+		// Custom domains on, so their routes answer for real.
+		cfg.StatusPageCNAMETarget = "status.openapi-platform.example.com"
+		cfg.StatusPagePublicBaseURL = "https://status.openapi-platform.example.com"
+	})
 	key := f.apiKey(f.tenantA, "write")
 	doc := loadOpenAPIDoc(t)
 
@@ -226,6 +231,14 @@ func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 	nonEmptyList(check(get, "/status-pages/{id}/access-tokens", "/api/v1/status-pages/"+pageID+"/access-tokens", nil, ok))
 	check(post, "/status-pages/{id}/access-tokens/{accessTokenId}/revoke",
 		"/api/v1/status-pages/"+pageID+"/access-tokens/"+tokenID+"/revoke", nil, noContent)
+
+	// Status page custom domains: add, list, verify (its DNS lookups fail or
+	// time out here, which is recorded and still answers the domain), remove.
+	domainID := idOf(check(post, "/status-page-domains", "/api/v1/status-page-domains",
+		map[string]any{"status_page_id": pageID, "hostname": "status.openapi-customer.example.com"}, created))
+	nonEmptyList(check(get, "/status-page-domains", "/api/v1/status-page-domains?status_page_id="+pageID, nil, ok))
+	check(post, "/status-page-domains/{domainId}/verify", "/api/v1/status-page-domains/"+domainID+"/verify", nil, ok)
+	check(del, "/status-page-domains/{domainId}", "/api/v1/status-page-domains/"+domainID, nil, noContent)
 
 	// Config as code: plan, apply with the plan's fingerprint, and a refused
 	// apply (stale fingerprint), whose 409 carries the plan.

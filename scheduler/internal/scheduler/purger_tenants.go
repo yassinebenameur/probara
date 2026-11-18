@@ -86,6 +86,10 @@ var workspacePurgePlan = []purgeStep{
 	// Access and credentials. Kiosk tokens go before api_keys, which they
 	// reference ON DELETE SET NULL (created_by_api_key_id).
 	viaParent("status_page_access_tokens", `JOIN status_pages p ON p.id = c.status_page_id WHERE p.tenant_id = $1`),
+	// Custom domains first of the public surfaces: a deleted workspace's
+	// verified row holds its hostname (unique among verified domains) until
+	// it goes, so removing it early frees the hostname for its owner.
+	viaParent("status_page_domains", `JOIN status_pages p ON p.id = c.status_page_id WHERE p.tenant_id = $1`),
 	byTenant("api_keys"),
 	viaParent("mcp_oauth_tokens", `JOIN mcp_oauth_grants g ON g.id = c.grant_id WHERE g.tenant_id = $1`),
 	byTenant("mcp_oauth_codes"),

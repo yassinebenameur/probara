@@ -274,8 +274,14 @@ var successResponses = map[string]successResponse{
 	"list_status_page_access_tokens":  ok[models.StatusPageAccessTokenListResponse](),
 	"create_status_page_access_token": created[models.CreatedStatusPageAccessToken](),
 	"revoke_status_page_access_token": noContent,
-	"plan_monitor_apply":              ok[models.MonitorApplyPlan](),
-	"apply_monitors":                  ok[models.MonitorApplyResult](),
+	// statuspagedomains handlers: list and verify write the list or the
+	// domain (200), add the new domain (201), remove nothing (204).
+	"list_status_page_domains":  ok[models.StatusPageDomainListResponse](),
+	"add_status_page_domain":    created[models.StatusPageDomain](),
+	"verify_status_page_domain": ok[models.StatusPageDomain](),
+	"remove_status_page_domain": noContent,
+	"plan_monitor_apply":        ok[models.MonitorApplyPlan](),
+	"apply_monitors":            ok[models.MonitorApplyResult](),
 
 	// Routes documented outside the catalog (openapi_routes.go)
 	"push_heartbeat":        ok[models.PushAcceptedResponse](),
