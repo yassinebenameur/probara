@@ -90,14 +90,25 @@ spec:
         - name: PUBLIC_BASE_URL
           value: {{ . | quote }}
         {{- end }}
+        {{- /* The status-page origin the operator UI links to and previews
+        in (GET /auth-context). The UI image is prebuilt, so its own
+        build-time setting cannot carry a per-install value. */}}
+        {{- with (.Values.frontend.statusPageUrl | default .Values.statusPage.baseUrl) }}
+        - name: STATUS_PAGE_BASE_URL
+          value: {{ . | quote }}
+        {{- end }}
         {{- with include "monitoring-platform.adminCookieSecure" . }}
         - name: ADMIN_COOKIE_SECURE
           value: {{ . | quote }}
         {{- end }}
         # The API signs draft-preview tokens with this; the status page
         # verifies them, so both workloads read the same key.
+        {{- /* Optional only in the chart-wide Secret (one that predates the
+        key keeps working, previews stay open); a Secret named for it alone
+        must hold it, or a typo in its name or key would quietly switch
+        preview-token enforcement off. Same rule on the status page. */}}
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPagePreviewSecret "secret" .Values.secrets.statusPagePreviewSecretExistingSecret) }}
-        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" true) | nindent 8 }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" (not .Values.secrets.statusPagePreviewSecretExistingSecret)) | nindent 8 }}
         {{- end }}
         {{- /* First-admin setup code. Optional only in the chart-wide or
         chart-managed Secret, so installs whose Secret predates it keep

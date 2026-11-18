@@ -57,6 +57,12 @@ type APIConfig struct {
 	// NATSLocationAuthIssuerSeed enables the API-hosted NATS authorization
 	// callout used to issue per-location broker permissions.
 	NATSLocationAuthIssuerSeed string
+	// StatusPageBaseURL is STATUS_PAGE_BASE_URL, the public origin of the
+	// status pages (no trailing slash; empty when unset). The API only hands
+	// it to the operator UI (GET /auth-context) for its status-page links
+	// and template preview: the published UI image is built once, so a
+	// build-time setting there cannot carry a per-install value.
+	StatusPageBaseURL string
 	// LocationWorkerImage is LOCATION_WORKER_IMAGE, the image private-location
 	// deploy snippets reference. Empty means the locations service default
 	// (the worker image at this build's release version).
@@ -239,6 +245,7 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, fmt.Errorf("PROBARA_SECRETS_KEY is required when NATS location authorization is enabled")
 	}
 	cfg.LocationWorkerImage = strings.TrimSpace(os.Getenv("LOCATION_WORKER_IMAGE"))
+	cfg.StatusPageBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("STATUS_PAGE_BASE_URL")), "/")
 	// A code that normalizes to something short (or to nothing, like "--")
 	// would leave the form guessable or open while SSO bootstrap is off, so
 	// it refuses to start instead.

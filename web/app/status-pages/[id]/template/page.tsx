@@ -54,6 +54,7 @@ import Dialog from '@/components/ui/Dialog';
 import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
 import { useToast } from '@/components/ui/ToastProvider';
+import { useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import { formatDateTime, formatDateTimeFull, formatFileSize } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
 import { isGatedVisibility } from '@/lib/status-page-access';
@@ -75,6 +76,7 @@ interface PendingConfirm {
 
 export default function StatusPageTemplatePage() {
   const router = useRouter();
+  const statusPageBaseUrl = useStatusPageBaseUrl();
   const params = useParams();
   const id = params.id as string;
   const { showToast } = useToast();
@@ -165,11 +167,12 @@ export default function StatusPageTemplatePage() {
     if (!statusPage) return '';
     const base = resolveStatusPageDraftPreviewUrl(
       statusPage,
-      templateState?.preview_token
+      templateState?.preview_token,
+      statusPageBaseUrl
     );
     const separator = base.includes('?') ? '&' : '?';
     return `${base}${separator}_=${previewNonce}`;
-  }, [statusPage, templateState?.preview_token, previewNonce]);
+  }, [statusPage, templateState?.preview_token, previewNonce, statusPageBaseUrl]);
 
   // ⌘S / Ctrl+S saves the draft. A ref keeps the listener stable while the
   // handler closes over the latest source; it stands down while a dialog is
@@ -415,7 +418,7 @@ export default function StatusPageTemplatePage() {
     );
   }
 
-  const publicUrl = resolveStatusPagePublicUrl(statusPage);
+  const publicUrl = resolveStatusPagePublicUrl(statusPage, statusPageBaseUrl);
   const activeLabel = templateState?.has_custom
     ? `Custom template v${templateState.published_version}`
     : 'Built-in template';

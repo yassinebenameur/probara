@@ -384,6 +384,10 @@ smtp:
 # MIGRATIONS JOB
 # =============================================================================
 migrations:
+  # A hook Job: post-install on a first install (the embedded PostgreSQL
+  # exists only then), pre-upgrade on every upgrade, so new pods never start
+  # against an old schema. A failed Job stops the upgrade before anything
+  # else changes. Large migrations may need `helm upgrade --timeout`.
   enabled: true
   image:
     # Uses main image repository with -migrations suffix if not specified
@@ -629,7 +633,9 @@ frontend:
   httpPort: 3000
   apiUrl: "/api"
   # Public base URL for status page links shown in the frontend.
-  # Defaults to statusPage.baseUrl when empty.
+  # Defaults to statusPage.baseUrl when empty. Rendered as
+  # STATUS_PAGE_BASE_URL into the api (which hands it to the UI at runtime)
+  # and the frontend (its CSP frame-src).
   statusPageUrl: ""
   # Runtime API upstream for Next.js server-side API proxy route (/api/*).
   # Leave empty to use the in-cluster API service automatically when api.enabled=true.

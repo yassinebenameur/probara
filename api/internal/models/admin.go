@@ -43,6 +43,10 @@ type AuthContextResponse struct {
 	Role         *string `json:"role,omitempty"`
 	Scope        *string `json:"scope,omitempty"`
 	CanWrite     bool    `json:"can_write"`
+	// StatusPageBaseURL is the deployment's public status-page origin
+	// (STATUS_PAGE_BASE_URL), omitted when unset. Deployment configuration,
+	// not identity: it rides here because every UI session already asks.
+	StatusPageBaseURL string `json:"status_page_base_url,omitempty"`
 }
 
 // AdminLoginRequest represents a login request.

@@ -291,6 +291,8 @@ cd /opt/probara && docker compose ps     # .env names both Compose files`,
             'Private locations: the broker\'s [websocket listener](#nats-websocket) is published on `127.0.0.1:8443` (`NATS_WEBSOCKET_PUBLISH`) for a TLS reverse proxy on the host to front on 443. Set `PUBLIC_NATS_URL=wss://<that host>` in `.env` to enable the deploy snippets.',
             'Local AI runs through the `local-ai` Compose profile, which the script puts in `COMPOSE_PROFILES`. To run without it, set `COMPOSE_PROFILES=` and `LOCAL_AI_DISABLED=true` in `.env`.',
             'SMTP: fill `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` and `APP_BASE_URL` in `.env`; the release override passes them to the API, worker and alerter.',
+            'Public origins: the script leaves `APP_BASE_URL` (the UI) and `STATUS_PAGE_BASE_URL` (the status pages, e.g. `https://status.example.com`) empty in `.env` and says so when it finishes; nothing defaults to `localhost`. `STATUS_PAGE_BASE_URL` reaches the status service (canonical links, `og:url`, feed links, push deep links), the API (which hands it to the operator UI for its status-page links and template preview) and the frontend (that preview\'s CSP). Empty, the status service leaves those links out or root-relative, and the UI links to status pages on its own origin, which on this stack is not where they are served: set it once the host is reachable.',
+            'Migrations: the `migrations` service runs to completion before the API, scheduler, worker, status service and alerter start (`depends_on` with `service_completed_successfully`), on the first start and after every upgrade.',
             'Container names are fixed (`probara-*`), so one host runs either this stack or the development stack, not both. Needs Docker Compose 2.24.4 or newer.',
           ],
         },
@@ -490,7 +492,7 @@ kubectl -n probara get jobs`,
             [
               '`secrets.statusPagePreviewSecret`',
               'Empty',
-              'Shared key for status page draft-preview tokens (`STATUS_PAGE_PREVIEW_SECRET`), rendered into both the API and the status service. Empty leaves preview-token enforcement off.',
+              'Shared key for status page draft-preview tokens (`STATUS_PAGE_PREVIEW_SECRET`), rendered into both the API and the status service. Empty leaves preview-token enforcement off. From `secrets.statusPagePreviewSecretExistingSecret` (key `status_page_preview_secret`) the key must exist, so a misspelt Secret or key stops the pods instead of quietly turning enforcement off; in the chart-wide `secrets.existingSecret` it stays optional.',
             ],
             [
               '`secrets.statusPageSessionSecret`',
@@ -515,7 +517,7 @@ kubectl -n probara get jobs`,
             [
               '`migrations.enabled`',
               '`true`',
-              'Creates a post-install/post-upgrade migration hook Job.',
+              'Creates the migration hook Job: `post-install` on a first install (after the embedded PostgreSQL exists), `pre-upgrade` on every upgrade, so new pods never start against an old schema. See [Migrations, upgrades, and rollback](#migrations-upgrades).',
             ],
             [
               '`migrations.image.repository`, `.tag`, `.resources`',
@@ -602,7 +604,7 @@ kubectl -n probara get jobs`,
             [
               '`statusPage.baseUrl`',
               'Empty',
-              'Passed as `STATUS_PAGE_BASE_URL`: the public origin used for status pages\' canonical links, `og:url`, feed and summary links, and push deep links. Empty omits the canonical link and `og:url` and keeps the other links root-relative.',
+              'Passed as `STATUS_PAGE_BASE_URL`: the public origin used for status pages\' canonical links, `og:url`, feed and summary links, and push deep links. Empty omits the canonical link and `og:url` and keeps the other links root-relative. Unless `frontend.statusPageUrl` overrides it, the same value also reaches the API, which hands it to the operator UI for its status-page links and template preview, and the frontend, for that preview\'s CSP.',
             ],
             [
               '`statusPage.service.*`',
@@ -616,8 +618,8 @@ kubectl -n probara get jobs`,
             ],
             [
               '`frontend.apiUrl`, `.statusPageUrl`, `.apiProxyTarget`',
-              '`/api`, empty, auto in-cluster API',
-              'Public variables are build-time in Next.js; proxy target is runtime server-side.',
+              '`/api`, empty (`statusPage.baseUrl`), auto in-cluster API',
+              '`apiUrl` is a build-time public variable in Next.js, so a runtime value cannot change the published image. `statusPageUrl` is read at runtime: rendered as `STATUS_PAGE_BASE_URL` into the API (the UI fetches it from `GET /api/v1/auth-context`) and the frontend (its CSP). The proxy target is runtime server-side.',
             ],
             [
               '`frontend.image.*`',
@@ -794,7 +796,7 @@ worker:
             'Per-field `<field>ExistingSecretKey` values default to the canonical key names above, so a Secret laid out with those names needs no key overrides.',
             'A key the chart asks for but the Secret does not carry leaves the pod in `CreateContainerConfigError`. That is deliberate: a missing encryption key should stop a rollout, not quietly disable encryption.',
             'Helm cannot read Secrets, so it cannot assemble a URL around a value it does not have: `postgresql.auth.existingSecret` needs the DSN externalized too, and `nats.auth.platformPasswordExistingSecret` needs the broker URL externalized. Either the matching per-field reference or the chart-wide `secrets.existingSecret` satisfies that; setting neither fails the render with that explanation.',
-            'The Secret must exist before the pods start. With External Secrets Operator, that means the ExternalSecret must have synced — the migrations Job runs as a `post-install`/`post-upgrade` hook and needs `postgres_url` at that moment.',
+            'The Secret must exist before the pods start. With External Secrets Operator, that means the ExternalSecret must have synced — the migrations Job runs as a `post-install`/`pre-upgrade` hook and needs `postgres_url` at that moment, which on an upgrade is before any other manifest changes. When the chart composes `postgres_url` itself, the Job reads it from its own hook Secret rendered from the upgrade\'s values, so a DSN changed in the same upgrade is the one migrated.',
             'Rotating a value in the Secret does not restart the workloads; the chart sets no checksum annotation. Restart the affected Deployments yourself after a rotation.',
             'Rotation keys (`PROBARA_SECRETS_KEY_V2` and higher) have no dedicated value and go through the top-level `extraEnv`, which accepts a `valueFrom.secretKeyRef` entry like any Kubernetes EnvVar.',
           ],
@@ -991,10 +993,33 @@ api:
             '[Back up PostgreSQL](/docs/operations/#backup-restore) and record the running application/chart/image versions.',
             'Render or lint the target chart with production values and inspect Secrets, Services, queue variables, and image tags.',
             'Run the [target migrations](/docs/operations/#database-migrations) against a disposable copy or staging database.',
-            'Deploy the migration-compatible application version. The chart migration Job is a post-install/post-upgrade hook; API startup also runs shared migrations.',
+            'Deploy the migration-compatible application version. The chart migration Job runs first (a `pre-upgrade` hook, below); API startup also runs the shared migrations under the same lock, as a safety net only.',
             'Verify `/readyz`, result ingestion, scheduled and on-demand checks, alert delivery, status invalidation, and private locations.',
             'Roll back application images only when the schema remains backward-compatible. Database migrations are not automatically reversed by `helm rollback`.',
           ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'What `helm upgrade` does, in order (a fresh `helm upgrade --install` is an install: the Job then runs after the manifests, once the embedded PostgreSQL exists):',
+        },
+        {
+          type: 'list',
+          ordered: true,
+          items: [
+            'Helm renders the new release and runs its `pre-upgrade` hooks before changing anything. When the chart composes `postgres_url` (no `postgresql.existingSecret` or `secrets.existingSecret`), it first creates a hook Secret holding the DSN built from this upgrade\'s values, because the release\'s own Secret is not updated yet; then it creates the migrations Job and waits for it, within `--timeout` (default 5 minutes; raise it for a large database).',
+            'The Job waits for the embedded PostgreSQL Service when there is one (it already exists on an upgrade) and applies every pending migration, under the same advisory lock the API takes when it migrates at startup. Meanwhile the previous release keeps serving, now against the new schema.',
+            'If the Job fails or times out, the upgrade stops there: no Deployment, ConfigMap or Secret has changed, the release is marked failed, and the Job is kept for its logs (`kubectl logs -l app.kubernetes.io/component=migrations`). Fix the cause and run `helm upgrade` again; the old Job is replaced.',
+            'On success Helm deletes the Job and its Secret, applies the new manifests and the Deployments roll. New pods only ever start against the migrated schema, so nothing is lost or fails for want of a column.',
+            'Until the rollout completes, pods of the previous release run against the new schema. Migrations are additive, so they keep working, with the exceptions each release\'s notes name below and in [operations](/docs/operations/#database-migrations): for example an API pod from before recurring maintenance creates a window without an occurrence (repair below), and an API pod from before session families ignores session revocation.',
+          ],
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'When the pre-upgrade migration cannot run',
+          text:
+            'The Job runs before the upgrade creates anything, so it needs what the previous release already has. An upgrade that turns on `postgresql.enabled`, renames the release\'s objects (`fullnameOverride`), or turns on `serviceAccount.create` leaves it waiting for a database or ServiceAccount that does not exist yet, until the upgrade times out with nothing changed: apply that change with `migrations.enabled=false` (the API still migrates at startup), or run `migrate` against the database first, then upgrade again with the Job on. An existing Secret must carry the new `postgres_url` before the upgrade starts (let External Secrets sync first). Changing the embedded PostgreSQL password in values does not change the running database\'s, so the Job is refused and the upgrade stops before any change. `helm template | kubectl apply` ignores hook annotations and applies the Job together with everything else, and Argo CD translates hooks into its own sync phases: with either, make sure migrations finish before the workloads roll. Flux runs Helm itself, hooks included.',
         },
         {
           type: 'callout',
@@ -1022,14 +1047,14 @@ api:
           tone: 'warning',
           title: 'Upgrading to recurring maintenance windows: migrate first, avoid mixed versions',
           text:
-            'Maintenance coverage moves to materialized occurrences (migrations 000109 and 000110). Until they have run, new alerter, API and status-page pods fail every query that checks maintenance (alert evaluation, monitor lists, status pages); API pods of the previous release still running after they have run create windows without an occurrence, which cover nothing. Run the migrations first (the `migrate` command or Job against the database, before upgrading the chart, whose own migration Job is a post-upgrade hook), then roll every service, and keep the old and new API from serving side by side. A window created by an old API pod during the rollout can be repaired once: `INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT id, tenant_id, starts_at, ends_at FROM maintenance_windows w WHERE recurrence_weekdays IS NULL AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM maintenance_window_occurrences o WHERE o.window_id = w.id);`',
+            'Maintenance coverage moves to materialized occurrences (migrations 000109 and 000110). Until they have run, new alerter, API and status-page pods fail every query that checks maintenance (alert evaluation, monitor lists, status pages); API pods of the previous release still running after they have run create windows without an occurrence, which cover nothing. The chart\'s migration Job runs them before the rollout, and the release Compose `migrations` service before any service starts; with any other deployment run the migrations first. Keep the rollout short so the old and new API serve side by side as briefly as possible. A window created by an old API pod during the rollout can be repaired once: `INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT id, tenant_id, starts_at, ends_at FROM maintenance_windows w WHERE recurrence_weekdays IS NULL AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM maintenance_window_occurrences o WHERE o.window_id = w.id);`',
         },
         {
           type: 'callout',
           tone: 'warning',
           title: 'Upgrading to workspace management: migrate first',
           text:
-            'Workspace delete (migration 000116 adds `tenants.deleted_at`) is checked by API-key validation, workspace lists and every scheduler, alerter, worker and status-page loop, which read that column directly so the database can plan them well. Until the migration has run, new pods fail those queries (API keys are refused, checks stop being dispatched). Run the migrations first (the `migrate` command or Job, before upgrading the chart, whose own migration Job is a post-upgrade hook), then roll every service, as for the maintenance migrations above. Session sign-in tolerates the old schema and never grants more access because of it.',
+            'Workspace delete (migration 000116 adds `tenants.deleted_at`) is checked by API-key validation, workspace lists and every scheduler, alerter, worker and status-page loop, which read that column directly so the database can plan them well. New pods fail those queries until the migration has run (API keys are refused, checks stop being dispatched), which is why the chart\'s migration Job runs it before the rollout and the release Compose `migrations` service before any service starts; with any other deployment run the migrations first. Pods of the previous release do not read the column and keep working meanwhile. Session sign-in tolerates the old schema and never grants more access because of it.',
         },
         {
           type: 'callout',

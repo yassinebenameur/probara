@@ -57,6 +57,25 @@ func TestLoadAPIConfigLocationWorkerImage(t *testing.T) {
 	}
 }
 
+func TestLoadAPIConfigStatusPageBaseURL(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("STATUS_PAGE_BASE_URL", "")
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StatusPageBaseURL != "" {
+		t.Fatalf("default = %q, want empty", cfg.StatusPageBaseURL)
+	}
+	t.Setenv("STATUS_PAGE_BASE_URL", " https://status.example.com/ ")
+	if cfg, err = LoadAPIConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StatusPageBaseURL != "https://status.example.com" {
+		t.Fatalf("StatusPageBaseURL = %q", cfg.StatusPageBaseURL)
+	}
+}
+
 func TestLoadAPIConfigBootstrapSetupCode(t *testing.T) {
 	setRequiredAPIEnv(t)
 	t.Setenv("BOOTSTRAP_SETUP_CODE", "")

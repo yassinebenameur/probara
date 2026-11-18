@@ -13,7 +13,7 @@ import { errorMessage } from '@/lib/errors';
 import { useClipboard } from '@/lib/useClipboard';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import { isGatedVisibility, kioskUrl } from '@/lib/status-page-access';
-import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+import { useCanWrite, useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import { useToast } from '@/components/ui/ToastProvider';
 import Panel from '@/components/ui/Panel';
 import Input from '@/components/ui/Input';
@@ -34,6 +34,7 @@ interface KioskTokensPanelProps {
  */
 export default function KioskTokensPanel({ statusPage }: KioskTokensPanelProps) {
   const canWrite = useCanWrite();
+  const statusPageBaseUrl = useStatusPageBaseUrl();
   const { showToast } = useToast();
   const clipboard = useClipboard();
   const [tokens, setTokens] = useState<StatusPageAccessToken[]>([]);
@@ -96,7 +97,7 @@ export default function KioskTokensPanel({ statusPage }: KioskTokensPanelProps) 
   };
 
   const createdUrl = created
-    ? kioskUrl(resolveStatusPagePublicUrl(statusPage), created.token, window.location.origin)
+    ? kioskUrl(resolveStatusPagePublicUrl(statusPage, statusPageBaseUrl), created.token, window.location.origin)
     : '';
 
   const active = tokens.filter((t) => !t.revoked_at);

@@ -1,4 +1,42 @@
 {{- if .Values.migrations.enabled }}
+{{- /*
+The schema migrations run BEFORE an upgrade changes anything (pre-upgrade), so
+new pods only ever start against the schema their code needs: several
+features read new columns and tables directly and fail, or drop work, on the
+old schema. Old pods keep running against the new schema until the rollout
+replaces them; migrations stay additive for that window.
+
+A first install has to run them AFTER the manifests (post-install): the
+embedded PostgreSQL does not exist before then. An upgrade's database already
+does, and a fresh `helm upgrade --install` is an install.
+
+A pre-upgrade hook runs before the release's own Secret is updated, so it
+cannot read a postgres_url changed in the same upgrade from there (it would
+migrate the old database, or fail on the old password). When the chart
+manages the DSN, the Job therefore reads it from its own hook Secret below,
+rendered from this upgrade's values and created just before the Job. An
+existing Secret named by postgresql.existingSecret or secrets.existingSecret
+is the operator's and already holds the value the upgrade will use.
+*/}}
+{{- $hookSecret := include "monitoring-platform.chartManagedSecret" (dict "ctx" . "secret" .Values.postgresql.existingSecret) }}
+{{- if $hookSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-migrations
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  annotations:
+    "helm.sh/hook": post-install,pre-upgrade
+    # Before the Job (-5), so it exists when the Job's pod starts.
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  postgres_url: {{ include "monitoring-platform.postgresUrl" . | quote }}
+---
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -7,12 +45,7 @@ metadata:
     {{- include "monitoring-platform.labels" . | nindent 4 }}
     app.kubernetes.io/component: migrations
   annotations:
-    # Runs AFTER the release manifests are applied (post-install/post-upgrade),
-    # so new pods may briefly run against the old schema until this job
-    # finishes; application code must tolerate that window. We cannot use a
-    # pre-install hook: on first install the chart's own PostgreSQL would not
-    # exist yet for the migrations to run against.
-    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook": post-install,pre-upgrade
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
@@ -52,7 +85,15 @@ spec:
           {{- end }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           env:
+            {{- if $hookSecret }}
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-migrations" (include "monitoring-platform.fullname" .) | quote }}
+                  key: "postgres_url"
+            {{- else }}
             {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_URL" "key" "postgres_url" "secret" .Values.postgresql.existingSecret "secretKey" .Values.postgresql.existingSecretKey) | nindent 12 }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -66,4 +107,3 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 {{- end }}
-

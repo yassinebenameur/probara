@@ -197,7 +197,10 @@ env_init LOCAL_AI_DISABLED "false"
 # Off until the UI is served over HTTPS (a Secure cookie never comes back over
 # plain http). Set it to true behind TLS.
 env_init ADMIN_COOKIE_SECURE "false"
-for key in PUBLIC_BASE_URL PUBLIC_NATS_URL PROBARA_TRUSTED_PROXIES APP_BASE_URL SMTP_HOST SMTP_PORT SMTP_USE_TLS SMTP_USERNAME SMTP_PASSWORD SMTP_FROM; do
+# The two public origins (APP_BASE_URL for the UI, STATUS_PAGE_BASE_URL for
+# status pages) are left empty, never guessed: links that need them are
+# omitted or stay relative until they are set.
+for key in PUBLIC_BASE_URL PUBLIC_NATS_URL PROBARA_TRUSTED_PROXIES APP_BASE_URL STATUS_PAGE_BASE_URL SMTP_HOST SMTP_PORT SMTP_USE_TLS SMTP_USERNAME SMTP_PASSWORD SMTP_FROM; do
   env_init "$key" ""
 done
 
@@ -207,9 +210,21 @@ ui_port="$(env_value PROBARA_UI_PORT)"
 status_port="$(env_value PROBARA_STATUS_PAGE_PORT)"
 setup_code="$(env_value BOOTSTRAP_SETUP_CODE)"
 
+# Printed by both paths: the public origins are what a real host needs set.
+before_exposing="Before exposing this host, put HTTPS in front of the UI, then set
+PUBLIC_BASE_URL and ADMIN_COOKIE_SECURE=true in $env_file, and
+PROBARA_TRUSTED_PROXIES to your TLS proxy's address as the edge container
+sees it (else every client looks like that proxy). Set the public origins:
+APP_BASE_URL (the UI, for links in notifications) and STATUS_PAGE_BASE_URL
+(the status pages, e.g. https://status.example.com, for their canonical,
+feed and notification links and the UI's links to them; empty leaves those
+relative or out). Then run \`docker compose up -d\` again."
+
 if [[ "$start" != true ]]; then
   log "Files written. Start with: cd $(pwd) && docker compose up -d"
   log "First-admin setup code (also BOOTSTRAP_SETUP_CODE in $env_file): $setup_code"
+  echo
+  echo "$before_exposing"
   exit 0
 fi
 
@@ -226,9 +241,5 @@ Probara $version is starting.
   Status pages: http://localhost:${status_port:-8082}/public/status/<slug>
 
 Back up $(pwd)/$env_file: it holds every generated secret.
-Before exposing this host, put HTTPS in front of the UI, then set
-PUBLIC_BASE_URL and ADMIN_COOKIE_SECURE=true in $env_file, and
-PROBARA_TRUSTED_PROXIES to your TLS proxy's address as the edge container
-sees it (else every client looks like that proxy), and run
-\`docker compose up -d\` again.
+$before_exposing
 EOF

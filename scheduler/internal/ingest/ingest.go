@@ -6,7 +6,9 @@ package ingest
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -113,10 +115,48 @@ func (i *Ingest) ConfigureEncryption(encryptor secrets.Encryptor) {
 	}
 }
 
+// errRejected marks a location message refused on its own merits: a subject
+// or payload that does not match, an identifier that does not parse, a
+// location (or monitor link) that is unknown, disabled or deleted, a bad
+// signature. Redelivering it cannot change the answer, so it is acked and
+// dropped. Every other verification error is the platform's (a database
+// error, a schema the migrations have not reached yet, an undecryptable
+// stored credential) and must not cost the result: it is retried.
+var errRejected = errors.New("rejected")
+
+func rejectf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", errRejected, fmt.Sprintf(format, args...))
+}
+
+// isRejected reports whether err is a verdict on the message itself.
+func isRejected(err error) bool { return errors.Is(err, errRejected) }
+
+// ingestBackoff is the redelivery schedule of a result the ingest could not
+// process yet. The consumer is created with it, but JetStream applies a
+// consumer's BackOff only to AckWait expiries, never to an explicit NAK, so
+// handleMessage NAKs with retryDelay instead of an immediate redelivery that
+// would busy-loop while the database is down or behind.
+var ingestBackoff = []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, time.Minute}
+
+// retryDelay is the NAK delay for the numDelivered-th delivery of a message.
+func retryDelay(numDelivered uint64) time.Duration {
+	if numDelivered < 1 {
+		numDelivered = 1
+	}
+	if numDelivered > uint64(len(ingestBackoff)) {
+		return ingestBackoff[len(ingestBackoff)-1]
+	}
+	return ingestBackoff[numDelivered-1]
+}
+
+// locationCredential returns the plaintext credential of an enabled location
+// of a live workspace (bound to tenantID and monitorID when given). Errors
+// wrapping errRejected mean the message cannot authenticate; anything else
+// is a platform failure the caller must retry.
 func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, monitorID string) (string, error) {
 	locationUUID, err := uuid.Parse(locationID)
 	if err != nil {
-		return "", fmt.Errorf("invalid location_id: %w", err)
+		return "", fmt.Errorf("%w: invalid location_id: %w", errRejected, err)
 	}
 	var stored string
 	query := `
@@ -133,7 +173,7 @@ func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, m
 	if tenantID != "" {
 		tenantUUID, err := uuid.Parse(tenantID)
 		if err != nil {
-			return "", fmt.Errorf("invalid tenant_id: %w", err)
+			return "", fmt.Errorf("%w: invalid tenant_id: %w", errRejected, err)
 		}
 		query += " AND l.tenant_id = $2"
 		args = append(args, tenantUUID)
@@ -141,7 +181,7 @@ func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, m
 	if monitorID != "" {
 		monitorUUID, err := uuid.Parse(monitorID)
 		if err != nil {
-			return "", fmt.Errorf("invalid monitor_id: %w", err)
+			return "", fmt.Errorf("%w: invalid monitor_id: %w", errRejected, err)
 		}
 		query += ` AND EXISTS (
 			SELECT 1 FROM monitor_locations ml
@@ -152,6 +192,9 @@ func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, m
 		args = append(args, monitorUUID)
 	}
 	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&stored); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", rejectf("no enabled location %s of a live workspace matches", locationID)
+		}
 		return "", fmt.Errorf("location credential lookup: %w", err)
 	}
 	credential, err := i.secretsEncryptor.Decrypt(stored)
@@ -165,19 +208,19 @@ func (i *Ingest) verifyLocationResult(ctx context.Context, subject string, m mod
 	locationPrefix := i.config.CheckResultSubject + ".loc."
 	if subject == i.config.CheckResultSubject {
 		if m.LocationID != "" {
-			return fmt.Errorf("location result published on platform subject")
+			return rejectf("location result published on platform subject")
 		}
 		if m.LocationSignature != "" {
-			return fmt.Errorf("location signature without location_id")
+			return rejectf("location signature without location_id")
 		}
 		return nil
 	}
 	if !strings.HasPrefix(subject, locationPrefix) {
-		return fmt.Errorf("unexpected result subject %q", subject)
+		return rejectf("unexpected result subject %q", subject)
 	}
 	subjectLocation := strings.TrimPrefix(subject, locationPrefix)
 	if subjectLocation == "" || strings.Contains(subjectLocation, ".") || m.LocationID != subjectLocation {
-		return fmt.Errorf("result subject location does not match payload")
+		return rejectf("result subject location does not match payload")
 	}
 	monitorID := m.MonitorID
 	if m.Mesh != nil {
@@ -189,7 +232,12 @@ func (i *Ingest) verifyLocationResult(ctx context.Context, subject string, m mod
 	}
 	signature := m.LocationSignature
 	m.LocationSignature = ""
-	return locationauth.VerifyJSON(credential, signature, m)
+	// VerifyJSON is pure: a missing or wrong signature, or a stored
+	// credential that cannot sign at all, gives the same answer every time.
+	if err := locationauth.VerifyJSON(credential, signature, m); err != nil {
+		return fmt.Errorf("%w: %w", errRejected, err)
+	}
+	return nil
 }
 
 // Start ensures the results stream, creates the durable consumer and spawns
@@ -212,14 +260,14 @@ func (i *Ingest) Start() error {
 	}
 
 	// Unlimited redelivery: a check result must never be dropped because the
-	// ingest transaction kept failing — most notably during a Helm rollout
-	// window where new code runs against the pre-migration schema and every
-	// persist errors until the migration job lands. The stream's MaxAge is
-	// the only bound; the backoff keeps a stuck message from busy-looping.
+	// ingest transaction (or the verification lookup before it) kept failing
+	// — a database outage, or a schema the migrations have not reached. The
+	// stream's MaxAge is the only bound; the backoff (applied to NAKs by
+	// retryDelay) keeps a stuck message from busy-looping.
 	consumer, err := i.queue.CreateConsumerWithOptions(ctx, i.config.CheckResultStream, i.config.ResultIngestConsumerName,
 		queue.ConsumerOptions{
 			MaxDeliver: -1,
-			BackOff:    []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, time.Minute},
+			BackOff:    ingestBackoff,
 		})
 	if err != nil {
 		return fmt.Errorf("failed to create ingest consumer: %w", err)
@@ -270,8 +318,11 @@ func (i *Ingest) consumeLoop(ctx context.Context, consumer jetstream.Consumer, i
 }
 
 // handleMessage persists one result message. Returning an error Naks the
-// message for redelivery; returning nil Acks it. Poison messages (bad JSON,
-// bad UUIDs, unknown monitor) are logged and acked — retrying cannot fix them.
+// message for redelivery after retryDelay; returning nil Acks it. Poison
+// messages (bad JSON, bad UUIDs, unknown monitor, a location result that
+// fails authentication) are logged and acked — retrying cannot fix them.
+// Platform failures (database errors, a schema behind the code) are never
+// acked.
 func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 	var m models.CheckResultMessage
 	if err := json.Unmarshal(msg.Data, &m); err != nil {
@@ -290,14 +341,21 @@ func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 		return nil
 	}
 	if err := i.verifyLocationResult(ctx, msg.Subject, m); err != nil {
-		logEntry.WithError(err).Warn("Rejecting unauthenticated location result")
-		return nil
+		if isRejected(err) {
+			logEntry.WithError(err).Warn("Rejecting unauthenticated location result")
+			return nil
+		}
+		// The result may well be genuine: the database is unreachable or
+		// its schema is behind this code. Acking would lose it for good.
+		logEntry.WithError(err).WithField("delivery", msg.NumDelivered).Error("Could not verify location result; retrying")
+		i.ingestErrors.With(prometheus.Labels{}).Inc()
+		return queue.RetryAfter(err, retryDelay(msg.NumDelivered))
 	}
 
 	// Mesh probes are edge results, not monitor results — they carry no
 	// monitor_id and never touch check_results or monitor state.
 	if m.Mesh != nil {
-		return i.handleMeshResult(ctx, m)
+		return queue.RetryAfter(i.handleMeshResult(ctx, m), retryDelay(msg.NumDelivered))
 	}
 
 	result, err := i.buildResult(m)
@@ -315,7 +373,7 @@ func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 		}
 		logEntry.WithError(err).Error("Failed to persist check result")
 		i.ingestErrors.With(prometheus.Labels{}).Inc()
-		return err
+		return queue.RetryAfter(err, retryDelay(msg.NumDelivered))
 	}
 
 	if outcome.duplicate {

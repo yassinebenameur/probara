@@ -1767,6 +1767,9 @@
               "string"
             ]
           },
+          "status_page_base_url": {
+            "type": "string"
+          },
           "tenant_id": {
             "type": [
               "null",

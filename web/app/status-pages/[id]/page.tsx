@@ -8,6 +8,7 @@ import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import KioskTokensPanel from '@/components/status-pages/KioskTokensPanel';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
+import { useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
@@ -20,6 +21,7 @@ import { useAsyncData } from '@/lib/useAsyncData';
 
 export default function EditStatusPagePage() {
   const router = useRouter();
+  const statusPageBaseUrl = useStatusPageBaseUrl();
   const params = useParams();
   const id = params.id as string;
 
@@ -79,7 +81,7 @@ export default function EditStatusPagePage() {
     );
   }
 
-  const publicUrl = resolveStatusPagePublicUrl(statusPage);
+  const publicUrl = resolveStatusPagePublicUrl(statusPage, statusPageBaseUrl);
 
   return (
     <Page width="detail">

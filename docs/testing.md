@@ -117,3 +117,10 @@ later push.
 The two frontend jobs retain lint, type checking and production builds; the
 operator UI also runs its existing TypeScript tests. Extended fuzzing and Go
 benchmarks remain explicit local runs, separate from ordinary PR validation.
+
+Deployment packaging: the `Release Compose and installer` job renders the
+base Compose file and the release override (dummy values for every required
+variable; nothing is pulled or started) and runs `scripts/test-install.sh`.
+`helm-lint.yml` lints and renders the chart with the defaults, an ingress
+with TLS, the chart-wide existing Secret and per-field existing Secrets, and
+fails unless the migrations Job is a `post-install,pre-upgrade` hook in each.

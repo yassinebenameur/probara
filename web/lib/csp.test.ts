@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CSP_HEADER, buildWebCsp, newNonce, originOf, statusPageFrameOrigins } from './csp';
+import { CSP_HEADER, buildWebCsp, configuredStatusPageUrl, newNonce, originOf, statusPageFrameOrigins } from './csp';
 
 test('buildWebCsp uses the nonce with strict-dynamic and forbids framing', () => {
   const policy = buildWebCsp({ nonce: 'abc', dev: false, statusPageOrigins: ['https://status.example.com'] });
@@ -55,4 +55,19 @@ test('newNonce is fresh base64', () => {
   const b = newNonce();
   assert.notEqual(a, b);
   assert.match(a, /^[A-Za-z0-9+/]{22}==$/);
+});
+
+test('configuredStatusPageUrl prefers the runtime STATUS_PAGE_BASE_URL', () => {
+  // The published image is built without NEXT_PUBLIC_STATUS_PAGE_URL; the
+  // runtime value is what makes a plain-http status host previewable.
+  assert.equal(configuredStatusPageUrl('http://status.example.com:8082', undefined), 'http://status.example.com:8082');
+  assert.deepEqual(
+    statusPageFrameOrigins(configuredStatusPageUrl('http://status.example.com:8082', ''), 'ops.example.com', 'https:'),
+    ['http://status.example.com:8082']
+  );
+  assert.equal(configuredStatusPageUrl('http://status.example.com', 'http://dev:8082'), 'http://status.example.com');
+  // Unset or unusable at runtime: the build-time value of a development build.
+  assert.equal(configuredStatusPageUrl(undefined, 'http://dev:8082'), 'http://dev:8082');
+  assert.equal(configuredStatusPageUrl('', 'http://dev:8082'), 'http://dev:8082');
+  assert.equal(configuredStatusPageUrl('/relative', undefined), undefined);
 });

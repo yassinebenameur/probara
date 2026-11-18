@@ -41,7 +41,13 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   unpaired file, or a gap not in `knownMigrationGaps`), applied by
   `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
-  Compose job, Helm a post-install/upgrade hook Job
+  Compose job, Helm a `post-install,pre-upgrade` hook Job
+  (`job-migrations.yaml`, with its own hook Secret for a chart-composed DSN,
+  since the release Secret is not updated yet), so new pods never start on
+  an old schema and code may rely on its release's migrations; Compose
+  services wait for `migrations` (`service_completed_successfully`). Old
+  pods run briefly on the new schema: keep migrations additive. The API's
+  startup migration is a safety net only
 - `cmd/` — `migrate`, `discovery-collector` (the in-cluster Kubernetes
   inventory collector, own image), plus one-off admin tools in `cmd/admin/`
   (`cmd/admin` itself upserts a superadmin, like the first-user form; VAPID
@@ -631,7 +637,7 @@ or imported groups come back empty. Any other path that creates groups through
   `status_page_preview_secret`, `bootstrap_setup_code`, `status_page_session_secret`) are the contract external secret managers
   fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
   (the api signs preview tokens, status-page verifies them) and is `optional`
-  in the Secret. `ADMIN_COOKIE_SECURE` comes from the
+  only without a per-field Secret (as `BOOTSTRAP_SETUP_CODE`). `ADMIN_COOKIE_SECURE` comes from the
   `monitoring-platform.adminCookieSecure` helper: `api.cookieSecure` if set,
   else true exactly when `api.publicBaseURL` is https.
   Helm cannot read Secrets, so anything the chart *composes* from a
@@ -666,7 +672,27 @@ or imported groups come back empty. Any other path that creates groups through
   the api trusts only the frontend's fixed address `PROBARA_FRONTEND_IP/32`
   (`TRUSTED_PROXY_CIDRS`). `edge`, frontend and api share `probara-front`,
   which the worker (tenant-defined requests, arbitrary headers) must never
-  join; never trust a whole network the worker is on.
+  join; never trust a whole network the worker is on. Public origins
+  (`APP_BASE_URL`, `STATUS_PAGE_BASE_URL`) default to empty, never
+  localhost; the installer writes them empty and names them in its closing
+  text.
+- **Status-page origin in the operator UI**: the published UI image is built
+  once, so `NEXT_PUBLIC_STATUS_PAGE_URL` is a dev fallback only. The api
+  reads `STATUS_PAGE_BASE_URL` and returns it as `status_page_base_url` on
+  `GET /auth-context`; `useStatusPageBaseUrl()` (CurrentUserProvider) feeds
+  `lib/statusPageUrl.ts`, and every call site passes it. The UI server reads
+  the same variable at runtime for its CSP `frame-src`
+  (`configuredStatusPageUrl`, `lib/csp.ts`). Helm renders
+  `frontend.statusPageUrl | default statusPage.baseUrl` into api and
+  frontend; release Compose passes `.env`'s value to status-page, api and
+  frontend.
+- **Result ingest never acks a platform failure**
+  (`scheduler/internal/ingest`): a location result is acked unprocessed
+  only when verification fails with `errRejected` (subject/payload
+  mismatch, unknown or disabled location, bad signature); a database error
+  or a schema behind the code NAKs with `retryDelay` (explicit NAKs bypass
+  the consumer's BackOff), as do persist failures. Core-NATS heartbeats
+  cannot be redelivered and only log the difference.
 - **NATS websocket listener** (port 8443, plaintext; TLS terminates at the
   ingress or proxy) lets private locations dial `wss://` on 443. Helm
   `nats.websocket.*`: its own Ingress (`ingress-nats-websocket.yaml`, never a
@@ -1408,7 +1434,10 @@ or imported groups come back empty. Any other path that creates groups through
 - Compose: `docker compose config` validates env wiring; for the release
   override, `docker compose -f docker-compose.yml -f docker-compose.release.yml
   config -q` under dummy values for its required variables, and
-  `bash scripts/test-install.sh` (needs only the docker CLI).
+  `bash scripts/test-install.sh` (needs only the docker CLI). CI runs both
+  (`Release Compose and installer` in `build-test.yml`), and `helm-lint.yml`
+  renders four value sets and fails unless the migrations Job keeps its
+  `post-install,pre-upgrade` hook.
 - ai-service: from the repo root with the hash-locked deps installed
   (`docs/local-ai.md`), `PYTHONDONTWRITEBYTECODE=1
   PYTHONPATH=ai-service:ai-service/training python -m pytest ai-service/tests
