@@ -39,7 +39,9 @@ import (
 
 // ActionAcknowledge authorizes acknowledging one alert. It equals
 // present.ActionAcknowledge (pinned by a test). Its token's IDs are the
-// tenant, the alert and the channel the notification went to.
+// tenant, the alert and the channel the notification went to; its issue
+// time (Claims.IssuedAt) ties it to the alert's episode, so the API refuses
+// it once the alert has relapsed since (api/internal/handlers/alertactions).
 const ActionAcknowledge = "ack"
 
 // ActionUnsubscribeReport authorizes removing one recipient from one SLA
@@ -121,11 +123,17 @@ type Keyring interface {
 // acknowledge action's names for the token's second and third IDs; see each
 // action for what they hold.
 type Claims struct {
-	Action     string
-	TenantID   uuid.UUID
-	AlertID    uuid.UUID
-	ChannelID  uuid.UUID
-	ExpiresAt  time.Time
+	Action    string
+	TenantID  uuid.UUID
+	AlertID   uuid.UUID
+	ChannelID uuid.UUID
+	ExpiresAt time.Time
+	// IssuedAt is when the link was minted for (ActionToken's issuedAt),
+	// truncated to the second, so never later than the real time. The token
+	// does not store it: every action's lifetime is fixed, so it is
+	// ExpiresAt less that lifetime. Changing a TTL therefore shifts the
+	// IssuedAt of every link already out by the same amount.
+	IssuedAt   time.Time
 	KeyVersion int
 }
 
@@ -255,6 +263,7 @@ func (s *Signer) Verify(token, action string) (Claims, error) {
 	copy(claims.TenantID[:], buf[2:18])
 	copy(claims.AlertID[:], buf[18:34])
 	copy(claims.ChannelID[:], buf[34:50])
+	claims.IssuedAt = claims.ExpiresAt.Add(-actionTTL[action])
 	if !s.now().Before(claims.ExpiresAt) {
 		return claims, ErrExpired
 	}

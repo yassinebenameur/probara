@@ -331,7 +331,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PROBARA_SECRETS_KEY`',
               'Base64 encoding of exactly 32 bytes',
-              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback). The API, alerter and worker also derive the signing key for [acknowledge links](/docs/alerting/#acknowledge-links) from it; without it notifications carry none. The API signs the unsubscribe links of [scheduled SLA reports](/docs/slas/#schedules) with it too, so without it no report schedule can be enabled.',
+              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback). The API, alerter and worker also derive the signing key for [acknowledge links](/docs/alerting/#acknowledge-links) from it; without it notifications carry none. The API signs the unsubscribe links of [scheduled SLA reports](/docs/slas/#schedules) with it too, so without it no report schedule can be enabled. The API also seals [two-factor](/docs/security/#account-links-two-factor) authenticator secrets with it: without it nobody can turn two-factor sign-in on. Removing it, or the version that sealed a secret, stops authenticator codes from being checked (the API logs it once; those attempts do not count toward the lockout); recovery codes keep working, and a superadministrator’s two-factor reset lets the user enrol again.',
             ],
             [
               '`PROBARA_SECRETS_KEY_V2` … `PROBARA_SECRETS_KEY_V100`',
@@ -734,6 +734,11 @@ export const CONFIGURATION_PAGE: DocPage = {
           type: 'paragraph',
           text:
             'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The API also mails [scheduled SLA reports](/docs/slas/#schedules), which additionally need `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; without all three no schedule can be enabled. It also mails [status-page email subscribers](/docs/status-pages/#email-subscribers), which need those three plus `STATUS_PAGE_BASE_URL` and `STATUS_PAGE_INTERNAL_TOKEN` on the API; without them no page can turn subscriptions on. Subscriber mail is sent in the status page\'s name (its title as the From display name, the address still `SMTP_FROM`). The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Account emails come from the API too, and need both `SMTP_*` and `APP_BASE_URL` on it: [invites, password reset links, email-change confirmations](/docs/administration/#invites-resets-two-factor) and security notices (two-factor turned on or off, a recovery code used). Without either, nothing is mailed: a superadministrator who sends an invite or generates a reset link gets the link back once to hand over, the forgot-password page tells users to ask an administrator, and users cannot change their own email address. `GET /api/v1/auth/capabilities` reports which applies (`email_delivery`).',
         },
         {
           type: 'table',

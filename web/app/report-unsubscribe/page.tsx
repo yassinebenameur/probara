@@ -9,7 +9,7 @@ import {
   REPORT_UNSUBSCRIBE_PATH,
   describeReportUnsubscribeState,
   parseReportUnsubscribeResponse,
-  readActionToken,
+  takeActionToken,
   type ReportUnsubscribeResponse,
 } from '@/lib/report-unsubscribe';
 
@@ -24,7 +24,7 @@ export default function ReportUnsubscribePage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    setToken(readActionToken(window.location.hash));
+    setToken(takeActionToken());
   }, []);
 
   const request = useCallback(

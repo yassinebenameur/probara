@@ -14,6 +14,13 @@ export function sessionMethodLabel(method: AdminSession['auth_method']): string 
   return '';
 }
 
+/** How a two-factor sign-in passed its second step, for display; '' without one. */
+export function sessionSecondFactorLabel(factor: AdminSession['second_factor']): string {
+  if (factor === 'totp') return 'Authenticator code';
+  if (factor === 'recovery_code') return 'Recovery code';
+  return '';
+}
+
 /** The session's browser label, falling back when the agent was not recognized. */
 export function sessionClientLabel(session: Pick<AdminSession, 'client'>): string {
   return session.client?.trim() || 'Unknown browser';

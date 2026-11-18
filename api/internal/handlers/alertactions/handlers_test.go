@@ -50,6 +50,10 @@ type fakeAlerts struct {
 	acks   int
 	ackErr error
 	panic  bool
+	// relapses, when set, is the alert's relapse history (oldest first).
+	relapses []models.AlertRelapse
+	// reopenedAt without relapses models an alert whose history is missing.
+	reopenedAt *time.Time
 }
 
 func (f *fakeAlerts) GetAlert(_ context.Context, tenantID, id uuid.UUID) (*models.AlertWithDetails, error) {
@@ -62,6 +66,12 @@ func (f *fakeAlerts) GetAlert(_ context.Context, tenantID, id uuid.UUID) (*model
 	a := &models.AlertWithDetails{MonitorName: &monitorN}
 	a.ID, a.TenantID, a.Status, a.Kind = alertID, tenantA, f.status, "availability"
 	a.TriggeredAt = time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	a.Relapses, a.ReopenedAt = f.relapses, f.reopenedAt
+	if n := len(f.relapses); n > 0 {
+		a.RelapseCount, a.ReopenedAt = n, &f.relapses[n-1].ReopenedAt
+	} else if f.reopenedAt != nil {
+		a.RelapseCount = 1
+	}
 	return a, nil
 }
 
@@ -279,6 +289,63 @@ func TestExpired(t *testing.T) {
 	}
 	if h.alerts.acks != 0 || h.channels.calls != 0 {
 		t.Fatal("an expired token reached the database")
+	}
+}
+
+// A link acts only on the alert episode it was sent in. Once the alert has
+// relapsed, a link from a page of an earlier episode reads as invalid on
+// both routes, whatever the alert's state, and writes no audit; a link from
+// a page of the current episode (built just after the reopen included)
+// works; an alert that never relapsed is unaffected by a link's age.
+func TestLinkFromAnEarlierEpisode(t *testing.T) {
+	now := time.Now().UTC()
+	recovered, reopened := now.Add(-10*time.Minute), now.Add(-8*time.Minute)
+	relapsed := []models.AlertRelapse{{Number: 1, RecoveredAt: recovered, ReopenedAt: reopened}}
+	earlier := tokenFor(t, tenantA, alertID, now.Add(-30*time.Minute))
+
+	for _, status := range []models.AlertStatus{models.AlertStatusActive, models.AlertStatusAcknowledged, models.AlertStatusResolved} {
+		h := newHarness(status)
+		h.alerts.relapses = relapsed
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			code, resp := h.do(t, method, earlier)
+			if code != http.StatusNotFound || resp.State != StateInvalid || resp.Alert != nil || resp.ExpiresAt != nil {
+				t.Fatalf("%s %s with an earlier episode's link = %d %+v, want 404 invalid with nothing else", status, method, code, resp)
+			}
+		}
+		if h.alerts.acks != 0 || h.hub.acked != 0 || len(h.audit.events) != 0 {
+			t.Fatalf("%s: an earlier episode's link acted: acks=%d hub=%d audit=%d", status, h.alerts.acks, h.hub.acked, len(h.audit.events))
+		}
+	}
+
+	// History missing: the reopen is the cut-off.
+	h := newHarness(models.AlertStatusActive)
+	h.alerts.reopenedAt = &reopened
+	if code, resp := h.do(t, http.MethodPost, earlier); code != http.StatusNotFound || resp.State != StateInvalid {
+		t.Fatalf("POST with an earlier episode's link, no history = %d %+v", code, resp)
+	}
+
+	for name, issued := range map[string]time.Time{
+		"a minute ago":         now.Add(-time.Minute),
+		"built as it reopened": reopened,
+		"built just after":     reopened.Add(300 * time.Millisecond),
+	} {
+		t.Run("current episode, "+name, func(t *testing.T) {
+			h := newHarness(models.AlertStatusActive)
+			h.alerts.relapses = relapsed
+			tok := tokenFor(t, tenantA, alertID, issued)
+			if code, resp := h.do(t, http.MethodGet, tok); code != http.StatusOK || resp.State != StatePending {
+				t.Fatalf("GET = %d %+v", code, resp)
+			}
+			if code, resp := h.do(t, http.MethodPost, tok); code != http.StatusOK || resp.State != StateAcknowledged {
+				t.Fatalf("POST = %d %+v", code, resp)
+			}
+		})
+	}
+
+	// Never relapsed: an old link still acknowledges.
+	h = newHarness(models.AlertStatusActive)
+	if code, resp := h.do(t, http.MethodPost, earlier); code != http.StatusOK || resp.State != StateAcknowledged {
+		t.Fatalf("POST on an alert that never relapsed = %d %+v", code, resp)
 	}
 }
 

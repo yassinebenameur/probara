@@ -975,3 +975,69 @@ func TestRelapseReopenGivesUpOnALockedAlert(t *testing.T) {
 		t.Fatalf("alerts after the lock = %+v, want the alert reopened", rows)
 	}
 }
+
+// A dispatch loop takes its now before iterating, so another replica can
+// recover and reopen the alert meanwhile. A page or relapse notice claimed
+// with that stale now belongs to the new episode, and its time (the event
+// timestamp, the acknowledge link's issue time, the claim's last_sent_at)
+// must not predate the reopen, or the link it carries is refused as one from
+// an earlier episode. A now already past the reopen is kept as is.
+func TestClaimWithAStaleNowNeverPredatesTheReopen(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, db, "stale-now")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, "API")
+	heard := insertRoute(ctx, t, db, tenantID, "heard", 0)
+	fresh := insertRoute(ctx, t, db, tenantID, "fresh", 0)
+	later := insertRoute(ctx, t, db, tenantID, "later", 0)
+	alertID := uuid.New()
+	mustExec(ctx, t, db, `
+		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, relapse_count, reopened_at,
+			failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, 'availability', 'active', NOW() - INTERVAL '1 hour', 1, NOW(), 3, NOW(), NOW())`,
+		alertID, tenantID, monitorID)
+	mustExec(ctx, t, db, `INSERT INTO alert_relapses (alert_id, relapse_number, recovered_at, reopened_at)
+		SELECT id, 1, reopened_at - INTERVAL '2 minutes', reopened_at FROM alerts WHERE id = $1`, alertID)
+	// Paged in episode 0 and heard its recovery: due the relapse notice.
+	mustExec(ctx, t, db, `INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, paged_relapse)
+		VALUES ($1, $2, NOW() - INTERVAL '3 minutes', 'resolved', 0)`, alertID, heard)
+	var reopenedAt time.Time
+	if err := db.QueryRowContext(ctx, `SELECT reopened_at FROM alerts WHERE id = $1`, alertID).Scan(&reopenedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	var stamps []time.Time
+	a := newIntegrationAlerter(db)
+	a.sendFunc = func(_ context.Context, _ alertChannel, _ string, _ alertSubject, _ *alertRecord, _ *groupDetail, now time.Time) error {
+		stamps = append(stamps, now)
+		return nil
+	}
+	record := alertRecord{ID: alertID, TenantID: tenantID, MonitorID: monitorID}
+	binding := alertSubject{MonitorID: monitorID, TenantID: tenantID}
+	stale := reopenedAt.Add(-time.Minute)
+	afterReopen := reopenedAt.Add(time.Second)
+	for _, tc := range []struct {
+		event   string
+		channel uuid.UUID
+		now     time.Time
+		want    time.Time
+	}{
+		{alertrouting.EventRelapsed, heard, stale, reopenedAt},
+		{"created", fresh, stale, reopenedAt},
+		{"created", later, afterReopen, afterReopen},
+	} {
+		stamps = nil
+		sent, err := a.deliverNotification(ctx, tc.event, binding, &record, nil,
+			alertChannel{ID: tc.channel, Type: "webhook", IsActive: true}, tc.now, 0)
+		if err != nil || !sent {
+			t.Fatalf("%s claim: sent=%v err=%v", tc.event, sent, err)
+		}
+		if len(stamps) != 1 || !stamps[0].Equal(tc.want) {
+			t.Fatalf("%s sent with time %v, want %v", tc.event, stamps, tc.want)
+		}
+		if _, sentAt, ok := notificationStateFor(ctx, t, db, alertID, tc.channel); !ok || !sentAt.Equal(tc.want) {
+			t.Fatalf("%s claim recorded at %v, want %v (the event's time)", tc.event, sentAt, tc.want)
+		}
+	}
+}

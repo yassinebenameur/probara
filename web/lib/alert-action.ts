@@ -33,6 +33,27 @@ export function readActionToken(hash: string): string {
   return /^[A-Za-z0-9_-]{16,256}$/.test(token) ? token : '';
 }
 
+// The token last taken from this page's fragment. React runs a mount effect
+// twice in development, and the second run finds the fragment gone.
+let taken: { path: string; token: string } | null = null;
+
+/**
+ * Reads the token from the page's URL fragment, then removes the fragment
+ * from the current history entry, so a link not yet used (an invite, a
+ * reset) is not left in browser history for the next person at the machine.
+ * Call it once on mount, in the browser.
+ */
+export function takeActionToken(): string {
+  const { hash, pathname, search } = window.location;
+  if (!hash && taken?.path === pathname) return taken.token;
+  const token = readActionToken(hash);
+  taken = { path: pathname, token };
+  if (hash) {
+    window.history.replaceState(window.history.state, '', pathname + search);
+  }
+  return token;
+}
+
 /**
  * The API answers every verdict with a JSON state (404 invalid, 410 expired,
  * 409 resolved on POST). Anything else (a proxy error page, a 5xx) is a

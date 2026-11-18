@@ -290,6 +290,19 @@ func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 	checkAs(session, post, "/users/{id}/unlock", "/api/v1/users/"+rootID+"/unlock", nil, ok)
 	nonEmptyList(checkAs(session, get, "/users/{id}/sessions", "/api/v1/users/"+rootID+"/sessions", nil, ok))
 	checkAs(session, del, "/users/{id}/sessions", "/api/v1/users/"+rootID+"/sessions", nil, ok)
+
+	// User reads carry the sign-in factors and lockout state; the account
+	// actions answer one shape with or without email delivery (none here,
+	// so the link comes back).
+	checkAs(session, get, "/users/{id}", "/api/v1/users/"+rootID, nil, ok)
+	nonEmptyList(checkAs(session, get, "/users", "/api/v1/users", nil, ok))
+	invitedID := idOf(checkAs(session, post, "/users", "/api/v1/users",
+		map[string]any{"username": "openapi-invited", "email": "invited@example.com", "platform_role": "member"}, created))
+	checkAs(session, post, "/users/{id}/invite", "/api/v1/users/"+invitedID+"/invite", nil, ok)
+	checkAs(session, post, "/users/{id}/invite", "/api/v1/users/"+invitedID+"/invite", map[string]any{"method": "sso"}, http.StatusConflict)
+	checkAs(session, post, "/users/{id}/password-reset", "/api/v1/users/"+rootID+"/password-reset", nil, ok)
+	checkAs(session, post, "/users/{id}/password-reset", "/api/v1/users/"+invitedID+"/password-reset", nil, http.StatusConflict)
+	checkAs(session, post, "/users/{id}/reset-2fa", "/api/v1/users/"+rootID+"/reset-2fa", nil, ok)
 }
 
 // caller sends one request with some credential and returns status, body

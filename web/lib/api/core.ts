@@ -118,6 +118,11 @@ const AUTH_PATH_PREFIX = '/v1/auth';
 // recovers from it fail with workspace_not_found.
 const TENANTS_PATH = '/v1/tenants';
 
+// The signed-in user's own account (sessions, password, email, two-factor)
+// is platform-scoped too: it never carries X-Tenant-ID and needs no
+// workspace, so a member whose last workspace was deleted can still reach it.
+const ACCOUNT_PATH = '/v1/account';
+
 let tenantSelectionValidated = false;
 // The last tenant list loaded for this session was empty.
 let noWorkspaces = false;
@@ -172,8 +177,9 @@ export async function apiRequest<T>(
 
   const isAuthPath = path.startsWith(AUTH_PATH_PREFIX);
   const isTenantsPath = path.startsWith(TENANTS_PATH);
+  const unscoped = isTenantsPath || path.startsWith(ACCOUNT_PATH);
 
-  if (!apiKey && !isAuthPath && !isTenantsPath) {
+  if (!apiKey && !isAuthPath && !unscoped) {
     // Ensure the selected tenant exists before attaching X-Tenant-ID.
     if (!tenantSelectionValidated || !getSelectedTenantId()) {
       await ensureTenantSelected();
@@ -195,8 +201,8 @@ export async function apiRequest<T>(
 
   const tenantId = getSelectedTenantId();
   // The workspace this request is scoped to, if any (API keys are pinned).
-  const sentTenantId = tenantId && !isTenantsPath && !apiKey ? tenantId : null;
-  if (tenantId && !isTenantsPath) {
+  const sentTenantId = tenantId && !unscoped && !apiKey ? tenantId : null;
+  if (tenantId && !unscoped) {
     headers['X-Tenant-ID'] = tenantId;
   }
 

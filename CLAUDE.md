@@ -744,6 +744,27 @@ or imported groups come back empty. Any other path that creates groups through
   each heartbeat and end at `CredentialExpiry`; a new stream must too. The
   `admin_sessions_default_family` trigger (000118) is rolling-deploy
   compatibility only: drop it in a later release's migration.
+- **Account links and two-factor** (local password accounts only; an SSO
+  account never gets a reset, email change, password or second factor
+  here): invite / reset / email-change links and the sign-in challenge are
+  single-use rows in `admin_account_tokens` (random, SHA-256 stored,
+  purpose-bound; `adminauth/tokens.go`), never `shared/actionlink`. Every
+  path that sets a password or resets two-factor retires the user's open
+  tokens (`RetireAccountTokens`; `cmd/admin` does it in SQL), or a pending
+  email change survives the recovery. Link tokens ride in the URL fragment
+  and `X-Action-Token`; the pages are in `web/lib/public-routes.ts`. Without
+  `SMTP_*` + `APP_BASE_URL` on the API (`accountmail.Enabled`) only a
+  superadmin's response carries a link. TOTP secrets are sealed with
+  `PROBARA_SECRETS_KEY` (no key, no enrolment; never the no-op encryptor).
+  Failed second factors and account-page password checks reserve an attempt
+  through the lockout before comparing; a correct password releases only its
+  own count, an internal error gives the attempt back, and a reset keeps a
+  two-factor account's ordinary lock (repeated second-factor lockouts hold
+  it until unlock or reset). Every password set also revokes the user's MCP
+  OAuth grants (`RevokeMCPAccess`), and an address change retires mailed
+  links. Passwords are capped at 72 bytes (bcrypt) in
+  `auth.ValidatePassword` and `web/lib/password.ts`. The rules and expiries:
+  `docs/auth-and-rbac.md`.
 
 ## MCP server
 
@@ -848,7 +869,9 @@ or imported groups come back empty. Any other path that creates groups through
   under their delivery key, which carries the episode
   (`releaseSupersededResolveClaim` and the relapse branch of
   `releaseMutedClaim` read it); a held relapse notice is handed back to the
-  exact row its claim replaced (`DispatchEnvelope.Release`). Dispatch message ids are the idempotency key plus the
+  exact row its claim replaced (`DispatchEnvelope.Release`), except a
+  `resolved` whose resolve never reached the channel, which goes back as
+  `created` (`recoveryReached`, the resolve's own marker). Dispatch message ids are the idempotency key plus the
   claim's `dispatchRound` (`notification_claim.go`): what a rolled-back claim
   finds again on retry (the resume clock for a page, `relapsed:` plus it
   for a relapse notice, the round for a reminder, `acknowledged_at` for an
@@ -973,7 +996,10 @@ or imported groups come back empty. Any other path that creates groups through
   request logs and metric labels cannot record it; the public API routes are
   `api/internal/handlers/alertactions` (GET reads, only POST acknowledges).
   Paging plugins (PagerDuty, Opsgenie) never render it; SMS drops the deep
-  link when it has one.
+  link when it has one. A link acts only on its alert episode: the handler
+  refuses one issued (`actionlink.Claims.IssuedAt`, derived from the fixed
+  TTL) before the latest relapse's recovery (`issuedInEarlierEpisode`), so
+  changing an action's TTL shifts every outstanding link's issue time.
 - **Delivery history** (`alert_notification_deliveries`, 90 days) is written
   only through `shared/notifications/deliverylog`, from exactly two send
   paths — `deliverNotification` (`alerter/.../delivery_log.go`: in the claim

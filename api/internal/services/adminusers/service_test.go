@@ -93,6 +93,10 @@ func (m *mockRepository) AttachLockState(ctx context.Context, users []models.Adm
 	return nil
 }
 
+func (m *mockRepository) AttachSignInFactors(ctx context.Context, users []models.AdminUser) error {
+	return nil
+}
+
 func strPtr(s string) *string { return &s }
 
 func TestService_CreateUser_HashesPassword(t *testing.T) {

@@ -8,7 +8,7 @@
 // token is the only credential, so the page works signed out, and recipients
 // are often outside the workspace.
 
-export { ACTION_TOKEN_HEADER, readActionToken } from './alert-action';
+export { ACTION_TOKEN_HEADER, readActionToken, takeActionToken } from './alert-action';
 
 export const REPORT_UNSUBSCRIBE_PATH = '/api/v1/report-unsubscribe';
 

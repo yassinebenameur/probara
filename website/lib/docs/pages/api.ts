@@ -134,6 +134,13 @@ export const API_PAGE: DocPage = {
             ["`GET /api/v1/auth/oidc/status`", "Report OIDC availability"],
             ["`GET /api/v1/auth/oidc/start`", "Begin authorization-code + PKCE login"],
             ["`GET /api/v1/auth/oidc/callback`", "Complete the provider callback"],
+            ["`POST /api/v1/auth/login/mfa`", "Second step of a [two-factor](/docs/security/#account-links-two-factor) sign-in: the `mfa_token` the password step answered with (5 minutes, single use; no cookie before this) and a `code` from the authenticator app or a recovery code. A wrong code and a locked account get the same `401`; an unusable challenge is `401 mfa_challenge_invalid`"],
+            ["`GET /api/v1/auth/capabilities`", "Whether this installation emails account links (`email_delivery`)"],
+            ["`POST /api/v1/auth/password/forgot`", "Request a reset link by `login` (username or email address); always the same `202`, whatever the account"],
+            ["`POST /api/v1/auth/password/reset`", "Set the password through a reset link (token in the `X-Action-Token` header, `password` in the body); signs the account out of every browser and revokes its MCP connections (workspace API keys stay)"],
+            ["`GET /api/v1/auth/invite`", "The username an invite link (`X-Action-Token`) sets up, without using it"],
+            ["`POST /api/v1/auth/invite/accept`", "Set the first password through an invite link (`X-Action-Token`)"],
+            ["`POST /api/v1/auth/email/confirm`", "Complete an email change through the link sent to the new address (`X-Action-Token`)"],
             [
               "`GET /api/v1/users/bootstrap/status`",
               "Check whether first-user bootstrap remains available",
@@ -1230,6 +1237,18 @@ export const API_PAGE: DocPage = {
               "Superadmin; lift a password sign-in lockout and clear the failure count; returns `was_locked`",
             ],
             [
+              "`POST /api/v1/users/{id}/invite`",
+              "Superadmin; invite the user (`method` `password`: a 7-day set-your-password link for an account without one; `sso`: a note to sign in with SSO). Emailed when possible, else the response's `link` is returned once",
+            ],
+            [
+              "`POST /api/v1/users/{id}/password-reset`",
+              "Superadmin; a 1-hour reset link for a password account, emailed when possible, else returned once in `link`",
+            ],
+            [
+              "`POST /api/v1/users/{id}/reset-2fa`",
+              "Superadmin; turn the user's two-factor sign-in off (lost device); returns `was_enabled`",
+            ],
+            [
               "`GET /api/v1/users/{id}/sessions`",
               "Superadmin; the user's live sessions (`client`, `ip`, `auth_method`, `created_at`, `last_used_at`, `expires_at`)",
             ],
@@ -1252,6 +1271,22 @@ export const API_PAGE: DocPage = {
             [
               "`POST /api/v1/account/sessions/revoke-others`",
               "Signed-in browser session only; sign out everywhere but this session; returns `revoked`",
+            ],
+            [
+              "`GET /api/v1/account/security`",
+              "Signed-in browser session only; your sign-in method, email address and pending change, whether email is delivered, and two-factor state",
+            ],
+            [
+              "`POST /api/v1/account/password`",
+              "Signed-in browser session only; change your password (`current_password`, `new_password`); signs out your other sessions and revokes your MCP connections, returns `revoked`",
+            ],
+            [
+              "`POST /api/v1/account/email`",
+              "Signed-in browser session only; request an email change (`current_password`, `new_email`), confirmed through the new address",
+            ],
+            [
+              "`POST /api/v1/account/two-factor/setup`, `/enable`, `/disable`, `/recovery-codes`",
+              "Signed-in browser session only; enrol an authenticator (`current_password`, then a `code`), turn it off or replace the recovery codes (`current_password` and `code`). A wrong current password or code is `400`, a locked account `429`",
             ],
             [
               "`GET /api/v1/oidc-group-mappings`",
