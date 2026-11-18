@@ -229,7 +229,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
             ],
             [
               "In the background",
-              "Within the first purge run (seconds after the delete, every `MONITOR_PURGE_INTERVAL_SECONDS`) the scheduler blanks its stored secrets: channel credentials, monitor credentials and push tokens, private-location worker credentials. It then erases the data in bounded batches, table by table (API keys, tokens and status pages first, then history, then configuration), and deletes the workspace row last. Every run handles at most `MONITOR_PURGE_MAX_ROWS_PER_RUN` rows in `MONITOR_PURGE_BATCH_SIZE` batches, so a large workspace takes several runs; progress shows in the scheduler log and the `workspace_purge_*` metrics ([Operations](/docs/operations/#retention)).",
+              "Within the first purge run (seconds after the delete, every `MONITOR_PURGE_INTERVAL_SECONDS`) the scheduler blanks its stored secrets: channel credentials, monitor credentials (secret fields, the plain `headers`, `metadata` and `variables` maps, and the password and credential parameters of monitor URLs) and push tokens, private-location worker credentials. It then erases the data in bounded batches, table by table (API keys, tokens and status pages first, then history, then configuration), and deletes the workspace row last. Every run handles at most `MONITOR_PURGE_MAX_ROWS_PER_RUN` rows in `MONITOR_PURGE_BATCH_SIZE` batches, so a large workspace takes several runs; progress shows in the scheduler log and the `workspace_purge_*` metrics ([Operations](/docs/operations/#retention)).",
             ],
           ],
         },

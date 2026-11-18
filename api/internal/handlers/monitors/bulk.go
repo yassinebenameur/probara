@@ -84,7 +84,7 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteNotFoundError(w, "one or more monitors not found")
 			return
 		}
-		if errors.Is(err, monitorservice.ErrChannelsNotInTenant) {
+		if errors.Is(err, monitorservice.ErrChannelsNotInTenant) || errors.Is(err, monitorservice.ErrBulkAlertingRefused) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}

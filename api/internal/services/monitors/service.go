@@ -946,6 +946,10 @@ const BulkAlertingBatchSize = 100
 // one of the tenant's.
 var ErrChannelsNotInTenant = errors.New("one or more channels not found")
 
+// ErrBulkAlertingRefused reports a bulk alerting edit that a selected
+// monitor's type cannot take; the wrapped text names the monitor and rule.
+var ErrBulkAlertingRefused = errors.New("bulk alerting edit refused")
+
 // verifyChannels refuses channel ids that are not the tenant's (the
 // repository would only refuse them on write, after earlier monitors of the
 // edit were changed). Without a Postgres-backed repository it checks nothing.
@@ -994,7 +998,8 @@ func (s *Service) BulkUpdateAlerting(
 
 	// Everything a request can get wrong is checked up front, so a 403 or a
 	// 400 means nothing changed: the test-call gate (UpdateMonitor would only
-	// stop at the first call monitor) and the channels.
+	// stop at the first call monitor), the per-type threshold rules the
+	// handler's range check cannot see, and the channels.
 	for _, monitorID := range monitorIDs {
 		existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
 		if err != nil {
@@ -1002,6 +1007,15 @@ func (s *Service) BulkUpdateAlerting(
 		}
 		if err := RequireCallPermission(ctx, existing.Type, existing.Config); err != nil {
 			return 0, err
+		}
+		// A save of a domain monitor refuses a failure threshold below the
+		// domain floor (validation.ValidateMonitorUpdate); the bulk edit
+		// changes no location, so only the threshold half of the rule is
+		// asked (location count 0).
+		if threshold != nil && existing.Type == models.MonitorTypeDomain {
+			if err := sharedmodels.ValidateDomainMonitorRules(*threshold, 0); err != nil {
+				return 0, fmt.Errorf("%w: monitor %q: %v; no monitor was changed", ErrBulkAlertingRefused, existing.Name, err)
+			}
 		}
 	}
 

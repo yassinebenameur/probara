@@ -621,6 +621,12 @@ func (p *applyPlan) buildRequest(ctx context.Context, s *Service, entry *applyEn
 		p.fail(entry, "%v", err)
 		return
 	}
+	// The builders clamp thresholds into range, which suits foreign files on
+	// import; an applied document is held to what a save accepts, so the
+	// values it spells out reach validation as written and one out of range
+	// is refused (0 reads as absent: the document fields omit it).
+	req.ConsecutiveFailuresThreshold = documentThreshold(entry.doc.ConsecutiveFailuresThreshold)
+	req.RecoveryThreshold = documentThreshold(entry.doc.RecoveryThreshold)
 	key := entry.key
 	req.Key = &key
 	docEnabled := entry.doc.Enabled == nil || *entry.doc.Enabled
@@ -698,7 +704,13 @@ func (p *applyPlan) diff(ctx context.Context, entry *applyEntry) error {
 	desired.Name = req.Name
 	desired.Config = entry.config.Masked
 	desired.IntervalSeconds = req.IntervalSeconds
-	desired.TimeoutSeconds = req.TimeoutSeconds
+	// A passive type (group, push, agent) runs no check, so its timeout means
+	// nothing: the builders write 0 while the web forms store 30 or the
+	// interval. Comparing it would plan an unchanged export as an update on
+	// every apply, each one writing a version; the stored value is kept.
+	if validation.IsActiveCheckType(req.Type) {
+		desired.TimeoutSeconds = req.TimeoutSeconds
+	}
 	desired.Tags = append([]string{}, req.Tags...)
 	desired.ConsecutiveFailuresThreshold = valueOr(req.ConsecutiveFailuresThreshold, 2)
 	desired.RecoveryThreshold = valueOr(req.RecoveryThreshold, 1)
@@ -739,7 +751,10 @@ func (p *applyPlan) diff(ctx context.Context, entry *applyEntry) error {
 		update.Config, changed = entry.config.Config, true
 	}
 	if desired.IntervalSeconds != current.IntervalSeconds || desired.TimeoutSeconds != current.TimeoutSeconds {
-		update.IntervalSeconds, update.TimeoutSeconds, changed = &desired.IntervalSeconds, &desired.TimeoutSeconds, true
+		update.IntervalSeconds, changed = &desired.IntervalSeconds, true
+		if validation.IsActiveCheckType(req.Type) {
+			update.TimeoutSeconds = &desired.TimeoutSeconds
+		}
 	}
 	if !equalStrings(desired.Tags, current.Tags) {
 		update.Tags, changed = &desired.Tags, true
@@ -1063,6 +1078,15 @@ func hasConfigChange(changes []models.MonitorVersionChange) bool {
 		}
 	}
 	return false
+}
+
+// documentThreshold is a document's threshold field as a request field:
+// nil when absent (0), else the value unchanged.
+func documentThreshold(value int) *int {
+	if value == 0 {
+		return nil
+	}
+	return &value
 }
 
 func valueOr(value *int, fallback int) int {

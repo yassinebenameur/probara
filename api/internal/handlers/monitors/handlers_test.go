@@ -34,6 +34,7 @@ type MockMonitorService struct {
 	monitors            map[uuid.UUID]*models.Monitor
 	deleteHistoryErr    error
 	deletedHistoryCalls []uuid.UUID
+	bulkAlertingErr     error
 }
 
 func NewMockMonitorService() *MockMonitorService {
@@ -139,6 +140,9 @@ func (m *MockMonitorService) BulkUpdateAlerting(
 	mode *string,
 	channels []models.MonitorChannelAssignment,
 ) (int, error) {
+	if m.bulkAlertingErr != nil {
+		return 0, m.bulkAlertingErr
+	}
 	return len(monitorIDs), nil
 }
 
@@ -846,6 +850,33 @@ func TestHandlers_BulkDeleteMonitors_RejectsEmpty(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+}
+
+// A bulk alerting edit a selected monitor's type refuses (the domain
+// threshold floor) is the client's mistake: 400 with the rule in the text.
+func TestHandlers_BulkUpdateAlerting_RefusedIsBadRequest(t *testing.T) {
+	log := logger.New("test", "debug")
+	monitorSvc := NewMockMonitorService()
+	monitorSvc.bulkAlertingErr = fmt.Errorf("%w: monitor %q: consecutive_failures_threshold must be at least 2 for domain monitors",
+		monitorservice.ErrBulkAlertingRefused, "registration")
+	handlers := NewHandlers(monitorSvc, &MockGroupService{}, &MockResultsService{}, log, t.TempDir())
+
+	r := chi.NewRouter()
+	r.Post("/bulk/alerting", handlers.BulkUpdateAlerting)
+	body := `{"monitor_ids":["` + uuid.NewString() + `"],"consecutive_failures_threshold":1}`
+	req := httptest.NewRequest(http.MethodPost, "/bulk/alerting", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.NewString()))
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "registration") || !strings.Contains(w.Body.String(), "domain monitors") {
+		t.Fatalf("body = %s, want the monitor and the rule named", w.Body.String())
 	}
 }
 

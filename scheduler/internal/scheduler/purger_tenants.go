@@ -1,8 +1,10 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -60,6 +62,10 @@ type purgeStep struct {
 	// partitioned steps are run per partition (ctid is unique only within a
 	// partition); sql is then a format with the partition name as %s.
 	partitioned bool
+	// run replaces sql for a step that has to read rows in Go (a scrub the
+	// secrets package's parsers decide); it returns what it changed and
+	// whether it finished within budget, as runStep does.
+	run func(p *workspacePurger, ctx context.Context, conn *sql.Conn, tenantID uuid.UUID, budget int) (int, bool, error)
 }
 
 // byTenant deletes rows of a table that carries tenant_id, through its
@@ -186,7 +192,10 @@ var workspacePurgePlan = []purgeStep{
 // at rest behind the history tables (the rows themselves go late, in plan
 // order): channel configs (provider tokens, webhook URLs, passwords), monitor
 // config secrets (every field secrets.MonitorSecretFields and
-// MonitorSecretMapFields know, of any type) and push tokens, private-location
+// MonitorSecretMapFields know, of any type, and the plain maps whose entries
+// can hold credentials: headers, metadata, variables), credentials in monitor
+// URLs (a userinfo password, credential-named query parameters) and push
+// tokens, private-location
 // worker credentials, the legacy AI provider key, and status page passwords
 // and kiosk tokens (hashes). Each step updates only
 // rows still holding a secret, in bounded batches, so it is a no-op once done.
@@ -200,6 +209,7 @@ func workspaceScrubPlan() []purgeStep {
 		{table: "monitors (secrets)", sql: `UPDATE monitors SET config = config - ` + monitorSecretKeysSQL + `, push_token = NULL
 			WHERE ctid = ANY(ARRAY(SELECT ctid FROM monitors
 				WHERE tenant_id = $1 AND (config ?| ` + monitorSecretKeysSQL + ` OR push_token IS NOT NULL) LIMIT $2))`},
+		{table: "monitors (URL credentials)", run: (*workspacePurger).scrubMonitorURLCredentials},
 		{table: "locations (secrets)", sql: `UPDATE locations SET worker_credential = NULL
 			WHERE ctid = ANY(ARRAY(SELECT ctid FROM locations
 				WHERE tenant_id = $1 AND worker_credential IS NOT NULL LIMIT $2))`},
@@ -222,23 +232,149 @@ func workspaceScrubPlan() []purgeStep {
 }
 
 // monitorSecretKeysSQL is every top-level monitor config key the secret
-// registries name, of any type, as a SQL text[] literal.
+// registries name, of any type, plus the top-level plain maps the credential
+// rules read (secrets.PlainCredentialPaths: headers, metadata, variables),
+// whose entries can be credentials under names no rule recognizes, as a SQL
+// text[] literal.
 var monitorSecretKeysSQL = func() string {
 	seen := map[string]bool{}
 	var quoted []string
+	add := func(f string) {
+		if !seen[f] {
+			seen[f] = true
+			quoted = append(quoted, pq.QuoteLiteral(f))
+		}
+	}
 	for _, registry := range []map[string][]string{secrets.MonitorSecretFields, secrets.MonitorSecretMapFields} {
 		for _, fields := range registry {
 			for _, f := range fields {
-				if !seen[f] {
-					seen[f] = true
-					quoted = append(quoted, pq.QuoteLiteral(f))
-				}
+				add(f)
+			}
+		}
+	}
+	for _, paths := range secrets.PlainCredentialPaths {
+		for _, path := range paths {
+			// Top-level maps only: a synthetic API test's "steps" is listed
+			// as the way to its steps' request headers and is the test
+			// itself, not a credential map.
+			if len(path) == 1 && path[0] != "steps" {
+				add(path[0])
 			}
 		}
 	}
 	sort.Strings(quoted)
 	return "ARRAY[" + strings.Join(quoted, ", ") + "]::text[]"
 }()
+
+// monitorURLTypes are the monitor types with URL fields (secrets.URLFields).
+var monitorURLTypes = func() []string {
+	types := make([]string, 0, len(secrets.URLFields))
+	for monitorType := range secrets.URLFields {
+		types = append(types, monitorType)
+	}
+	sort.Strings(types)
+	return types
+}()
+
+// scrubMonitorURLCredentials masks the credentials in the workspace's monitor
+// URL fields (a userinfo password, credential-named query parameters;
+// secrets.MaskURLCredentials), which no config key names, so the SQL steps
+// cannot reach them. Telling a credential from an '@' in a path takes the
+// secrets package's parser, so the rows are read here: the workspace's
+// monitors of the types with URL fields, in id order a batch at a time, and
+// only the configs that change are written. A masked URL does not change
+// again, so the step reports 0 once done; a config saved meanwhile (the
+// compare-and-set misses it) is left to the next pass.
+func (p *workspacePurger) scrubMonitorURLCredentials(ctx context.Context, conn *sql.Conn, tenantID uuid.UUID, budget int) (int, bool, error) {
+	type monitorConfig struct {
+		id     uuid.UUID
+		typ    string
+		config []byte
+	}
+	changed := 0
+	after := uuid.Nil
+	for {
+		if changed >= budget {
+			return changed, false, nil
+		}
+		rows, err := conn.QueryContext(ctx, `
+			SELECT id, type, config FROM monitors
+			WHERE tenant_id = $1 AND type = ANY($2) AND id > $3
+			ORDER BY id LIMIT $4`, tenantID, pq.Array(monitorURLTypes), after, p.opts.BatchSize)
+		if err != nil {
+			return changed, false, err
+		}
+		var batch []monitorConfig
+		for rows.Next() {
+			var m monitorConfig
+			if err := rows.Scan(&m.id, &m.typ, &m.config); err != nil {
+				rows.Close()
+				return changed, false, err
+			}
+			batch = append(batch, m)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return changed, false, err
+		}
+		for _, m := range batch {
+			scrubbed, ok := maskMonitorURLCredentials(m.typ, m.config)
+			if !ok {
+				continue
+			}
+			if changed >= budget {
+				return changed, false, nil
+			}
+			result, err := conn.ExecContext(ctx, `
+				UPDATE monitors SET config = $1::jsonb
+				WHERE id = $2 AND tenant_id = $3 AND config = $4::jsonb`, string(scrubbed), m.id, tenantID, string(m.config))
+			if err != nil {
+				return changed, false, err
+			}
+			n, err := result.RowsAffected()
+			if err != nil {
+				return changed, false, err
+			}
+			changed += int(n)
+			if p.metrics != nil && n > 0 {
+				p.metrics.rows.Add(float64(n))
+			}
+		}
+		if len(batch) < p.opts.BatchSize {
+			return changed, true, nil
+		}
+		after = batch[len(batch)-1].id
+		if err := sleepCtx(ctx, p.pause); err != nil {
+			return changed, false, err
+		}
+	}
+}
+
+// maskMonitorURLCredentials masks the credentials of a stored config's URL
+// fields; ok is false when there were none (or the config does not decode).
+func maskMonitorURLCredentials(monitorType string, raw []byte) ([]byte, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber() // re-encoding must not reformat numbers
+	var cfg map[string]any
+	if err := decoder.Decode(&cfg); err != nil || cfg == nil {
+		return nil, false
+	}
+	changed := false
+	secrets.WalkURLFields(monitorType, cfg, func(_ string, parent map[string]any, key string) {
+		if masked, did := secrets.MaskURLCredentials(parent[key].(string)); did {
+			parent[key] = masked
+			changed = true
+		}
+	})
+	if !changed {
+		return nil, false
+	}
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
 
 // workspacePurgeExempt lists the tenant-scoped tables the purge deliberately
 // keeps, with the reason. TestWorkspacePurgePlanCoversEveryTenantTable fails
@@ -429,6 +565,9 @@ func (p *workspacePurger) purgeWorkspace(ctx context.Context, conn *sql.Conn, te
 // runStep drains one table for the workspace within budget. drained is false
 // when the budget ran out before the table was known to be empty.
 func (p *workspacePurger) runStep(ctx context.Context, conn *sql.Conn, step purgeStep, tenantID uuid.UUID, budget int) (deleted int, drained bool, err error) {
+	if step.run != nil {
+		return step.run(p, ctx, conn, tenantID, budget)
+	}
 	if step.partitioned {
 		return p.runPartitionedStep(ctx, conn, step, tenantID, budget)
 	}

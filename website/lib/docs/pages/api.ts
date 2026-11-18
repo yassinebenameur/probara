@@ -387,7 +387,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/monitors/bulk/alerting`",
-              "Update the failure threshold, recovery threshold and notification routing for selected monitors",
+              "Update the failure threshold, recovery threshold and notification routing for selected monitors. Refused whole (400, nothing written) when a selected monitor's type does not accept the value, such as a failure threshold below 2 on a domain monitor",
             ],
             [
               "`POST /api/v1/monitors/bulk/delete`",
