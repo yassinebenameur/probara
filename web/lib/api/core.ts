@@ -45,6 +45,16 @@ export async function errorFromResponse(response: Response, fallback: string): P
   return new Error(fallback);
 }
 
+// The refresh endpoint answered 429 every time (the address's failed-sign-in
+// budget is spent, typically someone else behind the same NAT). That is not
+// a lost session: keep it, fail this call, and the next call tries again.
+function refreshRateLimitedError(): ApiRequestError {
+  return new ApiRequestError(
+    'rate_limited',
+    'Too many requests from this network right now. Your session is kept; retry in a moment.'
+  );
+}
+
 // A 401 that survived the refresh attempt: send the user back to sign in
 // (or to re-enter the key, which is dropped) and fail the call.
 function handleUnauthorized(hasApiKey: boolean): never {
@@ -118,6 +128,26 @@ const AUTH_PATH_PREFIX = '/v1/auth';
 // recovers from it fail with workspace_not_found.
 const TENANTS_PATH = '/v1/tenants';
 
+// Every platform-scoped route the UI calls (not in a workspace): the
+// workspace list, the signed-in user's own account and MCP connections,
+// user and SSO-mapping management, the OpenAPI document. They never carry
+// X-Tenant-ID and are never answered with the no-workspace error, so a member
+// who belongs to no workspace can still manage their own sessions.
+const PLATFORM_PATHS = [
+  TENANTS_PATH,
+  '/v1/account',
+  '/v1/oauth/grants',
+  '/v1/users',
+  '/v1/oidc-group-mappings',
+  '/v1/openapi.json',
+];
+
+/** Whether path (with any query) is one of PLATFORM_PATHS or below it. */
+export function isPlatformPath(path: string): boolean {
+  const bare = path.split('?')[0];
+  return PLATFORM_PATHS.some((prefix) => bare === prefix || bare.startsWith(`${prefix}/`));
+}
+
 let tenantSelectionValidated = false;
 // The last tenant list loaded for this session was empty.
 let noWorkspaces = false;
@@ -172,8 +202,9 @@ export async function apiRequest<T>(
 
   const isAuthPath = path.startsWith(AUTH_PATH_PREFIX);
   const isTenantsPath = path.startsWith(TENANTS_PATH);
+  const isPlatform = isPlatformPath(path);
 
-  if (!apiKey && !isAuthPath && !isTenantsPath) {
+  if (!apiKey && !isAuthPath && !isPlatform) {
     // Ensure the selected tenant exists before attaching X-Tenant-ID.
     if (!tenantSelectionValidated || !getSelectedTenantId()) {
       await ensureTenantSelected();
@@ -195,8 +226,8 @@ export async function apiRequest<T>(
 
   const tenantId = getSelectedTenantId();
   // The workspace this request is scoped to, if any (API keys are pinned).
-  const sentTenantId = tenantId && !isTenantsPath && !apiKey ? tenantId : null;
-  if (tenantId && !isTenantsPath) {
+  const sentTenantId = tenantId && !isPlatform && !apiKey ? tenantId : null;
+  if (tenantId && !isPlatform) {
     headers['X-Tenant-ID'] = tenantId;
   }
 
@@ -214,10 +245,13 @@ export async function apiRequest<T>(
     const response = await fetch(getApiUrl(path), options);
     if (response.status === 401 && !apiKey) {
       tenantSelectionValidated = false;
-      const refreshed = await refreshSession();
-      if (refreshed) {
+      const outcome = await refreshSessionOutcome();
+      if (outcome === 'refreshed') {
         const retryResponse = await fetch(getApiUrl(path), options);
         return await handleResponse<T>(retryResponse, Boolean(apiKey), sentTenantId);
+      }
+      if (outcome === 'rate_limited') {
+        throw refreshRateLimitedError();
       }
     }
     return await handleResponse<T>(response, Boolean(apiKey), sentTenantId);
@@ -229,12 +263,17 @@ export async function apiRequest<T>(
   }
 }
 
+// How a refresh ended: a new access token; the session is over (sign in
+// again); or the API kept answering 429, which says nothing about the
+// session.
+export type RefreshOutcome = 'refreshed' | 'signed_out' | 'rate_limited';
+
 // Refresh rotates the token server-side, so concurrent calls would race and
 // all but one lose. Single-flight: every 401 handler (including the SSE
 // stream) awaits the same in-flight request.
-let refreshInFlight: Promise<boolean> | null = null;
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
 
-export function refreshSession(): Promise<boolean> {
+export function refreshSessionOutcome(): Promise<RefreshOutcome> {
   if (!refreshInFlight) {
     refreshInFlight = doRefresh().finally(() => {
       refreshInFlight = null;
@@ -243,15 +282,38 @@ export function refreshSession(): Promise<boolean> {
   return refreshInFlight;
 }
 
-async function doRefresh(): Promise<boolean> {
-  try {
-    const response = await fetch(getApiUrl('/v1/auth/refresh'), {
-      method: 'POST',
-      credentials: 'include',
-    });
-    return response.ok;
-  } catch {
-    return false;
+/** True when the session was refreshed; false otherwise (including when rate limited). */
+export async function refreshSession(): Promise<boolean> {
+  return (await refreshSessionOutcome()) === 'refreshed';
+}
+
+// A 429 on refresh is retried a few times, waiting what Retry-After asks
+// (bounded), before the call gives up for now.
+const REFRESH_RATE_LIMIT_RETRIES = 3;
+const REFRESH_MAX_WAIT_MS = 10_000;
+
+function retryAfterMs(response: Response, attempt: number): number {
+  const seconds = Number(response.headers.get('retry-after'));
+  const wait = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 1000 * 2 ** attempt;
+  return Math.min(wait, REFRESH_MAX_WAIT_MS);
+}
+
+async function doRefresh(): Promise<RefreshOutcome> {
+  for (let attempt = 0; ; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(getApiUrl('/v1/auth/refresh'), {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch {
+      return 'signed_out';
+    }
+    if (response.ok) return 'refreshed';
+    if (response.status !== 429) return 'signed_out';
+    if (attempt >= REFRESH_RATE_LIMIT_RETRIES) return 'rate_limited';
+    const wait = retryAfterMs(response, attempt);
+    await new Promise((resolve) => setTimeout(resolve, wait));
   }
 }
 
@@ -281,7 +343,8 @@ export async function apiFetch(
   init: { method?: string; headers?: Record<string, string>; body?: BodyInit } = {}
 ): Promise<Response> {
   const apiKey = getApiKey();
-  if (!apiKey) {
+  const isPlatform = isPlatformPath(path);
+  if (!apiKey && !isPlatform) {
     await ensureTenantSelected();
     if (noWorkspaces && !getSelectedTenantId()) {
       throw noWorkspaceError();
@@ -293,7 +356,7 @@ export async function apiFetch(
 
     if (apiKey) {
       headers.Authorization = `Bearer ${apiKey}`;
-    } else {
+    } else if (!isPlatform) {
       const tenantId = getSelectedTenantId();
       if (tenantId) {
         headers['X-Tenant-ID'] = tenantId;
@@ -310,9 +373,11 @@ export async function apiFetch(
 
   let response = await makeRequest();
   if (response.status === 401 && !apiKey) {
-    const refreshed = await refreshSession();
-    if (refreshed) {
+    const outcome = await refreshSessionOutcome();
+    if (outcome === 'refreshed') {
       response = await makeRequest();
+    } else if (outcome === 'rate_limited') {
+      throw refreshRateLimitedError();
     }
   }
 

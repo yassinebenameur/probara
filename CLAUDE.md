@@ -577,7 +577,9 @@ or imported groups come back empty. Any other path that creates groups through
   in `shared/config` (`loadSMTPConfig`, embedded `SMTPConfig`); the chart's
   top-level `smtp:` and `appBaseURL:` values render the env into all three
   workloads via the `smtpEnv` helper. The base Compose file wires none of
-  it; `docker-compose.release.yml` passes it to all three.
+  it except `APP_BASE_URL` on the api (default `http://localhost:3000`, the
+  dev UI: the CSRF origin check needs it, as does the local start script);
+  `docker-compose.release.yml` passes it to all three.
   `SMTP_USE_TLS=true` is implicit TLS (port 465), never STARTTLS.
   `APP_BASE_URL` is the operator-UI origin and only adds "open the monitor"
   deep links and, with `PROBARA_SECRETS_KEY`, acknowledge links to
@@ -720,7 +722,12 @@ or imported groups come back empty. Any other path that creates groups through
   on this replica in the last 10 min (`verifiedCredentials`,
   `ratelimit_verified.go`: keyed HMAC only, bounded LRU, TTL restarted per
   success, forgotten at first failure; a refresh's rotated cookie is
-  recorded from its Set-Cookie). A never-seen valid credential and every
+  recorded from its Set-Cookie and kept for the access TTL + 10 min). A
+  refresh carrying a signed access cookie skips the pre-check, charged per
+  user, its 401 kept (the access cookie's Max-Age is the refresh lifetime,
+  not the token's, so browsers send it expired; keep it so). A request that authenticates and is then refused (bad
+  tenant id, `workspace_not_found`) spends its credential's bucket
+  (`ratelimit_refusal.go`). A never-seen valid credential and every
   sign-in wait for budget -- accepted. The cookie check is
   `classifySessionToken`, unexported in `middleware` -- never authentication. Address buckets exist only for
   `clientip.Attributable` addresses (trusted-proxy-forwarded or public
@@ -728,6 +735,14 @@ or imported groups come back empty. Any other path that creates groups through
   `RawPath`, as chi routes), so new routes need no list. Never echo `Origin` in a handler. The env rides
   Compose and the chart's `trustedProxyCIDRs` + `security:` block
   (`monitoring-platform.edgeEnv`) together.
+- **CSRF**: `middleware.OriginPolicy` (`origin.go`) is the one origin check.
+  `AuthMiddleware` applies it to every unsafe request the session cookie
+  authenticates (403 `cross_origin_refused`; non-JSON body 415, multipart
+  only on `MultipartUploadPaths`, pinned to the MCP catalog by
+  `TestMultipartUploadPathsMatchCatalog`), sign-in/refresh/sign-out wear
+  `RequireTrustedOrigin`, OAuth consent re-checks it. Never base a security
+  decision on `X-Forwarded-Host` outside it. A new cookie-setting route takes
+  `RequireTrustedOrigin`. Rules and reasoning: `docs/auth-and-rbac.md`.
 - **Session identity**: one `admin_session_families` row per sign-in
   (password or SSO); refresh tokens rotate inside it and the access JWT's
   `sid` claim names it. The family's `revoked_at` is the only authority:
@@ -1073,7 +1088,9 @@ or imported groups come back empty. Any other path that creates groups through
   platform-scoped). A change to the workspace list (create, rename, delete,
   or a `workspace_not_found` answer, handled in `lib/api/core.ts`) emits
   `TENANTS_CHANGED_EVENT`, which only `TenantSwitcher` listens to: it reloads
-  the list and settles the selection again.
+  the list and settles the selection again. Platform-scoped API paths are
+  `PLATFORM_PATHS` in `lib/api/core.ts` (never `X-Tenant-ID`, never the
+  no-workspace error); add a new platform route there.
 - **Folded routes stay as redirects**: Mesh is a tab of Locations and
   the alert channel list is a tab of Settings (`?tab=`, via
   `components/ui/Tabs.tsx` `useUrlTab`). `/mesh` and `/alert-channels` are

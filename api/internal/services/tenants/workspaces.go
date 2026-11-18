@@ -152,7 +152,8 @@ func (s *Service) RenameWorkspace(ctx context.Context, id uuid.UUID, name string
 // One transaction stamps tenants.deleted_at, which every lookup refuses from
 // the moment it commits (shared/tenancy), removes the workspace's memberships
 // and SSO group mappings (so no switcher lists it and no sign-in re-grants
-// it) and revokes its MCP connections (so their refresh tokens fail too). It
+// it) and revokes its MCP connections (so their refresh tokens fail too) and
+// its API keys. It
 // never deletes the tenant row: the scheduler's workspace purge removes the
 // data in bounded batches and the row last. There is no undo.
 func (s *Service) DeleteWorkspace(ctx context.Context, id uuid.UUID, confirmName string, deletedBy *uuid.UUID) (*models.DeleteWorkspaceResponse, error) {
@@ -206,6 +207,10 @@ func (s *Service) DeleteWorkspace(ctx context.Context, id uuid.UUID, confirmName
 		{"memberships", `DELETE FROM tenant_memberships WHERE tenant_id = $1`},
 		{"sso group mappings", `DELETE FROM oidc_group_mappings WHERE tenant_id = $1`},
 		{"mcp connections", `UPDATE mcp_oauth_grants SET revoked_at = NOW() WHERE tenant_id = $1 AND revoked_at IS NULL`},
+		// Already refused by every lookup (LiveTenantSQL); revoking them too
+		// makes the refusal hold without the tenant join and shows in the
+		// key's own row.
+		{"api keys", `UPDATE api_keys SET revoked_at = NOW() WHERE tenant_id = $1 AND revoked_at IS NULL`},
 	} {
 		if _, err := tx.ExecContext(ctx, c.sql, id); err != nil {
 			return nil, fmt.Errorf("remove workspace %s: %w", c.name, err)

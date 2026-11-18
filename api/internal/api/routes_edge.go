@@ -25,6 +25,7 @@ func useEdgeSecurity(r chi.Router, cfg *config.APIConfig, log *logger.Logger) *a
 	limiter := apimiddleware.NewRateLimiter(cfg.RateLimitPerMinute, cfg.RateLimitBurst)
 	if limiter != nil {
 		limiter.SetSessionSecret(cfg.AdminJWTSecret, time.Duration(cfg.AdminRefreshTTLDays)*24*time.Hour)
+		limiter.SetAccessTokenLifetime(time.Duration(cfg.AdminAccessTTLMinutes) * time.Minute)
 		if mux, ok := r.(*chi.Mux); ok {
 			limiter.SetRouteClassifier(authRouteClassifier(mux, limiter))
 		}

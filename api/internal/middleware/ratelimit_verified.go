@@ -71,18 +71,30 @@ func (v *verifiedCredentials) digest(credential string) [sha256.Size]byte {
 
 // remember records a successful verification of credential at now.
 func (v *verifiedCredentials) remember(credential string, now time.Time) {
+	v.rememberFor(credential, now, v.ttl)
+}
+
+// rememberFor is remember with its own TTL (never shorter than the set's):
+// an issued refresh cookie is first presented an access-token lifetime later
+// (RateLimiter.issuedRefreshCookieTTL).
+func (v *verifiedCredentials) rememberFor(credential string, now time.Time, ttl time.Duration) {
 	if credential == "" {
 		return
+	}
+	if ttl < v.ttl {
+		ttl = v.ttl
 	}
 	sum := v.digest(credential)
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if el, ok := v.entries[sum]; ok {
-		el.Value.(*verifiedEntry).expires = now.Add(v.ttl)
+		if e := el.Value.(*verifiedEntry); now.Add(ttl).After(e.expires) {
+			e.expires = now.Add(ttl)
+		}
 		v.order.MoveToFront(el)
 		return
 	}
-	v.entries[sum] = v.order.PushFront(&verifiedEntry{sum: sum, expires: now.Add(v.ttl)})
+	v.entries[sum] = v.order.PushFront(&verifiedEntry{sum: sum, expires: now.Add(ttl)})
 	for v.order.Len() > v.max {
 		oldest := v.order.Back()
 		v.order.Remove(oldest)

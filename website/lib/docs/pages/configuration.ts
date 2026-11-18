@@ -186,14 +186,14 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`API_ALLOWED_ORIGINS`',
               'Empty; comma-separated `scheme://host[:port]`; `*` and paths are refused',
-              'Browser origins allowed credentialed [cross-origin](/docs/security/#passwords-api-keys-sessions) API calls. Empty means the `APP_BASE_URL` origin, or same-origin only when that is unset too. Compose passes it through; Helm renders `security.apiAllowedOrigins`.',
+              'Browser origins allowed credentialed [cross-origin](/docs/security/#passwords-api-keys-sessions) API calls. Empty means the `APP_BASE_URL` origin, or same-origin only when that is unset too. The listed origins, `APP_BASE_URL` and `PUBLIC_BASE_URL` are also the origins a browser may write from with the session cookie (cross-site request forgery check). Compose passes it through; Helm renders `security.apiAllowedOrigins`.',
             ],
           ],
         },
         {
           type: 'paragraph',
           text:
-            'The access cookie is HttpOnly and SameSite=Lax. `ADMIN_COOKIE_SECURE` controls its Secure attribute. Access and refresh TTL values are only parsed as integers; the loader does not reject zero or negative values, so use deliberate positive settings.',
+            'The access cookie is HttpOnly and SameSite=Lax; writes made with it are checked by [origin](/docs/security/#passwords-api-keys-sessions) as well. `ADMIN_COOKIE_SECURE` controls its Secure attribute. Access and refresh TTL values are only parsed as integers; the loader does not reject zero or negative values, so use deliberate positive settings.',
         },
       ],
     },
@@ -1074,7 +1074,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['Scheduler purge and mesh', 'Code defaults only', 'Code defaults only'],
             ['Worker result stream and AI/notification queues', 'Code defaults only', 'Code defaults only'],
             ['Status cache, proxy, preview, timeout, update subject', 'Preview only; most defaults', 'Not wired'],
-            ['Trusted proxies, HSTS, API rate limit and CORS allowlist', 'Passed through from the shell to API and status-page (`APP_BASE_URL` to status-page too)', 'Top-level `trustedProxyCIDRs` and `security` block rendered into API and status-page; `appBaseURL` into status-page as well'],
+            ['Trusted proxies, HSTS, API rate limit and CORS allowlist', 'Passed through from the shell to API and status-page (`APP_BASE_URL` to status-page too, and to the API with the default `http://localhost:3000`, the development UI, which session-cookie writes must come from)', 'Top-level `trustedProxyCIDRs` and `security` block rendered into API and status-page; `appBaseURL` into status-page as well'],
             ['Browser artifact sharing', 'Shared volume', 'No shared volume'],
             ['Arbitrary extra environment', 'Requires editing Compose', 'No `extraEnv`; requires chart template change'],
           ],

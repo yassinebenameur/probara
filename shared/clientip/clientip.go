@@ -90,6 +90,15 @@ func (r *Resolver) Trusts(addr netip.Addr) bool {
 	return false
 }
 
+// TrustsPeer reports whether req's TCP peer is a trusted proxy, so the
+// forwarding headers it sent (X-Forwarded-Host, X-Forwarded-Proto) may be
+// believed. In-process requests whose RemoteAddr is not an IP are never
+// trusted.
+func (r *Resolver) TrustsPeer(req *http.Request) bool {
+	peer, ok := parseHostPort(req.RemoteAddr)
+	return ok && r.Trusts(peer)
+}
+
 // Resolve returns the client address for req, without a port. When
 // RemoteAddr is not an IP (in-process requests, tests) it is returned as is.
 func (r *Resolver) Resolve(req *http.Request) string {

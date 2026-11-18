@@ -11,6 +11,7 @@ import (
 	oauthhandlers "github.com/yassinebenameur/probara/api/internal/handlers/oauth"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
 	userhandlers "github.com/yassinebenameur/probara/api/internal/handlers/users"
+	apimiddleware "github.com/yassinebenameur/probara/api/internal/middleware"
 )
 
 // mountPushWebhookRoutes mounts the push monitors' webhook, authenticated by the token in the URL.
@@ -60,11 +61,14 @@ func mountOAuthRoutes(r chi.Router, oauthHandlers *oauthhandlers.Handlers, authM
 }
 
 // mountAuthRoutes mounts sign-in, OIDC and first-user bootstrap, none of which require a session.
-func mountAuthRoutes(r chi.Router, authHandlers *authhandlers.Handlers, adminUsersHandlers *userhandlers.Handlers) {
+// Sign-in, refresh and sign-out set or clear the session cookie, so they take
+// the same origin rule as cookie-authenticated writes (login CSRF, forced
+// sign-out).
+func mountAuthRoutes(r chi.Router, authHandlers *authhandlers.Handlers, adminUsersHandlers *userhandlers.Handlers, origins *apimiddleware.OriginPolicy) {
 	r.Route("/auth", func(r chi.Router) {
-		r.Post("/login", authHandlers.Login)
-		r.Post("/refresh", authHandlers.Refresh)
-		r.Post("/logout", authHandlers.Logout)
+		r.With(origins.RequireTrustedOrigin).Post("/login", authHandlers.Login)
+		r.With(origins.RequireTrustedOrigin).Post("/refresh", authHandlers.Refresh)
+		r.With(origins.RequireTrustedOrigin).Post("/logout", authHandlers.Logout)
 		r.Get("/me", authHandlers.Me)
 		r.Route("/oidc", func(r chi.Router) {
 			r.Get("/status", authHandlers.OIDCStatus)

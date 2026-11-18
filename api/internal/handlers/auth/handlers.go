@@ -341,6 +341,13 @@ func (h *Handlers) setAccessCookie(w http.ResponseWriter, adminID, familyID uuid
 		return err
 	}
 
+	// The cookie outlives the token it carries, for as long as the session
+	// could be refreshed: the token's own expiry still ends what it
+	// authenticates, but the browser keeps presenting it, signed and expired,
+	// with its refresh. That is what lets the rate limiter recognise a
+	// refreshing session without a lookup, on any replica, even while the
+	// address is out of failure budget (middleware.RateLimiter). Sign-out
+	// clears it with the refresh cookie.
 	cookie := &http.Cookie{
 		Name:     accessCookieName,
 		Value:    token,
@@ -348,7 +355,7 @@ func (h *Handlers) setAccessCookie(w http.ResponseWriter, adminID, familyID uuid
 		HttpOnly: true,
 		Secure:   h.cfg.AdminCookieSecure,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(accessTTL.Seconds()),
+		MaxAge:   int((time.Duration(h.cfg.AdminRefreshTTLDays) * 24 * time.Hour).Seconds()),
 	}
 	http.SetCookie(w, cookie)
 	return nil

@@ -216,9 +216,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 	// MCP: OAuth authorization server discovery at the well-known paths
 	// clients probe (path insertion and appending, OAuth and OpenID names).
-	authMiddleware := apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret)
+	// Which browser origins may write with the session cookie (CSRF;
+	// middleware/origin.go): the auth middleware, sign-in/refresh/sign-out and
+	// OAuth consent share it.
+	origins := apimiddleware.NewOriginPolicy(cfg.AppBaseURL, cfg.PublicBaseURL, cfg.AllowedOrigins, cfg.TrustedProxyCIDRs)
+	authMiddleware := apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret, origins)
 	authMiddleware = rateLimiter.Authenticate(authMiddleware) // per-credential rate limit (routes_edge.go)
-	oauthHandlers := oauthhandlers.NewHandlers(mcpoauthservice.NewService(dbClient), log, auditRecorder, cfg.PublicBaseURL, cfg.AppBaseURL)
+	oauthHandlers := oauthhandlers.NewHandlers(mcpoauthservice.NewService(dbClient), log, auditRecorder, cfg.PublicBaseURL, cfg.AppBaseURL).WithOriginPolicy(origins)
 	mcpHandler := mcpserver.NewHandler(log, oauthHandlers.ResourceMetadataURL)
 	mountOAuthDiscoveryRoutes(r, oauthHandlers)
 
@@ -247,7 +251,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		oidcService := oidcauthservice.NewService(cfg.OIDC, dbClient, log)
 		oidcService.ConfigureSetupCode(cfg.BootstrapSetupCode != "")
 		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
-		mountAuthRoutes(r, authHandlers, adminUsersHandlers)
+		mountAuthRoutes(r, authHandlers, adminUsersHandlers, origins)
 		// Sign-in lockout and sessions: superadmin unlock and user sessions
 		// (handlers/users/security.go), the signed-in user's own sessions
 		// (routes_account.go).

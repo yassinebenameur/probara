@@ -7,8 +7,9 @@ How identity and authorization work as of the enterprise-auth rework
 
 Three credential types, resolved by `api/internal/middleware/auth.go`:
 
-- **Admin users** (`admin_users`) — humans. JWT access cookie (15 min) +
-  rotating opaque refresh token, grouped into a session (see
+- **Admin users** (`admin_users`) — humans. JWT access cookie (token
+  15 min; the cookie itself lasts the refresh lifetime so the expired token
+  rides along with a refresh) + rotating opaque refresh token, grouped into a session (see
   [Sign-in lockout and sessions](#sign-in-lockout-and-sessions)). Two
   platform roles:
   - `superadmin` — full platform access: any tenant (via `X-Tenant-ID`),
@@ -103,7 +104,7 @@ family id as `sid`. The family's `revoked_at` is the single authority:
 - Long-lived responses re-check: the auth middleware leaves
   `middleware.StillAuthorized` / `CredentialExpiry` in the context
   (`credential_recheck.go`: session, user enabled, tenant membership, MCP
-  token, API key); the alert SSE stream calls it every heartbeat and ends at
+  token, API key and its workspace); the alert SSE stream calls it every heartbeat and ends at
   the access token's expiry with a `reauth` event the web client reconnects
   on.
 - `SessionPruner` (API process, hourly, batches of 1000) deletes refresh
@@ -115,7 +116,19 @@ family id as `sid`. The family's `revoked_at` is the single authority:
 - The rate limiter's verified-credential cache never authenticates: it only
   lifts the address pre-check, and the refresh handler / middleware still
   check the family, so a revoked session's cookie is refused on first use
-  and then forgotten by that replica.
+  and then forgotten by that replica. A refresh cookie the replica issued is
+  kept for the access-token lifetime plus 10 minutes (the browser presents it
+  only once its access token has expired). A refresh that also carries an
+  access cookie the API signed (live, or expired within the refresh
+  lifetime) skips the pre-check on any replica, charged to that user's
+  refresh bucket, and its `401` is never turned into a `429`; the cookies'
+  common session is the handler's lookup to settle. The web client treats a
+  `429` from refresh as "try again later": it retries per `Retry-After` a
+  few times, then fails that call as `rate_limited` and keeps the session.
+- A request that authenticates and is then refused by `AuthMiddleware` (a
+  malformed tenant identifier, `404 workspace_not_found`) is charged to the
+  credential's own bucket (`ratelimit_refusal.go`), so looping random
+  `X-Tenant-ID` values is rate limited like any other request.
 
 Routes: `/account/sessions` (list, `DELETE /{id}`, `POST /revoke-others`) —
 cookie session only (a `sid` is required; API keys and MCP tokens get 403),
@@ -176,6 +189,35 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
 - `RequireSuperadmin`: `/users/*`, and workspace management (`POST
   /tenants`, `PATCH`/`DELETE /tenants/{id}`, `GET /tenants/overview`).
 
+### Cross-site request forgery
+
+`SameSite=Lax` does not separate the operator UI from a status page on the
+same site (another port of the same host, a sibling subdomain), and a
+workspace editor can publish a status-page template whose script runs there.
+So `AuthMiddleware` refuses a request its **session cookie** authenticates
+with an unsafe method (not GET/HEAD/OPTIONS) unless it comes from a trusted
+origin (`middleware/origin.go`, `OriginPolicy`), with `403
+cross_origin_refused`, before any lookup; sign-in, refresh and sign-out
+(anonymous, but they set or clear the cookie) take the same rule
+(`RequireTrustedOrigin` in `routes_public.go`), and OAuth consent re-checks
+it. Trusted: `APP_BASE_URL`, `PUBLIC_BASE_URL`, `API_ALLOWED_ORIGINS`, and the
+request's own origin (`Host`, or `X-Forwarded-Host` from a
+`TRUSTED_PROXY_CIDRS` peer only; scheme compared when the request is known to
+be HTTPS). Judged on `Origin`, else `Sec-Fetch-Site` (`same-origin` only),
+else the `Referer`'s origin. `Sec-Fetch-Site: same-origin` never overrides
+an `Origin`: it compares the page with the URL fetched, which may be a proxy
+to the API on another origin (the status page's `/_sp_api`). Through the
+UI's `/api` proxy the trusted origin comes from `APP_BASE_URL` or a trusted
+proxy's `X-Forwarded-Host` (dev Compose and the local start script default
+`APP_BASE_URL` to `http://localhost:3000`). None
+of the three means a non-browser client (`curl` with a cookie jar), which is
+allowed. A cookie-authenticated unsafe request with a body must also be
+`application/json` (`multipart/form-data` on `MultipartUploadPaths`, the
+import preview), else `415 unsupported_media_type`, so a preflight-free
+`text/plain` request cannot carry JSON. API keys and MCP tokens are not
+checked. A status page served from the UI's own origin cannot be told apart
+from the UI; give status pages their own host.
+
 ## Workspaces
 
 Superadmins create, rename and delete workspaces
@@ -191,7 +233,7 @@ name).
 
 Delete is a soft delete. One transaction stamps `tenants.deleted_at` and
 `deleted_by`, removes the workspace's memberships and SSO group mappings and
-revokes its MCP grants. From that commit:
+revokes its MCP grants and API keys. From that commit:
 
 - `identityQuery` reports whether a live workspace has the requested ID, and
   `AuthMiddleware` answers `404 workspace_not_found` to any session or
@@ -217,9 +259,11 @@ The web client treats `workspace_not_found` as "the selected workspace is
 gone": it drops that selection (only if it is still the one the failing
 request carried, so concurrent failures change nothing more) and the
 switcher reloads its list once (`lib/api/core.ts`, `TENANTS_CHANGED_EVENT`).
-It never sends `X-Tenant-ID` on `/v1/tenants*`, which are platform routes,
-so the reload cannot fail the same way. A member left with no
-workspace keeps the account; the client answers their tenant-scoped requests
+It never sends `X-Tenant-ID` on platform routes (`isPlatformPath`:
+`/v1/tenants*`, `/v1/account*`, `/v1/oauth/grants*`, `/v1/users*`,
+`/v1/oidc-group-mappings*`, `/v1/openapi.json`), so the reload cannot fail
+the same way. A member left with no workspace keeps the account and can still
+manage their own sessions; the client answers their tenant-scoped requests
 with a "not a member of any workspace" error instead of sending them.
 
 The scheduler purges the data afterwards; see `docs/architecture.md`.

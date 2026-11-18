@@ -13,6 +13,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // Long-lived responses (the alert stream) are authorized once, when they
@@ -134,12 +135,15 @@ func adminIdentityRecheck(dbClient *db.Client, adminID, tenantUUID uuid.UUID) fu
 	}
 }
 
-// apiKeyRecheck: the key is neither revoked nor expired.
+// apiKeyRecheck repeats auth.ValidateAPIKey's decision: the key is neither
+// revoked nor expired and its workspace is not deleted, so a stream held open
+// by a deleted workspace's key closes at the next heartbeat.
 func apiKeyRecheck(dbClient *db.Client, keyID string) func(context.Context) error {
 	return func(ctx context.Context) error {
 		var live bool
 		err := dbClient.QueryRowContext(ctx, `
 			SELECT revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
+				AND `+tenancy.LiveTenantSQL("api_keys.tenant_id")+`
 			FROM api_keys WHERE id = $1
 		`, keyID).Scan(&live)
 		switch {
