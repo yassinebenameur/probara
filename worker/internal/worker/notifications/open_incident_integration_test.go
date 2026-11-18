@@ -344,8 +344,10 @@ func TestHandle_HeldRelapseNoticeAfterADroppedRecoveryStillGetsTheNextRecovery(t
 		}
 		return event, paged
 	}
-	// The alerter's resolve claim (claimNotificationTx): wins unless the row
-	// already says 'resolved'.
+	// The alerter's resolve claim, copied from the "resolved" case of
+	// claimNotificationTx (alerter/internal/alerter/notification_claim.go),
+	// whose package this test cannot import: wins unless the row already
+	// says 'resolved'. Change the two together.
 	claimResolve := func(at time.Time) bool {
 		return exec(`UPDATE alert_notification_states SET last_sent_at = $3, last_event_type = 'resolved', updated_at = NOW()
 			WHERE alert_id = $1 AND channel_id = $2 AND last_event_type <> 'resolved'`, alertID, ch, at) == 1
