@@ -249,7 +249,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
           rows: [
             [
               "At once",
-              "The workspace disappears from every list and switcher, and its memberships, SSO group mappings and MCP connections are removed. Every credential scoped to it is refused: sessions and MCP tokens get `404 workspace_not_found` on its routes (superadministrators too, and still after the purge: the same answer as for an ID that never existed), its API keys (OTLP ingest included) get `401`, push URLs and discovery collector tokens `404`, its private-location workers are refused by the broker on their next connection and their results and heartbeats are dropped, and acknowledge and report-unsubscribe links read as invalid.",
+              "The workspace disappears from every list and switcher, and its memberships, SSO group mappings and MCP connections are removed. Every credential scoped to it is refused: sessions and MCP tokens get `404 workspace_not_found` on its routes (superadministrators too, and still after the purge: the same answer as for an ID that never existed), its API keys (OTLP ingest included) are revoked and get `401` (an open alert stream on one closes within 15 seconds), push URLs and discovery collector tokens `404`, its private-location workers are refused by the broker on their next connection and their results and heartbeats are dropped, and acknowledge and report-unsubscribe links read as invalid.",
             ],
             [
               "Within seconds",
@@ -271,7 +271,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A browser whose selected workspace is deleted switches to another one the user can open on its next request. A member whose only workspace was deleted keeps the account and can still sign in, but sees “You are not a member of any workspace” until a superadministrator adds a membership. Memberships and SSO group mappings can only name a live workspace: a deleted one is refused as “workspace not found”.",
+            "A browser whose selected workspace is deleted switches to another one the user can open on its next request. A member whose only workspace was deleted keeps the account and can still sign in, but sees “You are not a member of any workspace” until a superadministrator adds a membership; meanwhile they can still manage their own sessions (Account → Sessions). Memberships and SSO group mappings can only name a live workspace: a deleted one is refused as “workspace not found”.",
         },
       ],
     },

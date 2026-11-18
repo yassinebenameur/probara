@@ -61,8 +61,11 @@ const identityQuery = `
 `
 
 // AuthMiddleware validates admin JWT cookies or API keys and injects
-// identity (tenant, platform role, tenant role, scope) into context.
-func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) func(http.Handler) http.Handler {
+// identity (tenant, platform role, tenant role, scope) into context. A
+// request the cookie authenticates is the one a browser attaches by itself,
+// so its unsafe methods must also pass origins (origin.go) -- before anything
+// is looked up.
+func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string, origins *OriginPolicy) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Prefer admin JWT cookie if present
@@ -70,6 +73,9 @@ func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) f
 				claims, err := auth.ParseAdminToken(cookie.Value, jwtSecret)
 				if err == nil && claims.AdminID != "" {
 					if adminID, err := uuid.Parse(claims.AdminID); err == nil {
+						if !origins.admitCookieRequest(w, r) {
+							return
+						}
 						r, ok := checkSession(w, r, dbClient, log, adminID, claims)
 						if !ok {
 							return
@@ -133,6 +139,7 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 	if tenantValue != "" {
 		parsed, err := uuid.Parse(tenantValue)
 		if err != nil {
+			noteAuthenticatedRefusal(r, adminID)
 			writeBadRequestError(w, "invalid tenant identifier")
 			return
 		}
@@ -171,6 +178,7 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 		// A deleted workspace is gone for everyone, at once, and stays gone
 		// once purged: its routes answer as for an ID that never existed. The
 		// web client recognises the code and re-selects a workspace.
+		noteAuthenticatedRefusal(r, adminID)
 		writeWorkspaceNotFound(w)
 		return
 	}
@@ -197,6 +205,7 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 		if !membershipRole.Valid {
 			// The same answer as for a deleted or unknown workspace, so a
 			// member learns nothing about workspaces they cannot open.
+			noteAuthenticatedRefusal(r, adminID)
 			writeWorkspaceNotFound(w)
 			return
 		}

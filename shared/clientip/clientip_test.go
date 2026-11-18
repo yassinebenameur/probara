@@ -96,6 +96,26 @@ func TestNilResolverTrustsNothing(t *testing.T) {
 	if got := r.Resolve(req); got != "10.0.0.2" {
 		t.Fatalf("got %q", got)
 	}
+	if r.TrustsPeer(req) {
+		t.Fatal("a nil resolver trusts a peer")
+	}
+}
+
+func TestTrustsPeer(t *testing.T) {
+	r := mustResolver(t, "10.0.0.0/8")
+	for remote, want := range map[string]bool{
+		"10.1.2.3:443":        true,
+		"[::ffff:10.1.2.3]:1": true,
+		"203.0.113.7:443":     false,
+		"pipe":                false,
+		"":                    false,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = remote
+		if got := r.TrustsPeer(req); got != want {
+			t.Errorf("TrustsPeer(%q) = %v, want %v", remote, got, want)
+		}
+	}
 }
 
 func TestParseTrustedProxies(t *testing.T) {

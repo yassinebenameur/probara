@@ -287,6 +287,45 @@ func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 	checkAs(session, post, "/users/{id}/password-reset", "/api/v1/users/"+rootID+"/password-reset", nil, ok)
 	checkAs(session, post, "/users/{id}/password-reset", "/api/v1/users/"+invitedID+"/password-reset", nil, http.StatusConflict)
 	checkAs(session, post, "/users/{id}/reset-2fa", "/api/v1/users/"+rootID+"/reset-2fa", nil, ok)
+
+	// Shared error answers the document names by code: a session scoped to a
+	// workspace it cannot open, and a session-cookie write from an origin the
+	// API does not trust.
+	root := f.login("openapi-root")
+	sharedError := func(method, route, target string, header map[string]string, status int, code string) {
+		t.Helper()
+		req, err := http.NewRequest(method, f.http.URL+target, strings.NewReader(`{"name":"x"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range header {
+			req.Header.Set(k, v)
+		}
+		res, err := root.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var body struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(res.Body).Decode(&body)
+		if res.StatusCode != status || body.Error != code {
+			t.Fatalf("%s %s: %d %q, want %d %q", method, target, res.StatusCode, body.Error, status, code)
+		}
+		resp, ok := doc.sharedResponse(method, route, status)
+		if !ok {
+			t.Fatalf("%s %s: the document has no %d response", method, route, status)
+		}
+		if description, _ := resp["description"].(string); !strings.Contains(description, code) {
+			t.Errorf("%s %s: the documented %d response does not name %s: %q", method, route, status, code, description)
+		}
+	}
+	sharedError(get, "/monitors", "/api/v1/monitors", map[string]string{"X-Tenant-ID": uuid.NewString()},
+		http.StatusNotFound, "workspace_not_found")
+	sharedError(post, "/monitors", "/api/v1/monitors", map[string]string{"X-Tenant-ID": f.tenantA.String(),
+		"Origin": "https://status.example.com", "Sec-Fetch-Site": "same-site"}, http.StatusForbidden, "cross_origin_refused")
 }
 
 // caller sends one request with some credential and returns status, body
@@ -386,8 +425,9 @@ func send(t *testing.T, client *http.Client, url, method, key string, body any) 
 }
 
 type loadedOpenAPI struct {
-	paths   map[string]map[string]any
-	schemas map[string]any
+	paths     map[string]map[string]any
+	schemas   map[string]any
+	responses map[string]any
 }
 
 func loadOpenAPIDoc(t *testing.T) loadedOpenAPI {
@@ -399,13 +439,27 @@ func loadOpenAPIDoc(t *testing.T) loadedOpenAPI {
 	var doc struct {
 		Paths      map[string]map[string]any `json:"paths"`
 		Components struct {
-			Schemas map[string]any `json:"schemas"`
+			Schemas   map[string]any `json:"schemas"`
+			Responses map[string]any `json:"responses"`
 		} `json:"components"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	return loadedOpenAPI{paths: doc.Paths, schemas: doc.Components.Schemas}
+	return loadedOpenAPI{paths: doc.Paths, schemas: doc.Components.Schemas, responses: doc.Components.Responses}
+}
+
+// sharedResponse returns an operation's response for one status with a
+// shared $ref (#/components/responses/…) resolved.
+func (d loadedOpenAPI) sharedResponse(method, route string, status int) (map[string]any, bool) {
+	resp, ok := d.response(method, route, status)
+	if !ok {
+		return nil, false
+	}
+	if ref, isRef := resp["$ref"].(string); isRef {
+		resp, ok = d.responses[strings.TrimPrefix(ref, "#/components/responses/")].(map[string]any)
+	}
+	return resp, ok
 }
 
 // response returns the document's own response object for one status of an

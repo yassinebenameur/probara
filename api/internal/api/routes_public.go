@@ -11,6 +11,7 @@ import (
 	oauthhandlers "github.com/yassinebenameur/probara/api/internal/handlers/oauth"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
 	userhandlers "github.com/yassinebenameur/probara/api/internal/handlers/users"
+	apimiddleware "github.com/yassinebenameur/probara/api/internal/middleware"
 )
 
 // mountPushWebhookRoutes mounts the push monitors' webhook, authenticated by the token in the URL.
@@ -60,21 +61,26 @@ func mountOAuthRoutes(r chi.Router, oauthHandlers *oauthhandlers.Handlers, authM
 }
 
 // mountAuthRoutes mounts sign-in, OIDC and first-user bootstrap, none of which require a session.
-func mountAuthRoutes(r chi.Router, authHandlers *authhandlers.Handlers, adminUsersHandlers *userhandlers.Handlers) {
+// Every POST here that sets or clears the session cookie (sign-in and its
+// second step, refresh, sign-out) or acts on an account through a mailed
+// link (forgot, reset, invite accept, email confirm) takes the same origin
+// and JSON-body rule as cookie-authenticated writes (RequireTrustedOrigin):
+// login CSRF, forced sign-out, a page driving someone's link.
+func mountAuthRoutes(r chi.Router, authHandlers *authhandlers.Handlers, adminUsersHandlers *userhandlers.Handlers, origins *apimiddleware.OriginPolicy) {
 	r.Route("/auth", func(r chi.Router) {
-		r.Post("/login", authHandlers.Login)
-		r.Post("/login/mfa", authHandlers.LoginMFA)
-		r.Post("/refresh", authHandlers.Refresh)
-		r.Post("/logout", authHandlers.Logout)
+		r.With(origins.RequireTrustedOrigin).Post("/login", authHandlers.Login)
+		r.With(origins.RequireTrustedOrigin).Post("/login/mfa", authHandlers.LoginMFA)
+		r.With(origins.RequireTrustedOrigin).Post("/refresh", authHandlers.Refresh)
+		r.With(origins.RequireTrustedOrigin).Post("/logout", authHandlers.Logout)
 		r.Get("/me", authHandlers.Me)
 		// Account links (handlers/auth/links.go): the token rides in the
 		// X-Action-Token header, never the path.
 		r.Get("/capabilities", authHandlers.Capabilities)
-		r.Post("/password/forgot", authHandlers.ForgotPassword)
-		r.Post("/password/reset", authHandlers.ResetPassword)
+		r.With(origins.RequireTrustedOrigin).Post("/password/forgot", authHandlers.ForgotPassword)
+		r.With(origins.RequireTrustedOrigin).Post("/password/reset", authHandlers.ResetPassword)
 		r.Get("/invite", authHandlers.InviteInfo)
-		r.Post("/invite/accept", authHandlers.AcceptInvite)
-		r.Post("/email/confirm", authHandlers.ConfirmEmail)
+		r.With(origins.RequireTrustedOrigin).Post("/invite/accept", authHandlers.AcceptInvite)
+		r.With(origins.RequireTrustedOrigin).Post("/email/confirm", authHandlers.ConfirmEmail)
 		r.Route("/oidc", func(r chi.Router) {
 			r.Get("/status", authHandlers.OIDCStatus)
 			r.Get("/start", authHandlers.OIDCStart)
