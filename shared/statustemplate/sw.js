@@ -1,6 +1,7 @@
 // Probara status page service worker.
 //
-// Served from /public/status/sw.js rather than from under a page slug: a
+// Served from /public/status/sw.js (from /sw.js on a custom domain, where the
+// page is the root) rather than from under a page slug: a
 // worker's default max scope is its own directory, so at
 // /public/status/{slug}/sw.js the scope would be /public/status/{slug}/ --
 // which is not a prefix of the page URL /public/status/{slug}. Registration
@@ -60,15 +61,16 @@ self.addEventListener('notificationclick', function (event) {
 // the old endpoint keeps receiving pushes the browser will drop, and the
 // visitor silently stops being notified.
 self.addEventListener('pushsubscriptionchange', function (event) {
-  var scope = self.registration.scope;
-  var slug = scope.replace(/\/+$/, '').split('/').pop();
-  var base = scope.replace(/\/+$/, '').replace(/\/[^/]*$/, '');
+  // The page registers this worker with its own path plus "/" as the scope
+  // ("/public/status/{slug}/", or "/" on a custom domain), so the page's
+  // routes sit directly under it.
+  var subscribeURL = self.registration.scope + 'push/subscribe';
 
   event.waitUntil(
     self.registration.pushManager
       .subscribe(event.oldSubscription ? event.oldSubscription.options : { userVisibleOnly: true })
       .then(function (sub) {
-        return fetch(base + '/' + slug + '/push/subscribe', {
+        return fetch(subscribeURL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(sub.toJSON())

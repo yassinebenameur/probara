@@ -73,6 +73,7 @@ import (
 	reportscheduleservice "github.com/yassinebenameur/probara/api/internal/services/reportschedules"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	slaservice "github.com/yassinebenameur/probara/api/internal/services/slas"
+	statuspagedomainservice "github.com/yassinebenameur/probara/api/internal/services/statuspagedomains"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
@@ -98,8 +99,10 @@ type Server struct {
 	statusPublisher    *statusupdates.Publisher
 	auditRecorder      *auditservice.Recorder
 	auditPruner        *auditservice.Pruner
+	sessionPruner      *adminauthservice.SessionPruner
 	reportRunner       *reportscheduleservice.Runner
 	subscriberRunner   *pagesubscriberservice.Runner
+	domainRunner       *statuspagedomainservice.Runner
 	locationAuthorizer *locationnatsauthservice.Service
 	locationAuth       *callout.AuthorizationService
 	locationAuthConn   *nats.Conn
@@ -206,6 +209,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// Audit trail: async recorder + retention pruner (lifecycle on Server).
 	auditRecorder := auditservice.NewRecorder(dbClient, log)
 	auditPruner := auditservice.NewPruner(dbClient, log, cfg.AuditRetentionDays)
+	sessionPruner := adminauthservice.NewSessionPruner(dbClient, log, time.Duration(cfg.AdminRefreshTTLDays)*24*time.Hour)
 	auditSvc := auditservice.NewService(dbClient)
 
 	// Push webhook endpoints (no auth - uses token in URL for authentication)
@@ -215,6 +219,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	reportScheduleHandlers, reportRunner := newReportSchedules(cfg, dbClient, auditRecorder, log)
 	// Status-page email subscribers and their runner (routes_statuspage_subscribers.go).
 	subscriberHandlers, subscriberRunner := newStatusPageSubscribers(cfg, dbClient, auditRecorder, statusPublisher, log)
+
+	// Status page custom domains and their re-verification runner (routes_statuspage_domains.go).
+	domainHandlers, domainRunner := newStatusPageDomains(cfg, dbClient, statusPublisher, auditRecorder, log)
 
 	// MCP: OAuth authorization server discovery at the well-known paths
 	// clients probe (path insertion and appending, OAuth and OpenID names).
@@ -250,6 +257,12 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		oidcService.ConfigureSetupCode(cfg.BootstrapSetupCode != "")
 		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
 		mountAuthRoutes(r, authHandlers, adminUsersHandlers)
+		// Sign-in lockout and sessions: superadmin unlock and user sessions
+		// (handlers/users/security.go), the signed-in user's own sessions
+		// (routes_account.go).
+		adminUsersHandlers.WithAccountSecurity(authService)
+		mountAccountRoutes(r, authMiddleware, authService, log, auditRecorder)
+
 		mountAlertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_alertactions.go)
 		mountReportUnsubscribeRoutes(r, reportScheduleHandlers)           // signed unsubscribe links of report emails
 		mountStatusPageSubscriberPublicRoutes(r, subscriberHandlers)      // status-page subscribe forward and subscriber mail links
@@ -268,6 +281,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Lives at /auth-context (not /auth/context) because the outer
 			// unauthenticated /auth subrouter shadows that subtree.
 			r.Get("/auth-context", authHandlers.AuthContext)
+			mountOpenAPIRoute(r, mcpHandler) // GET /openapi.json (routes_openapi.go)
 
 			// Agent service and handlers (needed by monitors route)
 			agentService := agentservice.NewService(dbClient.DB)
@@ -327,6 +341,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Import service and handlers
 			importSvc := importservice.NewService(dbClient, monitorService, groupSvc)
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
+			importHdlrs.ConfigureAudit(auditRecorder)
 
 			// Private locations (remote worker deployments)
 			locationHandlers := locationhandlers.NewHandlers(locationSvc, cfg.PublicNATSURL, log)
@@ -404,10 +419,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			statusPageService.ConfigureSubscriberMail(subscriberHandlers.Service.SubscriptionProblems)
 			statusPageHandlers := statuspagehandlers.NewHandlers(statusPageService, log)
 			mountStatusPageRoutes(r, statusPageHandlers, subscriberHandlers.Routes)
+			mountStatusPageDomainRoutes(r, domainHandlers)
 
 			// Tenants (membership-filtered for members, all for superadmins)
 			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
-			mountTenantRoutes(r, tenantHandlers)
+			mountTenantRoutes(r, tenantHandlers, newWorkspaceHandlers(tenantSvc, cfg, auditRecorder, log))
 
 			// Audit log (tenant admins and superadmins)
 			auditHandlers := audithandlers.NewHandlers(auditSvc, log)
@@ -445,8 +461,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		statusPublisher:    statusPublisher,
 		auditRecorder:      auditRecorder,
 		auditPruner:        auditPruner,
+		sessionPruner:      sessionPruner,
 		reportRunner:       reportRunner,
 		subscriberRunner:   subscriberRunner,
+		domainRunner:       domainRunner,
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
 		mcpErr:             mcpErr,
@@ -493,11 +511,17 @@ func (s *Server) Start() error {
 	if s.auditPruner != nil {
 		s.auditPruner.Start()
 	}
+	if s.sessionPruner != nil {
+		s.sessionPruner.Start()
+	}
 	if s.reportRunner != nil {
 		s.reportRunner.Start()
 	}
 	if s.subscriberRunner != nil {
 		s.subscriberRunner.Start()
+	}
+	if s.domainRunner != nil {
+		s.domainRunner.Start()
 	}
 
 	return s.http.ListenAndServe()
@@ -525,11 +549,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.subscriberRunner != nil {
 		s.subscriberRunner.Stop()
 	}
+	if s.domainRunner != nil {
+		s.domainRunner.Stop()
+	}
 	if s.auditRecorder != nil {
 		s.auditRecorder.Stop()
 	}
 	if s.auditPruner != nil {
 		s.auditPruner.Stop()
+	}
+	if s.sessionPruner != nil {
+		s.sessionPruner.Stop()
 	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()

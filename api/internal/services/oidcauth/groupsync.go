@@ -14,6 +14,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	"github.com/yassinebenameur/probara/shared/auth"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // GroupMapping is one oidc_group_mappings row. A nil TenantID marks a
@@ -297,12 +298,13 @@ func (s *Service) syncMappedRoles(ctx context.Context, user *models.AdminUser, g
 		}
 		now := time.Now()
 		for _, tenantID := range sortedTenantIDs(wantMemberships) {
-			// EXISTS guard mirrors provisionUser: a tenant deleted between
-			// mapping load and insert must not fail the login.
+			// Live-workspace guard mirrors provisionUser: a workspace
+			// deleted between mapping load and insert must not fail the
+			// login, nor be granted.
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO tenant_memberships (id, admin_user_id, tenant_id, role, created_at, updated_at)
 				SELECT $1, $2, $3, $4, $5, $5
-				WHERE EXISTS (SELECT 1 FROM tenants WHERE id = $3)
+				WHERE `+tenancy.LiveTenantSQL("$3::uuid")+`
 			`, uuid.New(), user.ID, tenantID, wantMemberships[tenantID], now); err != nil {
 				return nil, fmt.Errorf("failed to insert mapped membership: %w", err)
 			}

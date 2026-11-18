@@ -1,0 +1,54 @@
+Vendored meta-schemas, copied unchanged. TestOpenAPIDocumentValidates uses
+them to validate api/openapi.json offline.
+
+oas-schema-2022-10-07.json       https://spec.openapis.org/oas/3.1/schema/2022-10-07
+oas-schema-base-2022-10-07.json  https://spec.openapis.org/oas/3.1/schema-base/2022-10-07
+oas-dialect-base.json            https://spec.openapis.org/oas/3.1/dialect/base
+oas-meta-base.json               https://spec.openapis.org/oas/3.1/meta/base
+
+  Published by the OpenAPI Initiative under the Apache License 2.0
+  (https://github.com/OAI/OpenAPI-Specification/blob/main/LICENSE,
+  https://www.apache.org/licenses/LICENSE-2.0).
+
+json-schema-2020-12-schema.json                   https://json-schema.org/draft/2020-12/schema
+json-schema-2020-12-meta-core.json                https://json-schema.org/draft/2020-12/meta/core
+json-schema-2020-12-meta-applicator.json          https://json-schema.org/draft/2020-12/meta/applicator
+json-schema-2020-12-meta-unevaluated.json         https://json-schema.org/draft/2020-12/meta/unevaluated
+json-schema-2020-12-meta-validation.json          https://json-schema.org/draft/2020-12/meta/validation
+json-schema-2020-12-meta-meta-data.json           https://json-schema.org/draft/2020-12/meta/meta-data
+json-schema-2020-12-meta-format-annotation.json   https://json-schema.org/draft/2020-12/meta/format-annotation
+json-schema-2020-12-meta-content.json             https://json-schema.org/draft/2020-12/meta/content
+
+  Published by the JSON Schema project under the BSD 3-Clause License and,
+  alternatively, the Academic Free License 3.0
+  (https://github.com/json-schema-org/json-schema-spec/blob/main/LICENSE).
+  The BSD 3-Clause terms, under which they are redistributed here:
+
+  Copyright (c) 2022 JSON Schema Specification Authors
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are
+  met:
+
+  1. Redistributions of source code must retain the above copyright
+  notice, this list of conditions and the following disclaimer.
+
+  2. Redistributions in binary form must reproduce the above copyright
+  notice, this list of conditions and the following disclaimer in the
+  documentation and/or other materials provided with the distribution.
+
+  3. Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+  HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+  TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+  PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+  LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

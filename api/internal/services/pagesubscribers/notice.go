@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/pagenotify"
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/statuspagesql"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // maintenanceStartWindow: a one-off occurrence that started longer ago than
@@ -57,7 +58,7 @@ var incidentStates = map[string]string{
 // non-empty skip says why the row is not mailed (the event is no longer on
 // the page).
 func (s *Service) buildNotice(ctx context.Context, q queryer, o outboxRow) (*notice, string, error) {
-	n := &notice{Kind: o.kind, PageTitle: o.title, PageURL: s.publicPageURL(pageRef{id: o.pageID, tenantID: o.tenantID, slug: o.slug}), Accent: accent(o.primary)}
+	n := &notice{Kind: o.kind, PageTitle: o.title, PageURL: s.publicPageURL(pageRef{id: o.pageID, tenantID: o.tenantID, slug: o.slug, primaryHost: o.primaryHost}), Accent: accent(o.primary)}
 	switch o.kind {
 	case pagenotify.KindIncidentPublished, pagenotify.KindIncidentUpdated, pagenotify.KindIncidentResolved:
 		return s.incidentNotice(ctx, q, o, n)
@@ -309,6 +310,7 @@ func (s *Service) sweepMaintenanceStarts(ctx context.Context) error {
 			SELECT DISTINCT tenant_id, status_page_id, maintenance_window_id
 			FROM status_page_notification_outbox
 			WHERE event_kind = $1 AND created_at > NOW() - INTERVAL '60 days'
+			  AND `+tenancy.LiveTenantSQL("status_page_notification_outbox.tenant_id")+`
 		)
 		INSERT INTO status_page_notification_outbox
 			(tenant_id, status_page_id, event_kind, maintenance_window_id, occurrence_starts_at, dedupe_key)

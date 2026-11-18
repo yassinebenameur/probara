@@ -172,6 +172,10 @@ type StatusPage struct {
 	// HasPassword reports whether a visitor password is stored; the
 	// password itself is write-only.
 	HasPassword bool `json:"has_password"`
+	// PublicURL is the page's URL on its canonical custom domain (the oldest
+	// verified one, shared/pagedomains.PrimaryHostSQL); omitted while it has
+	// none, when the page lives only on the platform host.
+	PublicURL string `json:"public_url,omitempty"`
 }
 
 // CreateStatusPageRequest represents a request to create a status page

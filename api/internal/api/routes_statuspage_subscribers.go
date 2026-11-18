@@ -32,7 +32,7 @@ func newStatusPageSubscribers(cfg *config.APIConfig, dbClient *db.Client, record
 		log.WithError(err).Error("Status page subscription links disabled: invalid PROBARA_SECRETS_KEY")
 	}
 	pc := pagesubscriberservice.Config{
-		Mailer: mailer, Links: links, AppBaseURL: cfg.AppBaseURL, StatusPageBaseURL: cfg.StatusPageBaseURL,
+		Mailer: mailer, Links: links, AppBaseURL: cfg.AppBaseURL, StatusPageBaseURL: cfg.StatusPagePublicBaseURL,
 		InternalToken: cfg.StatusPageInternalToken, Log: log,
 	}
 	if recorder != nil {

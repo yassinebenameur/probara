@@ -198,7 +198,9 @@ env_init LOCAL_AI_DISABLED "false"
 # Off until the UI is served over HTTPS (a Secure cookie never comes back over
 # plain http). Set it to true behind TLS.
 env_init ADMIN_COOKIE_SECURE "false"
-for key in PUBLIC_BASE_URL PUBLIC_NATS_URL PROBARA_TRUSTED_PROXIES APP_BASE_URL SMTP_HOST SMTP_PORT SMTP_USE_TLS SMTP_USERNAME SMTP_PASSWORD SMTP_FROM; do
+# STATUS_PAGE_BASE_URL empty means http://localhost:8082. Custom domains
+# (STATUS_PAGE_CNAME_TARGET) stay off until it names the public status host.
+for key in PUBLIC_BASE_URL PUBLIC_NATS_URL PROBARA_TRUSTED_PROXIES APP_BASE_URL SMTP_HOST SMTP_PORT SMTP_USE_TLS SMTP_USERNAME SMTP_PASSWORD SMTP_FROM STATUS_PAGE_BASE_URL STATUS_PAGE_CNAME_TARGET; do
   env_init "$key" ""
 done
 

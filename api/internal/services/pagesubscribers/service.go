@@ -53,7 +53,9 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/mail"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // Limits on the subscribe endpoint. The status-page service throttles each
@@ -275,12 +277,18 @@ type subscribablePage struct {
 	open  bool // public or unlisted, with email subscriptions on
 }
 
-const pageColumns = `sp.id, sp.tenant_id, sp.slug, sp.title,
-	(sp.visibility IN ('public', 'unlisted') AND COALESCE(sp.settings->>'enable_email_subscriptions', 'false') = 'true')`
+// pageColumns are a page as the public endpoints read it; pageLive limits
+// them to pages of a workspace that is not deleted (a deleted workspace's
+// pages take, confirm and unsubscribe nothing: they are purged).
+var pageColumns = `sp.id, sp.tenant_id, sp.slug, sp.title,
+	(sp.visibility IN ('public', 'unlisted') AND COALESCE(sp.settings->>'enable_email_subscriptions', 'false') = 'true'),
+	COALESCE(` + pagedomains.PrimaryHostSQL("sp.id") + `, '')`
+
+var pageLive = tenancy.LiveTenantSQL("sp.tenant_id")
 
 func scanPage(row interface{ Scan(...any) error }) (*subscribablePage, error) {
 	var p subscribablePage
-	if err := row.Scan(&p.id, &p.tenantID, &p.slug, &p.title, &p.open); err != nil {
+	if err := row.Scan(&p.id, &p.tenantID, &p.slug, &p.title, &p.open, &p.primaryHost); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -298,7 +306,7 @@ func (s *Service) Subscribe(ctx context.Context, slug, rawAddress string) error 
 	if err != nil {
 		return err
 	}
-	page, err := scanPage(s.db.QueryRowContext(ctx, `SELECT `+pageColumns+` FROM status_pages sp WHERE sp.slug = $1`, slug))
+	page, err := scanPage(s.db.QueryRowContext(ctx, `SELECT `+pageColumns+` FROM status_pages sp WHERE sp.slug = $1 AND `+pageLive, slug))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -331,7 +339,8 @@ func (s *Service) Subscribe(ctx context.Context, slug, rawAddress string) error 
 		var inboxUsed int
 		if err := tx.QueryRowContext(ctx, `
 			SELECT (SELECT COUNT(*) FROM status_page_confirmation_sends WHERE inbox_hash = $1 AND sent_at > $2)
-			     + (SELECT COUNT(*) FROM status_page_subscribers WHERE inbox_hash = $1 AND confirm_due_at IS NOT NULL)
+			     + (SELECT COUNT(*) FROM status_page_subscribers WHERE inbox_hash = $1 AND confirm_due_at IS NOT NULL
+			        AND `+tenancy.LiveTenantSQL("status_page_subscribers.tenant_id")+`)
 		`, inbox, now.Add(-24*time.Hour)).Scan(&inboxUsed); err != nil {
 			return fmt.Errorf("count inbox confirmations: %w", err)
 		}
@@ -415,7 +424,7 @@ func (s *Service) resolveToken(ctx context.Context, token, action string) (actio
 	case err != nil:
 		return claims, nil, models.StatusPageSubscriptionInvalid, nil
 	}
-	page, err := scanPage(s.db.QueryRowContext(ctx, `SELECT `+pageColumns+` FROM status_pages sp WHERE sp.id = $1 AND sp.tenant_id = $2`,
+	page, err := scanPage(s.db.QueryRowContext(ctx, `SELECT `+pageColumns+` FROM status_pages sp WHERE sp.id = $1 AND sp.tenant_id = $2 AND `+pageLive,
 		claims.AlertID, claims.TenantID))
 	if errors.Is(err, sql.ErrNoRows) {
 		// A deleted page took its subscribers with it.
@@ -516,7 +525,7 @@ func (s *Service) record(event audit.Event, claims actionlink.Claims, action, la
 // ensurePage checks the page is the tenant's.
 func (s *Service) ensurePage(ctx context.Context, tenantID, pageID uuid.UUID) error {
 	var ok bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM status_pages WHERE id = $1 AND tenant_id = $2)`, pageID, tenantID).Scan(&ok); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM status_pages sp WHERE sp.id = $1 AND sp.tenant_id = $2 AND `+pageLive+`)`, pageID, tenantID).Scan(&ok); err != nil {
 		return fmt.Errorf("load status page: %w", err)
 	}
 	if !ok {

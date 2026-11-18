@@ -20,6 +20,10 @@ import (
 
 type importServiceMock struct {
 	exportData []byte
+	exportOpts importservice.ExportOptions
+	plan       *models.MonitorApplyPlan
+	result     *models.MonitorApplyResult
+	err        error
 }
 
 func (m *importServiceMock) ParseFile(data []byte, filename string) (*models.ImportPreviewResponse, error) {
@@ -30,8 +34,17 @@ func (m *importServiceMock) ExecuteImport(ctx context.Context, tenantID uuid.UUI
 	return &models.ImportExecuteResponse{}, nil
 }
 
-func (m *importServiceMock) ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byte, error) {
+func (m *importServiceMock) ExportMonitors(ctx context.Context, tenantID uuid.UUID, opts importservice.ExportOptions) ([]byte, error) {
+	m.exportOpts = opts
 	return m.exportData, nil
+}
+
+func (m *importServiceMock) PlanApply(ctx context.Context, tenantID uuid.UUID, req *models.MonitorApplyRequest) (*models.MonitorApplyPlan, error) {
+	return m.plan, m.err
+}
+
+func (m *importServiceMock) Apply(ctx context.Context, tenantID uuid.UUID, req *models.MonitorApplyRequest) (*models.MonitorApplyResult, error) {
+	return m.result, m.err
 }
 
 func TestHandlers_Export(t *testing.T) {

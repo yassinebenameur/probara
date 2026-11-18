@@ -333,8 +333,15 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		view.FooterText = fmt.Sprintf("© %d %s", time.Now().UTC().Year(), data.Title)
 	}
 	if data.SubscribeFormEnabled {
+		// Host-independent like the feed link (the render is cached per
+		// slug and served on every host): the page's canonical origin, its
+		// custom domain when it has one, else the platform path.
 		view.SubscribeEnabled = true
-		view.SubscribeAction = sessionCookiePath(data.Slug) + subscribeSuffix
+		base := strings.TrimRight(strings.TrimSpace(data.CanonicalURL), "/")
+		if base == "" {
+			base = "/public/status/" + data.Slug
+		}
+		view.SubscribeAction = base + subscribeSuffix
 	}
 
 	sections := data.Sections

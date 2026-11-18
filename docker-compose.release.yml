@@ -112,8 +112,8 @@ services:
       SMTP_FROM: "${SMTP_FROM:-}"
       SMTP_FROM_NAME: "${SMTP_FROM_NAME:-}"
       APP_BASE_URL: "${APP_BASE_URL:-}"
-      # Status-page subscriber mail links back to the pages there; the same
-      # value the status-page service gets below.
+      # Status-page subscriber mail links back to the pages there (or their
+      # custom domain); the same value the status-page service gets below.
       STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
       STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:?STATUS_PAGE_INTERNAL_TOKEN is required (scripts/install.sh generates .env)}"
     ports: !reset []

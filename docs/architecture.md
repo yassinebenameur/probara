@@ -11,7 +11,7 @@ website (`website/`) are separate applications.
 | Component | Responsibilities | Data access |
 |---|---|---|
 | `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, SLA definitions and reports (live, issued, PDF/CSV) and their scheduled emails (background report runner), notification configuration, templates, locations, push and OTLP ingestion, Kubernetes discovery inventory and coverage; the MCP endpoint and its OAuth authorization server (tools re-dispatched through the REST router) | PostgreSQL and NATS |
-| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging; roll repeating maintenance occurrences forward to their horizon | PostgreSQL and NATS |
+| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging (deleted monitors and deleted workspaces); roll repeating maintenance occurrences forward to their horizon | PostgreSQL and NATS |
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
 | `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, domain expiry, mesh, and offline-location alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
@@ -96,6 +96,21 @@ retried for the same slot (a lost PubAck, or a failed reschedule that rolls the
 batch back) is absorbed by the stream's 2-minute duplicate window, so
 side-effecting checks are at-most-once across redelivery and dispatch retries
 alike. Run-now publishes without one: it is a deliberate manual trigger.
+
+Status page custom domains (`shared/pagedomains`) are written and verified
+by the API only: its domain runner, which every replica runs, claims due
+`status_page_domains` rows with `FOR UPDATE SKIP LOCKED` and a lease, checks
+their TXT and CNAME records with DNS lookups only, and publishes
+`status_page_domains_changed` on `statuspage.updates` when a domain starts or
+stops being served. The status-page service holds the verified domains in an
+in-memory table (one read query, reloaded on that event, on page updates, and
+every 30 s) and rewrites a request on a verified custom domain onto its
+page's slug paths before any route, so the visibility gate covers it; the
+platform routes answer only on platform hosts (`STATUS_PAGE_BASE_URL`,
+`STATUS_PAGE_PLATFORM_HOSTS`) and internal names, and every other host gets
+not found. Correctness never depends on the event, which only shortens the
+delay. A hostname is verified for one page at most; unverified claims
+coexist and the first to verify supersedes the rest.
 
 Private-location workers use location-scoped broker credentials and encrypted
 monitor configurations. The platform validates location result provenance
@@ -249,6 +264,25 @@ scheduler's hourly roll (`maintenance_occurrences.go`, under its own session
 advisory lock, locking each window row as API edits do) keeps every
 repeating window materialized that far ahead. Started occurrences are kept as
 history and never rewritten.
+
+Deleting a workspace (tenant) is a soft delete: the API stamps
+`tenants.deleted_at` (superadmins only), and from that commit every service
+refuses the workspace where it resolves or iterates tenants, through the one
+predicate `shared/tenancy.LiveTenantSQL` (credential lookups, the status-page
+read path, scheduler dispatch/watchdog/mesh/maintenance roll, the check-result
+insert, every alerter evaluator and the notification claim, the worker's
+channel load and AI eligibility). Its open alerts are left as they are, never
+resolved or paged. The scheduler's workspace purge
+(`scheduler/internal/scheduler/purger_tenants.go`, its own session advisory
+lock, separate from the monitor purge and rollups) then deletes the data in
+bounded batches, table by table in `workspacePurgePlan` order, and deletes the
+tenant row last, only after a full pass found every table empty. Each pass
+starts by blanking the secret-bearing columns (`workspaceScrubPlan`: channel
+configs, monitor config secrets and push tokens, location worker
+credentials, the legacy AI key), so credentials do not wait at rest behind
+the history tables. The predicate names `tenants.deleted_at`, so migration
+000116 must run before the binaries that use it. The API never deletes a
+tenant row. Audit log entries are kept.
 
 Analytics choose raw, rollup, or interval-based calculations according to
 window coverage and the existing state semantics. Raw analytics stream

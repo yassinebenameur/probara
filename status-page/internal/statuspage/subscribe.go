@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/pageaccess"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/securityheaders"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
@@ -185,12 +186,12 @@ func (h *Handlers) handleSubscription(w *accessWriter, r *http.Request, slug, re
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return true
 	}
-	view := h.subscriptionBase(acc, slug)
+	view := h.subscriptionBase(acc, pagePath(r, slug))
 	if pageaccess.Gated(acc.Visibility) || !h.canForward() {
 		h.renderSubscription(w, http.StatusNotFound, view.with("unavailable"))
 		return true
 	}
-	if !h.pushOriginOK(r) {
+	if !h.subscribeOriginOK(r) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return true
 	}
@@ -257,7 +258,7 @@ func (h *Handlers) handleSubscriptionLink(w http.ResponseWriter, r *http.Request
 		h.renderSubscription(w, http.StatusServiceUnavailable, view.with("unavailable_now"))
 		return
 	}
-	if !h.pushOriginOK(r) {
+	if !h.subscribeOriginOK(r) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -355,8 +356,22 @@ func statusFor(apiStatus int) int {
 	return apiStatus
 }
 
-func (h *Handlers) subscriptionBase(acc *pageAccess, slug string) subscriptionView {
-	v := subscriptionView{Title: acc.Title, Accent: template.CSS("#ff5a24"), PageURL: sessionCookiePath(slug), Nonce: statustemplate.NoncePlaceholder}
+// subscribeOriginOK is pushOriginOK, also accepting a post from a platform
+// host: the cached page's form targets the page's canonical origin (its
+// custom domain when it has one), so a visitor reading the page on the
+// platform host posts across to it.
+func (h *Handlers) subscribeOriginOK(r *http.Request) bool {
+	if h.pushOriginOK(r) {
+		return true
+	}
+	u, err := url.Parse(strings.TrimSpace(r.Header.Get("Origin")))
+	return err == nil && h.isPlatformHost(pagedomains.HostFromHeader(u.Host))
+}
+
+// subscriptionBase is a page's subscription view, pageURL the page's path
+// as the visitor reaches it (pagePath).
+func (h *Handlers) subscriptionBase(acc *pageAccess, pageURL string) subscriptionView {
+	v := subscriptionView{Title: acc.Title, Accent: template.CSS("#ff5a24"), PageURL: pageURL, Nonce: statustemplate.NoncePlaceholder}
 	if hexColor.MatchString(acc.PrimaryColor) {
 		// Validated above, so it cannot break out of the declaration.
 		v.Accent = template.CSS(acc.PrimaryColor)

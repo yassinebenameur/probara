@@ -91,7 +91,7 @@ func (h *Handlers) GetEdgeHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, map[string]interface{}{"points": points})
+	httpx.WriteJSON(w, http.StatusOK, models.MeshEdgeHistoryResponse{Points: points})
 }
 
 // ProbeNow handles POST /api/v1/mesh/probe — one ephemeral probe of a

@@ -8,6 +8,7 @@ import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import KioskTokensPanel from '@/components/status-pages/KioskTokensPanel';
 import SubscribersPanel from '@/components/status-pages/SubscribersPanel';
+import DomainsPanel from '@/components/status-pages/DomainsPanel';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
@@ -119,6 +120,17 @@ export default function EditStatusPagePage() {
       <SubscribersPanel statusPage={statusPage} />
 
       <KioskTokensPanel statusPage={statusPage} />
+
+      {/* A domain turning verified or being removed moves public_url, which
+          the links above and the Share panel prefer. */}
+      <DomainsPanel
+        statusPage={statusPage}
+        onChanged={() => {
+          getStatusPage(id)
+            .then(setStatusPage)
+            .catch(() => {});
+        }}
+      />
     </Page>
   );
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -123,7 +124,11 @@ func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, m
 		FROM locations l
 		WHERE l.id = $1
 		  AND l.enabled = TRUE AND l.deleted_at IS NULL
-		  AND l.worker_credential IS NOT NULL`
+		  AND l.worker_credential IS NOT NULL
+		  -- A deleted workspace's private locations are cut off: their
+		  -- results and heartbeats are refused here, as their NATS
+		  -- connections are at the authorization callout.
+		  AND ` + tenancy.LiveTenantSQL("l.tenant_id")
 	args := []any{locationUUID}
 	if tenantID != "" {
 		tenantUUID, err := uuid.Parse(tenantID)

@@ -289,10 +289,29 @@ cd /opt/probara && docker compose ps     # .env names both Compose files`,
             'Client IPs: every browser request reaches the API through the frontend, so without help the API would see one client for everyone. `edge` replaces any `X-Forwarded-For` with the client it resolves and drops every other client-address header (`X-Real-IP`, `True-Client-IP`, `Forwarded`, `X-Client-IP`, `CF-Connecting-IP`, `X-Cluster-Client-IP` and similar); the frontend, reachable only through `edge`, forwards that value, and the API trusts exactly the frontend\'s address (`TRUSTED_PROXY_CIDRS` = `PROBARA_FRONTEND_IP/32`, default `172.31.213.10`). `edge`, the frontend and the API share a separate `probara-front` network that the worker is not on, because the worker sends tenant-defined HTTP requests with arbitrary headers and must not be able to speak to a trusted proxy. If `probara-front`\'s subnet (`PROBARA_FRONT_SUBNET`, default `172.31.213.0/24`) collides with a host network, change it together with `PROBARA_FRONTEND_IP` (inside the subnet) and `PROBARA_FRONT_IP_RANGE` (default `172.31.213.128/25`, the range dynamic addresses come from, which must exclude the frontend\'s). A client cannot choose its address by sending its own header.',
             'Behind your own TLS proxy or load balancer, set `PROBARA_TRUSTED_PROXIES` (space-separated CIDRs) to its address as the `edge` container sees it, or every client looks like that proxy; `edge` then takes the rightmost untrusted address of the incoming chain, so that proxy must append to `X-Forwarded-For`. Where Docker\'s userland proxy handles published ports (Docker Desktop, rootless), every connection arrives from the network gateway and real client addresses are lost before `edge`; on Linux with the default iptables publishing they are preserved.',
             'Private locations: the broker\'s [websocket listener](#nats-websocket) is published on `127.0.0.1:8443` (`NATS_WEBSOCKET_PUBLISH`) for a TLS reverse proxy on the host to front on 443. Set `PUBLIC_NATS_URL=wss://<that host>` in `.env` to enable the deploy snippets.',
+            'Status page [custom domains](/docs/status-pages/#custom-domains): set `STATUS_PAGE_BASE_URL` (the installer writes it empty, meaning `http://localhost:8082`) to your public status URL and `STATUS_PAGE_CNAME_TARGET` in `.env` to the host your status pages are published on — the API keeps custom domains off until the base URL (or `STATUS_PAGE_PLATFORM_HOSTS`) is a public name — and terminate TLS for each custom domain in your own reverse proxy in front of the status-page port, passing the original `Host` header (see the example below). The bundled `edge` proxy serves only the UI.',
             'Local AI runs through the `local-ai` Compose profile, which the script puts in `COMPOSE_PROFILES`. To run without it, set `COMPOSE_PROFILES=` and `LOCAL_AI_DISABLED=true` in `.env`.',
             'SMTP: fill `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` and `APP_BASE_URL` in `.env`; the release override passes them to the API, worker and alerter.',
             'Container names are fixed (`probara-*`), so one host runs either this stack or the development stack, not both. Needs Docker Compose 2.24.4 or newer.',
           ],
+        },
+        {
+          type: 'code',
+          language: 'text',
+          title: 'Caddyfile on the host: status pages and their custom domains over HTTPS',
+          code: `# The platform's status host; also the CNAME target
+# (STATUS_PAGE_BASE_URL=https://status.example.com and
+# STATUS_PAGE_CNAME_TARGET=status.example.com in .env).
+status.example.com, status.customer.example {
+	# Caddy obtains a certificate per name and forwards the original Host,
+	# which is what selects a page on its custom domain.
+	reverse_proxy 127.0.0.1:8082
+}`,
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Set `STATUS_PAGE_BASE_URL` to the platform\'s public status URL: with it, the status service serves its pages only on that host (and `STATUS_PAGE_PLATFORM_HOSTS`), so adding a custom domain to the site list before it is verified is harmless — it answers not found until then, and again if the domain fails or is removed in the UI. With the `localhost` default, the service cannot tell its own hosts from others and serves every page on any host but a verified domain: never route a custom domain to it like that. Caddy\'s certificate request for a domain succeeds only once its CNAME resolves to this host. Session cookies on custom domains are always `Secure`.',
         },
       ],
     },
@@ -607,7 +626,32 @@ kubectl -n probara get jobs`,
             [
               '`statusPage.baseUrl`',
               'Empty',
-              'Passed as `STATUS_PAGE_BASE_URL`: the public origin used for status pages\' canonical links, `og:url`, feed and summary links, and push deep links. Empty omits the canonical link and `og:url` and keeps the other links root-relative.',
+              'Passed as `STATUS_PAGE_BASE_URL`: the public origin used for status pages\' canonical links, `og:url`, feed and summary links, and push deep links (a page with a verified [custom domain](/docs/status-pages/#custom-domains) uses that domain instead). Empty omits the canonical link and `og:url` and keeps the other links root-relative. Also rendered into the API, which refuses its host as a custom domain.',
+            ],
+            [
+              '`statusPage.cnameTarget`',
+              'Empty (host of `baseUrl`)',
+              'Host every status page [custom domain](/docs/status-pages/#custom-domains) must CNAME to (`STATUS_PAGE_CNAME_TARGET` on the API). Empty uses the host of `statusPage.baseUrl`; with both empty, custom domains are off.',
+            ],
+            [
+              '`statusPage.customDomains`',
+              '`[]`',
+              'One `{host, tlsSecretName}` per custom domain. With `ingress.enabled` the chart renders an Ingress per domain (`<release>-sp-<host>`) routing `/` to the status-page service, with the domain\'s TLS Secret and `ingress.className`/`ingress.annotations`. The render fails for an entry without `host` or `tlsSecretName`, a host also in `ingress.hosts`, a host listed twice, or custom domains without any platform host (`baseUrl`, `ingress.hosts` or `platformHosts`). Each host must also be added and verified on its page in the UI; until then, and after it fails or is removed there, its Ingress answers only not-found.',
+            ],
+            [
+              '`statusPage.customDomainsClusterIssuer`',
+              'Empty',
+              'cert-manager ClusterIssuer set as `cert-manager.io/cluster-issuer` on the custom-domain Ingresses, so cert-manager issues each domain\'s certificate into its `tlsSecretName`; it replaces an issuer named in `ingress.annotations` there. Empty: no annotation of its own (provide the Secrets yourself, or put the issuer in `ingress.annotations`).',
+            ],
+            [
+              '`statusPage.platformHosts`',
+              '`[]`',
+              'Hosts that serve every page under `/public/status/`, besides `statusPage.baseUrl`\'s host and `ingress.hosts` (all three rendered as `STATUS_PAGE_PLATFORM_HOSTS`). Any other public hostname routed to the status service gets a verified custom domain\'s page or not found. Add the name of any proxy of your own that serves status pages.',
+            ],
+            [
+              '`statusPage.trustForwardedHost`',
+              '`false`',
+              '`STATUS_PAGE_TRUST_FORWARDED_HOST`: match custom domains on `X-Forwarded-Host` instead of `Host`, believed only from `trustedProxyCIDRs` peers. Only for a proxy in front of the Ingress that rewrites `Host`.',
             ],
             [
               '`statusPage.service.*`',
@@ -637,7 +681,7 @@ kubectl -n probara get jobs`,
             [
               '`ingress.enabled`, `.className`, `.annotations`, `.hosts`, `.tls`',
               'Disabled; nginx; example frontend and status hosts',
-              'The current routing template gives `/` to frontend and `/api` to API; see warning below.',
+              'The current routing template gives `/` to frontend and `/api` to API; see warning below. One Ingress per host, each its own YAML document.',
             ],
             [
               '`trustedProxyCIDRs`',
@@ -1031,10 +1075,24 @@ api:
         },
         {
           type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to workspace management: migrate first',
+          text:
+            'Workspace delete (migration 000116 adds `tenants.deleted_at`) is checked by API-key validation, workspace lists and every scheduler, alerter, worker and status-page loop, which read that column directly so the database can plan them well. Until the migration has run, new pods fail those queries (API keys are refused, checks stop being dispatched). Run the migrations first (the `migrate` command or Job, before upgrading the chart, whose own migration Job is a post-upgrade hook), then roll every service, as for the maintenance migrations above. Session sign-in tolerates the old schema and never grants more access because of it.',
+        },
+        {
+          type: 'callout',
           tone: 'info',
           title: 'Upgrading to a release with chain expiry, multi-echo ping and failure capture',
           text:
             'Three check changes apply to existing monitors without a save. Certificate expiry now counts the whole presented chain: every HTTPS, SIP-over-TLS and TLS-wrapped TCP monitor with `tls_min_days_valid` alerts on the earliest expiry among the leaf and the intermediates the server sends (never a trust-store root), so a monitor whose leaf is fine may open a `tls_expiry` alert for an expiring intermediate on its first check; the alert names that certificate and its date. Every ping monitor now sends three echoes 250 ms apart and still fails only when all are lost, so one dropped packet no longer fails it; a monitor with a short timeout gets its echoes squeezed to fit rather than failing, and ping targets now go through the worker\'s network policy, so with `HTTP_BLOCK_PRIVATE_IPS=true` a ping of a private address outside `HTTP_ALLOWED_CIDRS` turns into an `error`. Capacity: a healthy ping holds a worker slot for about half a second and a lost echo for about 1.5 seconds (the gaps plus a 1-second wait for the last reply, never the monitor\'s timeout), where a single echo used to return at once; a fleet running many ping monitors may need more `WORKER_CONCURRENCY` or replicas. Workers need the [ping sysctl](#ping-sockets): the chart sets it, Docker 20.10+ has it, rootless hosts must allow it on the host. Failed HTTP checks now store their redacted response with the result, which grows those rows by up to 16 KiB for the 30 days raw results are kept; list and history reads leave it out.',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to status page custom domains: migrate first, and new Ingress objects',
+          text:
+            'Migration 000120 adds `status_page_domains`, which the new API reads in every status page response (`public_url`) and the new status service reads at start. Run it before the services roll (the `migrate` command or Job against the database, before upgrading the chart, whose own migration Job is a post-upgrade hook); until it has run, new API pods fail status page reads. The chart\'s Ingress template now emits each `ingress.hosts` entry as its own YAML document: earlier charts ran the hosts together, so only the **last** host\'s Ingress existed. An upgrade therefore creates `<release fullname>-<host with dots as dashes>` for every other host — with the default values `<release fullname>-probara-example-com` — which an admission webhook rejects if you created an Ingress for that host by hand, and which makes cert-manager request a certificate if `ingress.annotations` names an issuer. Delete hand-made duplicates first, or remove those hosts from `ingress.hosts`. The status service now also serves its pages only on its platform hosts (`statusPage.baseUrl`, `ingress.hosts`, `statusPage.platformHosts`): add any other hostname you route to it to `statusPage.platformHosts` (`STATUS_PAGE_PLATFORM_HOSTS`).',
         },
         {
           type: 'callout',

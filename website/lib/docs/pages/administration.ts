@@ -49,7 +49,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Administrator access tokens default to a short lifetime (15 minutes in the standard configuration), while refresh tokens default to 30 days and rotate on use. A rotated refresh token stays valid for a 60-second reuse window so concurrent refreshes from parallel requests or multiple tabs do not end the session. Disabled users are checked against database state on authenticated requests.",
+            "Administrator access tokens default to a short lifetime (15 minutes in the standard configuration), while refresh tokens default to 30 days and rotate on use. A rotated refresh token still earns an access token (never another refresh token) for 60 seconds, so concurrent refreshes from parallel requests or multiple tabs do not end the session; presented again after that window, it signs its session out. Each sign-in is one [session](#sign-in-lockout-sessions) across those rotations, checked on every request, so signing a session out takes effect at once. Disabled users are checked against database state on authenticated requests.",
         },
       ],
     },
@@ -155,6 +155,22 @@ export const ADMINISTRATION_PAGE: DocPage = {
       ],
     },
     {
+      id: "sign-in-lockout-sessions",
+      title: "Sign-in lockout and sessions",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Ten failed password sign-ins in a row lock that account's password sign-in for 15 minutes; a successful sign-in resets the count, a failure more than 24 hours after the previous one starts a new count, and the lock lifts on its own. The sign-in page answers a locked account exactly like a wrong password, so the user is not told they are locked beyond the rule the page states. Users shows a **Locked** badge, and the user's page shows when the lock ends, the current run of failures, and **Unlock sign-in** (`POST /api/v1/users/{id}/unlock`, MCP `unlock_user`), which lifts the lock and clears the count. Unlocking and locking are audited (`user.unlock`, `auth.lockout`). SSO sign-ins are never locked. What bounds abuse of the lock, and its anti-enumeration design, are in [Security](/docs/security/#sign-in-lockout-sessions).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Every user manages their own sessions under **Account → Sessions** (the account menu in the sidebar): each sign-in, password or SSO, with its browser, client address, sign-in time and last activity, this device marked; sign out one, or everywhere else. A superadministrator sees and signs out any user's sessions on that user's page (`GET`/`DELETE /api/v1/users/{id}/sessions`, `DELETE /api/v1/users/{id}/sessions/{sessionId}`; MCP `list_user_sessions`, `revoke_user_session`, `revoke_user_sessions`). A signed-out session stops working on its next request. Setting a user's password signs them out everywhere (your own: everywhere else); deleting a user ends all their sessions; a lockout, an unlock and role or membership changes end none. Signing out an SSO session does not sign the user out of the identity provider. API keys and MCP connections are not sessions and are managed under Settings.",
+        },
+      ],
+    },
+    {
       id: "tenant-context",
       title: "Tenant context",
       blocks: [
@@ -166,7 +182,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "API keys ignore arbitrary tenant selection and remain pinned to their creation tenant. The tenant-list endpoint is for administrator sessions and returns only allowed tenant context. Public tenant create/update/delete management is not exposed through the normal product API.",
+            "API keys ignore arbitrary tenant selection and remain pinned to their creation tenant. The tenant-list endpoint is for administrator sessions and returns only allowed tenant context. Superadministrators create, rename and delete workspaces; see [Workspaces](#workspaces).",
         },
         {
           type: "callout",
@@ -174,6 +190,60 @@ export const ADMINISTRATION_PAGE: DocPage = {
           title: "Never reuse a cross-tenant cache key",
           text:
             "External integrations should include tenant identity in caches, queues, and idempotency keys even when resource UUIDs appear globally unique.",
+        },
+      ],
+    },
+    {
+      id: "workspaces",
+      title: "Workspaces",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Only superadministrators manage workspaces: the **Workspaces** page (listed with each workspace's member and monitor counts), the **New workspace** entry at the end of the workspace switcher, `POST /api/v1/tenants`, `PATCH /api/v1/tenants/{id}`, `DELETE /api/v1/tenants/{id}` and `GET /api/v1/tenants/overview`, or the matching [MCP](/docs/mcp/) tools. Members and API keys are refused. Each change is audited as `tenant.create`, `tenant.rename` or `tenant.delete` with the name, as a platform event that stays visible after the workspace is gone.",
+        },
+        {
+          type: "list",
+          items: [
+            "**Names** are 1–100 characters with no control characters, trimmed, and unique among live workspaces (exact match, so `Ops` and `ops` can coexist). A deleted workspace's name is free again at once.",
+            "**A new workspace starts empty**: no monitors or channels, the shared worker fleet, default notification settings, workspace AI on, and no members. Superadministrators act in every workspace without a membership; add members on the [user](#bootstrap-users) pages. Creating one from the switcher or the Workspaces page switches to it.",
+            "**Rename** changes only the name; IDs, keys and links keep working.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Delete** is permanent and has no undo window. The confirmation must repeat the workspace's name (`confirm_name` in the API). The default workspace cannot be deleted, nor, while SSO just-in-time provisioning is on, the workspace new SSO users join (`OIDC_JIT_DEFAULT_TENANT_ID`), nor the last remaining workspace.",
+        },
+        {
+          type: "table",
+          columns: ["When", "What happens"],
+          rows: [
+            [
+              "At once",
+              "The workspace disappears from every list and switcher, and its memberships, SSO group mappings and MCP connections are removed. Every credential scoped to it is refused: sessions and MCP tokens get `404 workspace_not_found` on its routes (superadministrators too, and still after the purge: the same answer as for an ID that never existed), its API keys (OTLP ingest included) get `401`, push URLs and discovery collector tokens `404`, its private-location workers are refused by the broker on their next connection and their results and heartbeats are dropped, and acknowledge and report-unsubscribe links read as invalid.",
+            ],
+            [
+              "Within seconds",
+              "Its monitors are no longer dispatched, results still in flight are discarded, and the absence watchdog, mesh probes and maintenance windows skip it. Its status pages stop being served once the status-page cache expires (`STATUS_PAGE_CACHE_TTL`, 10 seconds by default) visitor push and subscriber email stop, and its subscription links answer as invalid. The alerter neither evaluates nor notifies for it: open alerts are left as they are and are not resolved (so its channels hear nothing), and notifications still queued are dropped. Scheduled SLA reports and AI analyses stop.",
+            ],
+            [
+              "In the background",
+              "Within the first purge run (seconds after the delete, every `MONITOR_PURGE_INTERVAL_SECONDS`) the scheduler blanks its stored secrets: channel credentials, monitor credentials and push tokens, private-location worker credentials. It then erases the data in bounded batches, table by table (API keys, tokens and status pages first, then history, then configuration), and deletes the workspace row last. Every run handles at most `MONITOR_PURGE_MAX_ROWS_PER_RUN` rows in `MONITOR_PURGE_BATCH_SIZE` batches, so a large workspace takes several runs; progress shows in the scheduler log and the `workspace_purge_*` metrics ([Operations](/docs/operations/#retention)).",
+            ],
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "What is kept",
+          text:
+            "Audit log entries about the workspace are kept and age out under `AUDIT_RETENTION_DAYS`. Status page slugs are unique across the installation, so a deleted workspace's slugs become free once the purge has removed its pages, usually within the first run. Users are platform accounts and are never deleted with a workspace.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A browser whose selected workspace is deleted switches to another one the user can open on its next request. A member whose only workspace was deleted keeps the account and can still sign in, but sees “You are not a member of any workspace” until a superadministrator adds a membership. Memberships and SSO group mappings can only name a live workspace: a deleted one is refused as “workspace not found”.",
         },
       ],
     },
@@ -630,7 +700,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration, tags, retry thresholds, and group membership names. Exports no longer write `alert_policy_names`; a bundle from an older release that still carries the field imports normally and the field is ignored. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
+            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration (secrets and URL credentials masked), tags, retry thresholds, and group membership names; when any monitor has a config-as-code key it is version 2, which adds each key and, by key, the keyed members and dependencies (otherwise version 1, which older releases import). `keyed=true` (the Export dialog's \"Monitors with a key\") exports only keyed monitors, the file [apply](/docs/monitors/#config-as-code) manages. Import reads versions 1 and 2, does not set keys, and leaves masked URL credentials out with a preview warning. Exports no longer write `alert_policy_names`; a bundle from an older release that still carries the field imports normally and the field is ignored. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
         },
         {
           type: "callout",

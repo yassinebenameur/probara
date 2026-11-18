@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs build build-collector-static kuma-export seed-demo seed-demo-targets seed-demo-stop seed-demo-teardown clean ps healthcheck migrate test test-unit test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop logs-api logs-scheduler logs-worker logs-status rebuild db-shell db-backup db-restore
+.PHONY: help up down restart logs build build-collector-static kuma-export seed-demo seed-demo-targets seed-demo-stop seed-demo-teardown clean ps healthcheck migrate test test-unit test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop logs-api logs-scheduler logs-worker logs-status rebuild db-shell db-backup db-restore openapi
 
 # Local AI runs beside the platform, never in its way: its image build fails on
 # purpose for an artifact that is not release-approved, and Compose aborts a
@@ -51,6 +51,7 @@ help:
 	@echo "Testing and CI:"
 	@echo "  make test        - Run all tests with race detection and coverage"
 	@echo "  make test-unit   - Run the fast suite without external services"
+	@echo "  make openapi     - Regenerate api/openapi.json from the router and MCP catalog"
 	@echo "  make test-cover  - Run tests and open coverage report in browser"
 	@echo "  make lint        - Run go vet and fmt checks"
 	@echo "  make fmt         - Check Go formatting (gofmt -l; does not rewrite)"
@@ -310,6 +311,11 @@ test:
 
 test-unit:
 	go test -race -tags=unit $$(go list -tags=unit ./... | grep -v /scripts)
+
+# The REST API's OpenAPI document (api/openapi.json) is generated from the MCP
+# tool catalog bound to the router; TestOpenAPIGolden fails when it is stale.
+openapi:
+	go test ./api/internal/api -run '^TestOpenAPIGolden$$' -count=1 -update -v
 
 test-cover: test
 	@echo "Opening coverage report..."

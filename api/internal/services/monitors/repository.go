@@ -93,12 +93,12 @@ func (r *PostgresRepository) CreateInTx(ctx context.Context, tx *sql.Tx, monitor
 			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
 			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum,
-			recovery_threshold
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL, $15, $16, $17, $18, $19, $20)
+			recovery_threshold, key
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL, $15, $16, $17, $18, $19, $20, $21)
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state, recovery_threshold, consecutive_successes
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state, recovery_threshold, consecutive_successes, key
 	`
 
 	var tags []string
@@ -109,12 +109,12 @@ func (r *PostgresRepository) CreateInTx(ctx context.Context, tx *sql.Tx, monitor
 		monitor.Enabled, pq.Array(monitor.Tags), monitor.AgentID, monitor.PushToken, monitor.NextRunAt,
 		monitor.CreatedAt, monitor.UpdatedAt,
 		monitor.ConsecutiveFailuresThreshold, monitor.NotificationMode, monitor.MemberAlertRollup, monitor.DependencySuppression, monitor.LocationQuorum,
-		monitor.RecoveryThreshold,
+		monitor.RecoveryThreshold, monitor.Key,
 	).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
-		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState, &monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState, &monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses, &monitor.Key,
 	)
 
 	if err != nil {
@@ -141,7 +141,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state, recovery_threshold, consecutive_successes,
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state, recovery_threshold, consecutive_successes, key,
 			` + maintenance.InMaintenancePredicate("monitors") + ` AS in_maintenance,
 			` + maintenance.MaintenanceUntilExpr("monitors") + ` AS maintenance_until
 		FROM monitors
@@ -155,7 +155,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
-		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState, &monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState, &monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses, &monitor.Key,
 		&monitor.InMaintenance, &monitor.MaintenanceUntil,
 	)
 
@@ -208,7 +208,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state, recovery_threshold, consecutive_successes,
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state, recovery_threshold, consecutive_successes, key,
 			%s AS in_maintenance,
 			%s AS maintenance_until
 		FROM monitors
@@ -234,7 +234,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 			&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 			pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
-			&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState, &monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses,
+			&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState, &monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses, &monitor.Key,
 			&monitor.InMaintenance, &monitor.MaintenanceUntil,
 		)
 		if err != nil {
@@ -283,7 +283,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state, recovery_threshold, consecutive_successes
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state, recovery_threshold, consecutive_successes, key
 	`, setClause, whereArgIndex, whereArgIndex+1)
 
 	var tags []string
@@ -292,7 +292,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
-		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState, &monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState, &monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses, &monitor.Key,
 	)
 
 	if err != nil {

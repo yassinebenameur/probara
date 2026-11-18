@@ -126,6 +126,30 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
+- **Deleted workspaces are refused at the shared lookup.** Workspace delete
+  is a soft delete (`tenants.deleted_at`, superadmins only,
+  `api/internal/services/tenants/workspaces.go`); the API never runs
+  `DELETE FROM tenants`. Every query that resolves a credential or tenant, or
+  iterates tenant data in a background loop, adds
+  `shared/tenancy.LiveTenantSQL` (or `DeletedTenantSQL` where an unknown ID
+  must stay distinct), filtered before any `LIMIT`; the alerter's
+  notification claim and the check-result insert (`monitorstate.insertResult`)
+  are the last gates. The fragments name `tenants.deleted_at` so the planner
+  has statistics: migration 000116 must run before the binaries serve
+  (upgrade notes in `website/lib/docs/pages/deployment.ts`). The one tolerant
+  read is the auth `identityQuery` (`to_jsonb`), because its missing-schema
+  fallback treats every admin as a superadmin; never add another. It answers
+  `404 workspace_not_found` for any workspace the caller cannot open
+  (deleted, purged, unknown, or a member's non-membership). The scheduler's
+  workspace purge (`scheduler/internal/scheduler/purger_tenants.go`, own
+  advisory lock) removes the data, blanking secret columns first
+  (`workspaceScrubPlan`): a new table holding tenant data (a `tenant_id`
+  column or a foreign key into such a table) goes into `workspacePurgePlan`
+  (before the tables it references) or `workspacePurgeExempt`, gets a row in
+  the test's `workspaceFixtureSQL`, and any secret column gets a scrub step
+  (`TestWorkspacePurgePlanCoversEveryTenantTable`,
+  `TestWorkspacePurge_RemovesEveryRowAndSparesOtherWorkspaces`,
+  `TestWorkspacePurge_ScrubsSecretsFirst`).
 - API routes are registered by the `mount*Routes` functions in
   `api/internal/api/routes_*.go`; `NewServer` (`server.go`) builds the
   services and handlers and calls them in order.
@@ -356,8 +380,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   before its first write, ascending id, one pass (`LockMonitorsTx`: FOR
   UPDATE for monitors changed or versioned, edge sources included; FOR KEY
   SHARE for edge targets); deletes lock the monitors they rewrite the same
-  way. The FOR UPDATE row lock also serializes version numbering; there are
-  no advisory locks. Snapshots are
+  way. The FOR UPDATE row lock also serializes version numbering, with no
+  advisory lock; apply's per-workspace advisory lock is taken before any row
+  lock (below). Snapshots are
   masked with `secrets.MaskStoredMonitorConfig`; restore never writes a
   secret from a version (`restoreConfig`) and refuses another type. A new
   top-level setting accepted by `UpdateMonitorRequest` is one
@@ -405,6 +430,22 @@ simple path. Records you refuse to translate go in `SkippedRows`, never as
 rows: `detectAndSuggestTypes` defaults unknown types to `http` and the UI
 auto-applies that suggestion, so an emitted row for an untranslatable monitor
 becomes a silent bad import.
+
+**Config-as-code apply** (`POST /monitors/apply[/plan]`, `apply.go`/
+`apply_execute.go` here) is another monitor write path, built on the same
+row builders (`portableRow`, `build*RequestFromConfig`) and the monitors,
+groups and dependencies services (versions source `apply`). One request is
+one `InTx` transaction that first takes `pg_advisory_xact_lock` per
+workspace on that transaction (released by commit or rollback; never a
+session lock on a pooled connection), re-plans, locks rows in lock order
+before the first write, and re-checks the locked monitors against the plan
+(`checkLockedUnchanged`). Prune deletes keyed monitors (`monitors.key`)
+only, within `prune_scope` when given. Secrets are compared only inside the
+monitors service (`PlanConfigWrites`, which also resolves a document's
+masked URL credentials and synthetic step credentials against the stored
+config so the same file converges), and a plan compares a literal with the
+stored value only for callers with write access. A field added to the
+portable export is applied only once the plan's `diff` handles it.
 
 **Group membership is the junction table**, not `config.monitor_ids`.
 `Monitor.MemberIDs`, group alert roll-up, and the dashboards all read
@@ -687,6 +728,22 @@ or imported groups come back empty. Any other path that creates groups through
   `RawPath`, as chi routes), so new routes need no list. Never echo `Origin` in a handler. The env rides
   Compose and the chart's `trustedProxyCIDRs` + `security:` block
   (`monitoring-platform.edgeEnv`) together.
+- **Session identity**: one `admin_session_families` row per sign-in
+  (password or SSO); refresh tokens rotate inside it and the access JWT's
+  `sid` claim names it. The family's `revoked_at` is the only authority:
+  `AuthMiddleware` checks it per cookie request (`middleware/session.go`,
+  one PK lookup, no cache) and `/auth/me` too, so never add a path that
+  trusts a session JWT without it. Revocation lives in
+  `api/internal/services/adminauth/sessions.go` (`RevokeSession`,
+  `RevokeUserSessions`); a rotated refresh token reused past 60 s revokes
+  its family. Password sign-in lockout (10 failures → 15 min, on
+  `admin_users`) is `adminauth/lockout.go`: every refusal answers alike,
+  and a second sign-in factor counts through `RecordFailedAttempt`. What
+  revokes what: `docs/auth-and-rbac.md`. Long-lived responses (the alert
+  SSE stream) re-check their credential with `middleware.StillAuthorized`
+  each heartbeat and end at `CredentialExpiry`; a new stream must too. The
+  `admin_sessions_default_family` trigger (000118) is rolling-deploy
+  compatibility only: drop it in a later release's migration.
 
 ## MCP server
 
@@ -712,6 +769,9 @@ or imported groups come back empty. Any other path that creates groups through
   session only, outside the write gate, with their own audit events.
 - `tools/list` filtering by capability is UX; enforcement is the inner
   dispatch. Install scripts embed only API keys (`embeddableAPIKey`).
+- A handler that refuses API keys without a router role gate marks its entry
+  `SessionOnly` (the tenant list); the gate walk cannot see it, and both the
+  tool list and the OpenAPI security read the flag.
 
 ## Kubernetes discovery
 
@@ -1005,9 +1065,10 @@ or imported groups come back empty. Any other path that creates groups through
   `STATUS_PAGE_INTERNAL_TOKEN` (`pageaccess.ForwardTokenHeader`; the API's
   subscribe/confirm answer nothing else, one-click unsubscribe stays public),
   per-client `subscribeThrottle`, nothing identifying the visitor forwarded.
-  The subscribe form is gated; the `/subscription…` link routes run before
-  the gate and never read the page (row class `classSubscriptionLink`), so
-  unsubscribing survives a visibility change. Public and unlisted pages only;
+  The subscribe form is gated; on the platform host the `/subscription…`
+  link routes run before the gate and never read the page (row class
+  `classSubscriptionLink`), so unsubscribing survives a visibility change;
+  on a custom domain they are gated like the page. Public and unlisted pages only;
   addresses are readable with write access only (`…/subscribers/summary` for
   everyone). Page limits count rows created in the hour whatever their
   state; confirmations are capped per inbox (`InboxHash`, +tag stripped) and
@@ -1017,7 +1078,9 @@ or imported groups come back empty. Any other path that creates groups through
   single trigger for subscriber mail and incident push: a new trigger is a
   `pagenotify` call inside that transaction, never a send. The runner follows
   the report schedules' claimed/sending/uncertain rules; every subscriber link
-  is built by `Service.pageURL` (`STATUS_PAGE_BASE_URL` on the API); tokens
+  is built in `pagesubscribers/links.go` through `pagedomains.PublicBaseURL`
+  (the page's verified custom domain, else `STATUS_PAGE_BASE_URL`), except
+  the unsubscribe landing, always on the platform host; tokens
   are `shared/actionlink` actions in the URL fragment. Subscribe answers alike
   for every address state and never mails from the request. Automatic outage
   publishing (`autopublish.go`) finds or creates incidents only through
@@ -1031,6 +1094,39 @@ or imported groups come back empty. Any other path that creates groups through
   Announced maintenance withdrawn (delete, one-off skipped at start) is a
   `pagenotify.MaintenanceCancelledTx`, mailed only to who got the
   announcement; an announced window is soft-deleted, never removed.
+  Every subscriber query (public endpoints, runner, auto-publish) excludes
+  deleted workspaces with `tenancy.LiveTenantSQL`.
+- **Custom domains** (`shared/pagedomains` is the contract; the API alone
+  writes and verifies them in `api/internal/services/statuspagedomains`, TXT +
+  CNAME, DNS only, runner claims with `FOR UPDATE SKIP LOCKED` in batches
+  sized to finish within the lease). A hostname is unique only among
+  **verified** rows (partial unique index): unverified claims coexist, the
+  first to verify supersedes the rest (`record`, audited per workspace), and
+  pending/superseded claims expire after `ClaimTTL`. Verification messages
+  are fixed wording (`verify.go`), never resolver text or foreign names. On
+  the status page, `CustomHosts` (`custom_host.go`) runs **in front of the
+  mux** and **fails closed**: the platform routes only for platform hosts
+  (`STATUS_PAGE_BASE_URL`, `STATUS_PAGE_PLATFORM_HOSTS`) and names that can
+  never be a domain (`pagedomains.CanBeCustomDomain`: probes, in-cluster);
+  a verified host is rewritten onto `/public/status/{slug}/…` so the gate,
+  route table and caches apply unchanged (`/sw.js` included, not found on
+  gated pages); every other host, and every public host before the table
+  first loads, gets `writeNotFound`. The API keeps the feature off unless
+  the same settings make the status page fail closed
+  (`config.StatusPageFailsClosed`). Every domain query carries
+  `tenancy.LiveTenantSQL`; the workspace purge removes domains first. Hosts resolve only through the
+  in-memory `hostTable` (`domains.go`: every claimed hostname, one join
+  through `status_pages`, invalidated by page events above the subscriber's
+  guard, 30 s TTL), never a per-request query on the Host, and the gate
+  refuses a slug whose page ID differs from the table's
+  (`customHostPageMismatch`). Visitor-facing paths go through `pagePath`,
+  `pageSubPath`, `visitorPath` and `sessionCookieScope` (host-only `/`,
+  always `Secure`), never a literal `/public/status/`; absolute page URLs
+  (API and status page) come from `pagedomains.PublicBaseURL`/`PublicURL`
+  with the primary domain from `PrimaryHostSQL`, the same on every host, so
+  the slug-keyed render stays host-independent. Push subscriptions keep
+  `origin_host` for their deep link (`payloadsByOrigin`). New custom-host
+  path forms go in `customHostRouteTable` (`custom_host_test.go`).
 
 ## Web UI conventions
 
@@ -1042,7 +1138,10 @@ or imported groups come back empty. Any other path that creates groups through
   listeners — only components *outside* that subtree (Sidebar,
   `useFleetHealth`, CurrentUserProvider, AlertStreamProvider) need one. `…/[id]` detail routes
   redirect to their list page on a switch (`/users/[id]` excepted: users are
-  platform-scoped).
+  platform-scoped). A change to the workspace list (create, rename, delete,
+  or a `workspace_not_found` answer, handled in `lib/api/core.ts`) emits
+  `TENANTS_CHANGED_EVENT`, which only `TenantSwitcher` listens to: it reloads
+  the list and settles the selection again.
 - **Folded routes stay as redirects**: Mesh is a tab of Locations and
   the alert channel list is a tab of Settings (`?tab=`, via
   `components/ui/Tabs.tsx` `useUrlTab`). `/mesh` and `/alert-channels` are
@@ -1356,6 +1455,18 @@ or imported groups come back empty. Any other path that creates groups through
 - Python (`ai-service/`, `scripts/*.py`, CI helper scripts): CI runs
   `ruff check` with the pyflakes rules in `ruff.toml`; run it before pushing
   Python changes (`pip install ruff==0.8.4`).
+- OpenAPI: `api/openapi.json` is generated from the MCP tool catalog bound
+  to the router (`api/internal/mcp/openapi*.go`) and served at
+  `/api/v1/openapi.json`. Regenerate it with `make openapi` whenever a route
+  or catalog entry changes; `TestOpenAPIGolden` fails when it is stale, and
+  `make openapi` lists the operations still without a typed response. Typed
+  success responses come from `successResponses` (`openapi_responses.go`):
+  add an entry only after reading the handler, never guess one, and name the
+  type the handler writes (no map literals, no copies); an error answer
+  richer than the envelope goes in `operationErrors`, same rule. A
+  generation failure at runtime only makes the endpoint answer 503. A route
+  an agent must not call but the REST API documents goes in `openAPIRoutes`
+  (and `notExposed`).
 - Helm: `helm lint helm/monitoring-platform` and
   `helm template helm/monitoring-platform` (long output — write it to a file).
   After touching local AI values, templates, Compose, the Makefile or the

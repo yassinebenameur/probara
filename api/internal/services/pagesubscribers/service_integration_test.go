@@ -650,3 +650,57 @@ func TestSummaryReportsOutcomes(t *testing.T) {
 	require.Equal(t, 1, o.Failed)
 	require.Contains(t, o.LastError, "no such user")
 }
+
+// A page on a verified custom domain links to it in notices and
+// confirmations; the unsubscribe landing stays on the platform host, the one
+// route that serves it whatever the page's visibility.
+func TestLinks_CustomDomain(t *testing.T) {
+	f := setup(t)
+	_, err := f.db.ExecContext(f.ctx, `INSERT INTO status_page_domains (status_page_id, hostname, verification_token, status)
+		VALUES ($1, 'status.acme.test', 'probara-verify=x', 'verified')`, f.pageID)
+	require.NoError(t, err)
+	mailer := &fakeMailer{}
+	s := f.service(mailer, nil)
+
+	f.confirmed(t, s, mailer, "ops@example.com")
+	require.Contains(t, mailer.to("ops@example.com", "Confirm")[0].Text, "https://status.acme.test/subscription?action=confirm#")
+	f.publish(t, "Checkout is failing")
+	run(t, s)
+	notice := mailer.to("ops@example.com", "Checkout is failing")
+	require.Len(t, notice, 1)
+	require.Contains(t, notice[0].Text, "https://status.acme.test")
+	target, err := s.UnsubscribePageURL(f.ctx, oneClickToken(t, notice[0]))
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(target, "https://status.example.com/public/status/acme/subscription?action=unsubscribe#"), target)
+}
+
+// A deleted workspace awaits its purge: its pages take no subscription,
+// confirm and unsubscribe nothing, and the runner sends nothing for them.
+func TestDeletedWorkspace(t *testing.T) {
+	f := setup(t)
+	mailer := &fakeMailer{}
+	s := f.service(mailer, nil)
+	f.confirmed(t, s, mailer, "ops@example.com")
+	require.NoError(t, s.Subscribe(f.ctx, "acme", "late@example.com"))
+	run(t, s)
+	confirm := mailer.to("late@example.com", "Confirm")[0]
+	f.publish(t, "Before")
+	run(t, s)
+	optOut := oneClickToken(t, mailer.to("ops@example.com", "Before")[0])
+
+	require.NoError(t, s.Subscribe(f.ctx, "acme", "queued@example.com"))
+	f.publish(t, "Queued")
+	_, err := f.db.ExecContext(f.ctx, `UPDATE tenants SET deleted_at = NOW() WHERE id = $1`, f.tenantID)
+	require.NoError(t, err)
+	sent := len(mailer.sent)
+
+	require.ErrorIs(t, s.Subscribe(f.ctx, "acme", "new@example.com"), ErrNotFound)
+	resp, err := s.Confirm(f.ctx, linkToken(t, confirm), audit.Event{})
+	require.NoError(t, err)
+	require.Equal(t, models.StatusPageSubscriptionInvalid, resp.State)
+	resp, err = s.Unsubscribe(f.ctx, optOut, audit.Event{})
+	require.NoError(t, err)
+	require.Equal(t, models.StatusPageSubscriptionInvalid, resp.State)
+	run(t, s)
+	require.Len(t, mailer.sent, sent, "the runner mailed a deleted workspace's subscribers")
+}

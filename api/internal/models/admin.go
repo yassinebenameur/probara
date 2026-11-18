@@ -18,6 +18,11 @@ type AdminUser struct {
 	UpdatedAt    time.Time          `json:"updated_at"`
 	LastLoginAt  *time.Time         `json:"last_login_at,omitempty"`
 	DisabledAt   *time.Time         `json:"disabled_at,omitempty"`
+	// LockedUntil is set while password sign-in is locked after repeated
+	// failures; FailedLoginCount is the current failure streak. Both appear
+	// only on the user-management reads (/users).
+	LockedUntil      *time.Time `json:"locked_until,omitempty"`
+	FailedLoginCount int        `json:"failed_login_count,omitempty"`
 }
 
 // TenantMembership represents a user's role within one tenant.

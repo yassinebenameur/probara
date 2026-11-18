@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/clientip"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 )
 
 // StatusPageConfig contains configuration for the status page service
@@ -68,6 +69,15 @@ type StatusPageConfig struct {
 	// subscribe and confirm routes without it. Empty: no page shows a
 	// subscribe form.
 	InternalToken string
+	// TrustForwardedHost is STATUS_PAGE_TRUST_FORWARDED_HOST (default
+	// false): a custom domain is then matched on X-Forwarded-Host, but only
+	// from a TRUSTED_PROXY_CIDRS peer. For proxies that rewrite Host.
+	TrustForwardedHost bool
+	// PlatformHosts is STATUS_PAGE_PLATFORM_HOSTS, normalized: hosts besides
+	// STATUS_PAGE_BASE_URL's that serve the platform routes (every page under
+	// /public/status/, the API proxy, metrics). Every other public hostname
+	// gets a verified custom domain's page or not found.
+	PlatformHosts []string
 }
 
 // MinStatusPageInternalTokenLength is the shortest STATUS_PAGE_INTERNAL_TOKEN
@@ -149,6 +159,26 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 			return nil, fmt.Errorf("invalid STATUS_PAGE_COOKIE_SECURE: %w", err)
 		}
 		cfg.CookieSecure = &secure
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("STATUS_PAGE_TRUST_FORWARDED_HOST")); raw != "" {
+		trust, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid STATUS_PAGE_TRUST_FORWARDED_HOST: %w", err)
+		}
+		cfg.TrustForwardedHost = trust
+	}
+
+	for _, raw := range strings.Split(os.Getenv("STATUS_PAGE_PLATFORM_HOSTS"), ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		host := pagedomains.HostFromHeader(raw)
+		if host == "" || strings.ContainsAny(raw, "/@") {
+			return nil, fmt.Errorf("invalid STATUS_PAGE_PLATFORM_HOSTS entry %q: want a host name", raw)
+		}
+		cfg.PlatformHosts = append(cfg.PlatformHosts, host)
 	}
 
 	// A separate variable from STATUS_PAGE_API_BASE_URL, which also turns

@@ -17,7 +17,9 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/pagenotify"
 	"github.com/yassinebenameur/probara/shared/actionlink"
 	"github.com/yassinebenameur/probara/shared/mail"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -199,6 +201,7 @@ func (s *Service) sendConfirmations(ctx context.Context, passLeft int) (int, err
 		FROM (
 			SELECT id FROM status_page_subscribers
 			WHERE state = 'pending' AND confirm_due_at <= $1 AND confirm_claim_id IS NULL
+			  AND `+tenancy.LiveTenantSQL("status_page_subscribers.tenant_id")+`
 			ORDER BY confirm_due_at
 			LIMIT $2
 			FOR UPDATE SKIP LOCKED
@@ -238,8 +241,9 @@ func (s *Service) sendConfirmation(ctx context.Context, c claimedConfirmation) {
 	var title, primary string
 	var open bool
 	err := s.db.QueryRowContext(ctx, `SELECT sp.slug, sp.title, COALESCE(sp.primary_color, ''),
-			(sp.visibility IN ('public', 'unlisted') AND COALESCE(sp.settings->>'enable_email_subscriptions', 'false') = 'true')
-		FROM status_pages sp WHERE sp.id = $1 AND sp.tenant_id = $2`, c.pageID, c.tenantID).Scan(&ref.slug, &title, &primary, &open)
+			(sp.visibility IN ('public', 'unlisted') AND COALESCE(sp.settings->>'enable_email_subscriptions', 'false') = 'true'),
+			COALESCE(`+pagedomains.PrimaryHostSQL("sp.id")+`, '')
+		FROM status_pages sp WHERE sp.id = $1 AND sp.tenant_id = $2`, c.pageID, c.tenantID).Scan(&ref.slug, &title, &primary, &open, &ref.primaryHost)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return // handed back
 	}
@@ -313,6 +317,7 @@ type outboxRow struct {
 	occurrence           sql.NullTime
 	createdAt            time.Time
 	slug, title, primary string
+	primaryHost          string
 	open                 bool
 }
 
@@ -332,15 +337,16 @@ func (s *Service) planOne(ctx context.Context) (bool, error) {
 		SELECT o.id, o.tenant_id, o.status_page_id, o.event_kind, o.incident_id, o.timeline_entry_id,
 			o.maintenance_window_id, o.occurrence_starts_at, o.created_at,
 			sp.slug, sp.title, COALESCE(sp.primary_color, ''),
-			(sp.visibility IN ('public', 'unlisted') AND COALESCE(sp.settings->>'enable_email_subscriptions', 'false') = 'true')
+			(sp.visibility IN ('public', 'unlisted') AND COALESCE(sp.settings->>'enable_email_subscriptions', 'false') = 'true'),
+			COALESCE(`+pagedomains.PrimaryHostSQL("sp.id")+`, '')
 		FROM status_page_notification_outbox o
 		JOIN status_pages sp ON sp.id = o.status_page_id AND sp.tenant_id = o.tenant_id
-		WHERE o.status = 'pending'
+		WHERE o.status = 'pending' AND `+tenancy.LiveTenantSQL("sp.tenant_id")+`
 		ORDER BY o.created_at, o.id
 		LIMIT 1
 		FOR UPDATE OF o SKIP LOCKED
 	`).Scan(&o.id, &o.tenantID, &o.pageID, &o.kind, &o.incidentID, &o.entryID, &o.windowID, &o.occurrence, &o.createdAt,
-		&o.slug, &o.title, &o.primary, &o.open)
+		&o.slug, &o.title, &o.primary, &o.open, &o.primaryHost)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -427,6 +433,7 @@ func (s *Service) deliverBatch(ctx context.Context) (int, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT outbox_id FROM status_page_notification_deliveries
 		WHERE status = 'pending' AND next_attempt_at <= $1
+		  AND `+tenancy.LiveTenantSQL("status_page_notification_deliveries.tenant_id")+`
 		GROUP BY outbox_id
 		ORDER BY MIN(next_attempt_at)
 		LIMIT $2
@@ -503,11 +510,13 @@ func (s *Service) sendGroup(ctx context.Context, outboxID uuid.UUID, group []cla
 	var open bool
 	err := s.db.QueryRowContext(ctx, `
 		SELECT o.content, o.status_page_id, o.tenant_id, sp.slug,
-			(sp.visibility IN ('public', 'unlisted') AND COALESCE(sp.settings->>'enable_email_subscriptions', 'false') = 'true')
+			(sp.visibility IN ('public', 'unlisted') AND COALESCE(sp.settings->>'enable_email_subscriptions', 'false') = 'true'
+				AND `+tenancy.LiveTenantSQL("sp.tenant_id")+`),
+			COALESCE(`+pagedomains.PrimaryHostSQL("sp.id")+`, '')
 		FROM status_page_notification_outbox o
 		JOIN status_pages sp ON sp.id = o.status_page_id
 		WHERE o.id = $1
-	`, outboxID).Scan(&raw, &ref.id, &ref.tenantID, &ref.slug, &open)
+	`, outboxID).Scan(&raw, &ref.id, &ref.tenantID, &ref.slug, &open, &ref.primaryHost)
 	if err != nil {
 		return // deleted meanwhile (cascade), or handed back
 	}

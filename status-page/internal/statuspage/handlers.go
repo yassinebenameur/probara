@@ -49,6 +49,9 @@ type Handlers struct {
 	// page; subscribeClient forwards them to the API (subscribe.go).
 	subscribes      *subscribeThrottle
 	subscribeClient *http.Client
+	// hosts maps verified custom domains to their pages (domains.go,
+	// custom_host.go). Nil without a service: no custom domain is served.
+	hosts *hostTable
 }
 
 // NewHandlers creates a new status page handlers
@@ -68,7 +71,12 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 			}
 		}
 	}
+	var hosts *hostTable
+	if service != nil {
+		hosts = newHostTable(service.CustomHostRoutes)
+	}
 	return &Handlers{
+		hosts:       hosts,
 		service:     service,
 		config:      cfg,
 		logger:      log,
@@ -112,8 +120,11 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A subscriber mail's links work whatever the page's visibility became;
-	// they never read the page (subscribe.go).
-	if isSubscriptionLinkRoute(rest) {
+	// they never read the page (subscribe.go). Only on the platform host:
+	// on a custom domain they go through the gate like every route, so a
+	// private page's domain stays indistinguishable from an unknown host
+	// (mail unsubscribe links always name the platform host).
+	if _, onCustomHost := customHostFrom(r); isSubscriptionLinkRoute(rest) && !onCustomHost {
 		h.handleSubscriptionLink(w, r, slug, rest)
 		return
 	}
@@ -139,7 +150,7 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	// the sub-routing.
 	isPushRoute := rest == "/push/subscribe" || rest == "/push/unsubscribe"
 	// The subscribe form's target (subscribe.go) checks its own method.
-	if !isPushRoute && rest != subscribeSuffix && r.Method != http.MethodGet {
+	if !isPushRoute && rest != subscribeSuffix && !isSubscriptionLinkRoute(rest) && r.Method != http.MethodGet {
 		http.Error(aw, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -162,8 +173,24 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	case "/push/unsubscribe":
 		h.HandlePushUnsubscribe(aw, r, slug)
 		return
+	case workerSuffix:
+		// The push service worker of a page on its custom domain, where it
+		// is /sw.js (custom_host.go). Behind the gate like the page, and not
+		// found on a gated page, where push is off; on the platform host the
+		// worker is /public/status/sw.js, not a page route.
+		if _, onCustomHost := customHostFrom(r); !onCustomHost || gated {
+			writeNotFound(w)
+			return
+		}
+		h.HandlePushServiceWorker(aw, r)
+		return
 	default:
 		// Email subscriptions (subscribe.go): forwarded to the API.
+		if isSubscriptionLinkRoute(rest) {
+			// On a custom domain, after the gate (see above).
+			h.handleSubscriptionLink(aw, r, slug, rest)
+			return
+		}
 		if h.handleSubscription(aw, r, slug, rest, acc) {
 			return
 		}
@@ -260,7 +287,10 @@ func (h *Handlers) cachedPage(parent context.Context, slug string) (renderedPage
 			data.PushPublicKey = h.webPushPublicKey()
 		}
 		data.Visibility = visibility
-		data.CanonicalURL = h.canonicalURL(slug)
+		// The same on every host the page is served from (domains.go), so
+		// the render, and this slug-keyed cache, never depend on the Host
+		// header.
+		data.CanonicalURL = h.pageCanonicalURL(ctx, data.ID, slug)
 		data.SubscribeFormEnabled = h.subscriptionsOffered(visibility, data.EmailSubscriptionsEnabled)
 		view := buildStatusPageRenderView(data, h.apiProxyEnabled())
 		html, customErr, err := renderStatusPageView(data, view)
@@ -378,7 +408,7 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 	if !gated {
 		data.PushPublicKey = h.webPushPublicKey()
 	}
-	data.CanonicalURL = h.canonicalURL(slug)
+	data.CanonicalURL = h.pageCanonicalURL(ctx, data.ID, slug)
 	data.Visibility = pageVisibility(r.Context())
 	data.SubscribeFormEnabled = h.subscriptionsOffered(data.Visibility, data.EmailSubscriptionsEnabled)
 

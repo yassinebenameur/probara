@@ -11,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 )
 
 // Feed bounds. A feed reader keeps what it has already seen, so the feed
@@ -45,9 +47,11 @@ type feedIncident struct {
 }
 
 // GetStatusPageFeed loads a page's feed by slug; an unknown slug is
-// ErrStatusPageNotFound, like the page itself. canonicalURL is the page's
-// public URL ("" when the deployment does not configure one).
-func (s *Service) GetStatusPageFeed(ctx context.Context, slug, canonicalURL string) (*statusPageFeed, error) {
+// ErrStatusPageNotFound, like the page itself. platformURL is the page's
+// URL under STATUS_PAGE_BASE_URL ("" when the deployment does not configure
+// one); the page's primary custom domain, when it has one, takes its place
+// as the canonical URL, as on the page itself.
+func (s *Service) GetStatusPageFeed(ctx context.Context, slug, platformURL string) (*statusPageFeed, error) {
 	var pageID, tenantID uuid.UUID
 	var title string
 	var description, logoURL sql.NullString
@@ -56,13 +60,20 @@ func (s *Service) GetStatusPageFeed(ctx context.Context, slug, canonicalURL stri
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, title, description, logo_url, settings, updated_at
 		FROM status_pages
-		WHERE slug = $1
+		WHERE slug = $1 AND `+livePage+`
 	`, slug).Scan(&pageID, &tenantID, &title, &description, &logoURL, &settingsJSON, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrStatusPageNotFound
 		}
 		return nil, fmt.Errorf("failed to get status page: %w", err)
+	}
+
+	canonicalURL := platformURL
+	if host, err := s.PrimaryHost(ctx, pageID.String()); err != nil {
+		return nil, err
+	} else if host != "" {
+		canonicalURL = pagedomains.PageURL(host)
 	}
 
 	settings := parseStatusPageSettings(settingsJSON)

@@ -323,3 +323,31 @@ func moveSensitiveVariables(raw json.RawMessage) (json.RawMessage, bool, error) 
 	}
 	return out, true, nil
 }
+
+// SyntheticStepSecretVariable is the name NormalizeSensitiveHeaders gives the
+// secret variable a literal credential header of a synthetic API step moves
+// into (a taken name gets a "_2", "_3", … suffix). Config-as-code apply uses
+// it to recognize the variables earlier saves generated.
+func SyntheticStepSecretVariable(stepID string, stepIdx int, header string) string {
+	return syntheticSecretVariableName(stepID, stepIdx, header)
+}
+
+// TemplateReferences returns the variable names the {{name}} references in
+// text point at, in order, repeats included.
+func TemplateReferences(text string) []string {
+	var names []string
+	for _, match := range syntheticTemplateRef.FindAllStringSubmatch(text, -1) {
+		names = append(names, match[1])
+	}
+	return names
+}
+
+// TemplateReferenceName returns the variable a value that is exactly one
+// {{name}} reference points at.
+func TemplateReferenceName(value string) (string, bool) {
+	match := syntheticTemplateRef.FindStringSubmatchIndex(value)
+	if match == nil || match[0] != 0 || match[1] != len(value) {
+		return "", false
+	}
+	return value[match[2]:match[3]], true
+}

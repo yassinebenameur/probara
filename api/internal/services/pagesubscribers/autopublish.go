@@ -17,6 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/statuspagesql"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // Automatic publication of monitor outages (the page setting
@@ -82,6 +83,7 @@ var outagePagesSQL = `
 	JOIN ` + statuspagesql.RenderedMonitorsSQL + ` rm ON rm.monitor_id = a.monitor_id
 	JOIN status_pages sp ON sp.id = rm.status_page_id AND sp.tenant_id = a.tenant_id
 	WHERE a.kind = 'availability' AND a.status IN ('active', 'acknowledged')
+	  AND ` + tenancy.LiveTenantSQL("a.tenant_id") + `
 	  AND COALESCE(a.reopened_at, a.triggered_at) <= NOW() - make_interval(secs => $1)
 	  AND COALESCE(sp.settings->>'auto_publish_incidents', 'false') = 'true'
 	  AND m.enabled AND m.deleted_at IS NULL AND m.current_state = 'down'
@@ -271,12 +273,13 @@ func (s *Service) reopenRecentTx(ctx context.Context, tx *sql.Tx, o outage) (uui
 // publication still shows, whose linked alerts all resolved at least $3
 // seconds ago, and none of whose monitors has an open availability alert
 // (a monitor failing again within the settle window keeps it open).
-const autoResolveCandidatesSQL = `
+var autoResolveCandidatesSQL = `
 	SELECT DISTINCT i.id, i.tenant_id
 	FROM incidents i
 	JOIN incident_status_page_publications isp
 		ON isp.incident_id = i.id AND isp.tenant_id = i.tenant_id AND isp.auto_published AND isp.unpublished_at IS NULL
 	WHERE i.state <> 'resolved'
+	  AND ` + tenancy.LiveTenantSQL("i.tenant_id") + `
 	  AND EXISTS (SELECT 1 FROM incident_alerts ia WHERE ia.incident_id = i.id)
 	  AND NOT EXISTS (SELECT 1 FROM incident_alerts ia JOIN alerts al ON al.id = ia.alert_id
 		WHERE ia.incident_id = i.id AND (al.status IN ('active', 'acknowledged')

@@ -11,6 +11,7 @@ import (
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // ErrStatusPageNotFound is returned when a slug or ID resolves to no status
@@ -273,8 +274,14 @@ func NewService(database db.Querier, analytics sharedanalytics.Reader) *Service 
 	}
 	return svc
 }
+
+// livePage keeps a deleted workspace's status pages unserved from the moment
+// it is deleted (shared/tenancy): every lookup of a page by slug or ID adds
+// it, over the status_pages table unaliased.
+var livePage = tenancy.LiveTenantSQL("status_pages.tenant_id")
+
 func (s *Service) GetTenantIDByStatusPageID(ctx context.Context, statusPageID uuid.UUID) (uuid.UUID, error) {
-	query := `SELECT tenant_id FROM status_pages WHERE id = $1`
+	query := `SELECT tenant_id FROM status_pages WHERE id = $1 AND ` + livePage
 	var tenantID uuid.UUID
 	if err := s.db.QueryRowContext(ctx, query, statusPageID).Scan(&tenantID); err != nil {
 		if err == sql.ErrNoRows {
@@ -315,7 +322,7 @@ func (s *Service) GetDraftTemplateBySlug(ctx context.Context, slug string) (page
 		FROM status_pages sp
 		LEFT JOIN status_page_templates t
 			ON t.status_page_id = sp.id AND t.status = 'draft'
-		WHERE sp.slug = $1
+		WHERE sp.slug = $1 AND `+tenancy.LiveTenantSQL("sp.tenant_id")+`
 	`, slug).Scan(&pageID, &draftSource)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -324,7 +331,7 @@ func (s *Service) GetDraftTemplateBySlug(ctx context.Context, slug string) (page
 		if pgerr.IsUndefinedTable(err) {
 			// Templates table missing: resolve the page alone so previews
 			// degrade to the live render instead of erroring.
-			if err := s.db.QueryRowContext(ctx, `SELECT id FROM status_pages WHERE slug = $1`, slug).Scan(&pageID); err != nil {
+			if err := s.db.QueryRowContext(ctx, `SELECT id FROM status_pages WHERE slug = $1 AND `+livePage, slug).Scan(&pageID); err != nil {
 				if err == sql.ErrNoRows {
 					return uuid.Nil, "", false, ErrStatusPageNotFound
 				}
@@ -343,7 +350,7 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	query := `
 		SELECT id, tenant_id, slug, title, description, logo_url, primary_color, secondary_color, settings
 		FROM status_pages
-		WHERE slug = $1
+		WHERE slug = $1 AND ` + livePage + `
 	`
 
 	var pageID, tenantID uuid.UUID

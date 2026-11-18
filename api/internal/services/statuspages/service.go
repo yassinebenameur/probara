@@ -17,6 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/securityheaders"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
@@ -357,7 +358,8 @@ func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID)
 	query := `
 		SELECT id, tenant_id, slug, title, description, logo_url,
 			primary_color, secondary_color, settings, created_at, updated_at,
-			visibility, password_hash IS NOT NULL
+			visibility, password_hash IS NOT NULL,
+			COALESCE(` + pagedomains.PrimaryHostSQL("status_pages.id") + `, '')
 		FROM status_pages
 		WHERE id = $1 AND tenant_id = $2
 	`
@@ -368,7 +370,7 @@ func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID)
 		&page.ID, &page.TenantID, &page.Slug, &page.Title,
 		&page.Description, &page.LogoURL, &page.PrimaryColor,
 		&page.SecondaryColor, &settingsJSON, &page.CreatedAt, &page.UpdatedAt,
-		&page.Visibility, &page.HasPassword,
+		&page.Visibility, &page.HasPassword, &page.PublicURL,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrStatusPageNotFound
@@ -376,6 +378,7 @@ func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID)
 		return nil, fmt.Errorf("failed to get status page: %w", err)
 	}
 
+	page.PublicURL = publicURL(page.PublicURL)
 	page.Settings = parseStatusPageSettings(settingsJSON).toAPI()
 	sections, err := s.loadStatusPageSections(ctx, pageID)
 	if err != nil {
@@ -401,7 +404,8 @@ func (s *Service) ListStatusPages(ctx context.Context, tenantID uuid.UUID, page,
 	query := `
 		SELECT id, tenant_id, slug, title, description, logo_url,
 			primary_color, secondary_color, settings, created_at, updated_at,
-			visibility, password_hash IS NOT NULL
+			visibility, password_hash IS NOT NULL,
+			COALESCE(` + pagedomains.PrimaryHostSQL("status_pages.id") + `, '')
 		FROM status_pages
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
@@ -422,10 +426,11 @@ func (s *Service) ListStatusPages(ctx context.Context, tenantID uuid.UUID, page,
 			&item.ID, &item.TenantID, &item.Slug, &item.Title,
 			&item.Description, &item.LogoURL, &item.PrimaryColor,
 			&item.SecondaryColor, &settingsJSON, &item.CreatedAt, &item.UpdatedAt,
-			&item.Visibility, &item.HasPassword,
+			&item.Visibility, &item.HasPassword, &item.PublicURL,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan status page: %w", err)
 		}
+		item.PublicURL = publicURL(item.PublicURL)
 		item.Settings = parseStatusPageSettings(settingsJSON).toAPI()
 
 		sections, err := s.loadStatusPageSections(ctx, item.ID)
@@ -592,7 +597,19 @@ func (s *Service) DeleteStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 	if rowsAffected == 0 {
 		return ErrStatusPageNotFound
 	}
+	// The page's custom domains went with it: the status-page service drops
+	// them from its host table at once instead of after its TTL.
+	s.notifyStatusPage(tenantID, pageID, pagedomains.EventDomainsChanged)
 	return nil
+}
+
+// publicURL is a page's public_url from its primary custom domain ("" for
+// none).
+func publicURL(primaryHost string) string {
+	if primaryHost == "" {
+		return ""
+	}
+	return pagedomains.PageURL(primaryHost)
 }
 
 func sectionsFromCreateRequest(sections []models.StatusPageSection) []statusPageSectionInput {
