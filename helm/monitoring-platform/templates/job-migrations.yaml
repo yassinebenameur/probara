@@ -57,9 +57,10 @@ spec:
         app.kubernetes.io/component: migrations
     spec:
       restartPolicy: OnFailure
-      {{- if .Values.serviceAccount.create }}
-      serviceAccountName: {{ include "monitoring-platform.serviceAccountName" . }}
-      {{- end }}
+      # No release ServiceAccount: the Job only talks to PostgreSQL, and as a
+      # pre-upgrade hook it must not depend on an object this upgrade may be
+      # the one to create or rename. Nor does it need an API token.
+      automountServiceAccountToken: false
       {{- if .Values.postgresql.enabled }}
       initContainers:
         # Wait for embedded PostgreSQL to be ready

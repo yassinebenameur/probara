@@ -527,7 +527,7 @@ kubectl -n probara get jobs`,
             [
               '`api.enabled`, `.replicas`, `.httpPort`, `.metricsPort`, `.logLevel`',
               '`true`, `2`, `8080`, `9090`, `info`',
-              'API workload. `publicBaseURL` is required when enabled.',
+              'API workload. `publicBaseURL` is optional: set it to the external origin (agent installers, push webhook URLs, the default OIDC callback, and a Secure session cookie when it is `https://`).',
             ],
             [
               '`api.publicBaseURL`, `.publicNatsURL`',
@@ -1019,7 +1019,12 @@ api:
           tone: 'warning',
           title: 'When the pre-upgrade migration cannot run',
           text:
-            'The Job runs before the upgrade creates anything, so it needs what the previous release already has. An upgrade that turns on `postgresql.enabled`, renames the release\'s objects (`fullnameOverride`), or turns on `serviceAccount.create` leaves it waiting for a database or ServiceAccount that does not exist yet, until the upgrade times out with nothing changed: apply that change with `migrations.enabled=false` (the API still migrates at startup), or run `migrate` against the database first, then upgrade again with the Job on. An existing Secret must carry the new `postgres_url` before the upgrade starts (let External Secrets sync first). Changing the embedded PostgreSQL password in values does not change the running database\'s, so the Job is refused and the upgrade stops before any change. `helm template | kubectl apply` ignores hook annotations and applies the Job together with everything else, and Argo CD translates hooks into its own sync phases: with either, make sure migrations finish before the workloads roll. Flux runs Helm itself, hooks included.',
+            'The Job runs before the upgrade creates anything, so it needs what the previous release already has. An upgrade that switches from an external database to the embedded PostgreSQL (`postgresql.enabled`) or renames the release\'s objects (`fullnameOverride`) leaves it waiting for a database that does not exist yet, until the upgrade times out with nothing changed: apply that change with `migrations.enabled=false` (the API still migrates at startup), or run `migrate` against the database first, then upgrade again with the Job on. Turning on or renaming the ServiceAccount (`serviceAccount.create`, `.name`) in the same upgrade is safe: the Job runs under none of the release\'s and mounts no API token. An existing Secret must carry the new `postgres_url` before the upgrade starts (let External Secrets sync first). Changing the embedded PostgreSQL password in values does not change the running database\'s, so the Job is refused and the upgrade stops before any change. `helm template | kubectl apply` ignores hook annotations and applies the Job together with everything else: run the migrations first. Flux runs Helm itself, hooks included.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Argo CD (not tested here): it maps the Job\'s combined `post-install,pre-upgrade` hook to both PreSync and PostSync, so it would run before the embedded PostgreSQL exists on a first sync and twice on every later one. Set `migrations.enabled=false` and run the migrations as your own Job in an earlier sync wave than the workloads; the API\'s startup migration remains the safety net.',
         },
         {
           type: 'callout',

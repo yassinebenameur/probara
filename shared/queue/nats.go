@@ -38,7 +38,32 @@ type Message struct {
 	Nak          func() error
 	InProgress   func() error
 	NumDelivered uint64
+	// Timestamp is when the stream stored the message (its first
+	// publication), zero when unknown.
+	Timestamp time.Time
 }
+
+// Terminate asks Consume to TERM the message: the server never redelivers
+// it and it leaves the consumer's ack-pending set. For a handler that has
+// given up on a message it cannot process, as opposed to one it has
+// processed (nil, an ACK) or wants retried (any other error, a NAK).
+func Terminate(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &terminateError{err: err}
+}
+
+// IsTerminal reports whether err asks for a TERM (see Terminate).
+func IsTerminal(err error) bool {
+	var term *terminateError
+	return errors.As(err, &term)
+}
+
+type terminateError struct{ err error }
+
+func (e *terminateError) Error() string { return e.err.Error() }
+func (e *terminateError) Unwrap() error { return e.err }
 
 // RetryAfter requests a delayed NAK instead of the immediate retry default.
 func RetryAfter(err error, delay time.Duration) error {
@@ -297,6 +322,11 @@ type ConsumerOptions struct {
 	MaxDeliver    int
 	BackOff       []time.Duration
 	FilterSubject string
+	// MaxAckPending caps the messages delivered and not yet acked or
+	// terminated, including those waiting out a delayed NAK; at the cap the
+	// server delivers only redeliveries, no new message. 0 keeps the
+	// server default (1000).
+	MaxAckPending int
 }
 
 // CreateConsumerWithOptions creates or gets a consumer with custom retry
@@ -338,6 +368,7 @@ func (c *Client) CreateConsumerWithOptions(ctx context.Context, streamName, cons
 		MaxDeliver:    maxDeliver,
 		BackOff:       opts.BackOff,
 		FilterSubject: opts.FilterSubject,
+		MaxAckPending: opts.MaxAckPending,
 	}
 
 	// CreateOrUpdate: a durable that already exists with an older retry
@@ -523,10 +554,17 @@ func (c *Client) Consume(ctx context.Context, consumer jetstream.Consumer, handl
 				Nak:          msg.Nak,
 				InProgress:   msg.InProgress,
 				NumDelivered: metadata.NumDelivered,
+				Timestamp:    metadata.Timestamp,
 			}
 
 			// Handle the message
 			if err := handler(queueMsg); err != nil {
+				if IsTerminal(err) {
+					if termErr := msg.TermWithReason(truncateReason(err.Error())); termErr != nil {
+						return fmt.Errorf("failed to TERM message: %w", termErr)
+					}
+					continue
+				}
 				// Explicit NAKs bypass the server's BackOff configuration.
 				var retry *retryAfterError
 				var nakErr error
@@ -547,6 +585,16 @@ func (c *Client) Consume(ctx context.Context, consumer jetstream.Consumer, handl
 			}
 		}
 	}
+}
+
+// truncateReason bounds a TERM reason, which the server copies into the
+// advisory it publishes.
+func truncateReason(reason string) string {
+	const max = 200
+	if len(reason) <= max {
+		return reason
+	}
+	return reason[:max]
 }
 
 // HealthCheck performs a simple health check on the NATS connection

@@ -227,8 +227,8 @@ make healthcheck`,
             ],
             [
               'Result ingest',
-              '`results_ingested_total`, `result_ingest_errors_total`, `result_ingest_duplicates_total`, `mesh_results_ingested_total`',
-              'Publish success without ingest growth, ingest errors, or unexpectedly high duplicates.',
+              '`results_ingested_total`, `result_ingest_errors_total`, `result_ingest_duplicates_total`, `mesh_results_ingested_total`, `result_ingest_abandoned_total{reason}`',
+              'Publish success without ingest growth, ingest errors, or unexpectedly high duplicates. Any `result_ingest_abandoned_total`: results the scheduler gave up on and dropped, after about 15 minutes of database or schema errors (`platform`) or three deliveries whose location credential the configured `PROBARA_SECRETS_KEY` cannot decrypt (`credential`); the scheduler logs each one.',
             ],
             [
               'Retention and rollups',

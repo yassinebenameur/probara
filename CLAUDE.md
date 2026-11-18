@@ -680,7 +680,9 @@ or imported groups come back empty. Any other path that creates groups through
   once, so `NEXT_PUBLIC_STATUS_PAGE_URL` is a dev fallback only. The api
   reads `STATUS_PAGE_BASE_URL` and returns it as `status_page_base_url` on
   `GET /auth-context`; `useStatusPageBaseUrl()` (CurrentUserProvider) feeds
-  `lib/statusPageUrl.ts`, and every call site passes it. The UI server reads
+  `lib/statusPageUrl.ts`, and every call site passes it; anything that loads
+  such a URL by itself (the template preview iframe, which may carry a
+  preview token) waits for `useCurrentUser().loading` to clear. The UI server reads
   the same variable at runtime for its CSP `frame-src`
   (`configuredStatusPageUrl`, `lib/csp.ts`). Helm renders
   `frontend.statusPageUrl | default statusPage.baseUrl` into api and
@@ -691,7 +693,13 @@ or imported groups come back empty. Any other path that creates groups through
   only when verification fails with `errRejected` (subject/payload
   mismatch, unknown or disabled location, bad signature); a database error
   or a schema behind the code NAKs with `retryDelay` (explicit NAKs bypass
-  the consumer's BackOff), as do persist failures. Core-NATS heartbeats
+  the consumer's BackOff), as do persist failures. Every retry is bounded
+  (`retryOrGiveUp`: ~15 min for database/schema errors, 3 deliveries for a
+  credential the configured key cannot decrypt), then TERMed
+  (`queue.Terminate`) and counted in `result_ingest_abandoned_total`: a
+  delayed NAK stays in the ack-pending set, and at the consumer's
+  `MaxAckPending` (set deliberately, `resultIngestMaxAckPending`) no new
+  result is delivered for any tenant. Core-NATS heartbeats
   cannot be redelivered and only log the difference.
 - **NATS websocket listener** (port 8443, plaintext; TLS terminates at the
   ingress or proxy) lets private locations dial `wss://` on 443. Helm

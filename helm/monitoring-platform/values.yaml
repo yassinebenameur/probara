@@ -388,6 +388,14 @@ migrations:
   # exists only then), pre-upgrade on every upgrade, so new pods never start
   # against an old schema. A failed Job stops the upgrade before anything
   # else changes. Large migrations may need `helm upgrade --timeout`.
+  # It runs before the upgrade creates anything, so an upgrade that switches
+  # from an external database to the embedded PostgreSQL (postgresql.enabled)
+  # or renames the release's objects (fullnameOverride) waits for a database
+  # that does not exist yet and times out: apply such a change with
+  # enabled=false (the API still migrates at startup), then turn it back on.
+  # The Job uses no release ServiceAccount, so enabling or renaming that is
+  # safe. Argo CD maps this combined hook to both PreSync and PostSync: set
+  # enabled=false there and run migrations as your own sync-wave Job.
   enabled: true
   image:
     # Uses main image repository with -migrations suffix if not specified

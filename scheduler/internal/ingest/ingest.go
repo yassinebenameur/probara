@@ -61,6 +61,7 @@ type Ingest struct {
 	ingestErrors    *prometheus.CounterVec
 	duplicates      prometheus.Counter
 	meshIngested    prometheus.Counter
+	abandoned       *prometheus.CounterVec
 }
 
 // New creates the ingest component. statusPub may be nil (status page updates
@@ -103,6 +104,11 @@ func New(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegistry *metri
 		[]string{},
 	)
 	i.meshIngested = meshCounter.With(prometheus.Labels{})
+	i.abandoned = metricsRegistry.NewCounter(
+		"result_ingest_abandoned_total",
+		"Check results terminated unprocessed after their retry budget, by reason (platform, credential)",
+		[]string{"reason"},
+	)
 
 	return i
 }
@@ -121,7 +127,8 @@ func (i *Ingest) ConfigureEncryption(encryptor secrets.Encryptor) {
 // signature. Redelivering it cannot change the answer, so it is acked and
 // dropped. Every other verification error is the platform's (a database
 // error, a schema the migrations have not reached yet, an undecryptable
-// stored credential) and must not cost the result: it is retried.
+// stored credential) and must not cost the result: it is retried, within the
+// budgets of retryOrGiveUp.
 var errRejected = errors.New("rejected")
 
 func rejectf(format string, args ...any) error {
@@ -130,6 +137,50 @@ func rejectf(format string, args ...any) error {
 
 // isRejected reports whether err is a verdict on the message itself.
 func isRejected(err error) bool { return errors.Is(err, errRejected) }
+
+// errUndecryptableCredential marks a stored location credential the
+// scheduler's key cannot open. With a key configured that is usually
+// permanent for the location (encrypted under a key since removed), so its
+// results get a short retry budget; see retryOrGiveUp.
+var errUndecryptableCredential = errors.New("decrypt location credential")
+
+// Retry budgets, in deliveries. A delayed NAK keeps the message in the
+// consumer's ack-pending set (nats-server: a NAK with a delay only moves the
+// pending entry's timestamp), and at MaxAckPending the server delivers no
+// new message, for any tenant. So no retry may be unbounded: past its budget
+// a message is terminated (TERM), logged and counted.
+//
+// platformMaxDeliveries covers platformRetryBudget of backoff: database and
+// schema errors, which is what a deploy produces while migrations run.
+// credentialMaxDeliveries is for an undecryptable credential while a key is
+// configured: a few seconds, in case a key rotation is mid-rollout.
+const (
+	platformRetryBudget     = 15 * time.Minute
+	credentialMaxDeliveries = 3
+	// resultIngestMaxAckPending must exceed the results that can be waiting
+	// out a NAK at once: in-flight work plus failing traffic times its
+	// budget. 20000 holds ~1300 failing results a minute for the full
+	// platform budget; the server default (1000) would let one broken
+	// location stall every tenant's results within minutes.
+	resultIngestMaxAckPending = 20000
+)
+
+var platformMaxDeliveries = deliveriesWithin(platformRetryBudget)
+
+// deliveriesWithin is the number of deliveries whose NAK delays
+// (retryDelay) fit in budget, counting the first delivery.
+func deliveriesWithin(budget time.Duration) uint64 {
+	var n uint64 = 1
+	var elapsed time.Duration
+	for {
+		d := retryDelay(n)
+		if elapsed+d > budget {
+			return n
+		}
+		elapsed += d
+		n++
+	}
+}
 
 // ingestBackoff is the redelivery schedule of a result the ingest could not
 // process yet. The consumer is created with it, but JetStream applies a
@@ -199,7 +250,7 @@ func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, m
 	}
 	credential, err := i.secretsEncryptor.Decrypt(stored)
 	if err != nil {
-		return "", fmt.Errorf("decrypt location credential: %w", err)
+		return "", fmt.Errorf("%w: %w", errUndecryptableCredential, err)
 	}
 	return credential, nil
 }
@@ -259,15 +310,17 @@ func (i *Ingest) Start() error {
 		return fmt.Errorf("failed to ensure results stream: %w", err)
 	}
 
-	// Unlimited redelivery: a check result must never be dropped because the
-	// ingest transaction (or the verification lookup before it) kept failing
-	// — a database outage, or a schema the migrations have not reached. The
-	// stream's MaxAge is the only bound; the backoff (applied to NAKs by
-	// retryDelay) keeps a stuck message from busy-looping.
+	// No server-side delivery limit: the handler bounds retries itself
+	// (retryOrGiveUp), by reason, so a database outage or a migration in
+	// progress costs no result while a message that can never succeed is
+	// terminated instead of holding the ack-pending window. The backoff
+	// (applied to NAKs by retryDelay) keeps a failing message from
+	// busy-looping, and MaxAckPending is sized for the retries in flight.
 	consumer, err := i.queue.CreateConsumerWithOptions(ctx, i.config.CheckResultStream, i.config.ResultIngestConsumerName,
 		queue.ConsumerOptions{
-			MaxDeliver: -1,
-			BackOff:    ingestBackoff,
+			MaxDeliver:    -1,
+			BackOff:       ingestBackoff,
+			MaxAckPending: resultIngestMaxAckPending,
 		})
 	if err != nil {
 		return fmt.Errorf("failed to create ingest consumer: %w", err)
@@ -322,7 +375,7 @@ func (i *Ingest) consumeLoop(ctx context.Context, consumer jetstream.Consumer, i
 // messages (bad JSON, bad UUIDs, unknown monitor, a location result that
 // fails authentication) are logged and acked — retrying cannot fix them.
 // Platform failures (database errors, a schema behind the code) are never
-// acked.
+// acked: they are retried, then terminated past their budget.
 func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 	var m models.CheckResultMessage
 	if err := json.Unmarshal(msg.Data, &m); err != nil {
@@ -349,13 +402,16 @@ func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 		// its schema is behind this code. Acking would lose it for good.
 		logEntry.WithError(err).WithField("delivery", msg.NumDelivered).Error("Could not verify location result; retrying")
 		i.ingestErrors.With(prometheus.Labels{}).Inc()
-		return queue.RetryAfter(err, retryDelay(msg.NumDelivered))
+		return i.retryOrGiveUp(logEntry, msg, err)
 	}
 
 	// Mesh probes are edge results, not monitor results — they carry no
 	// monitor_id and never touch check_results or monitor state.
 	if m.Mesh != nil {
-		return queue.RetryAfter(i.handleMeshResult(ctx, m), retryDelay(msg.NumDelivered))
+		if err := i.handleMeshResult(ctx, m); err != nil {
+			return i.retryOrGiveUp(logEntry, msg, err)
+		}
+		return nil
 	}
 
 	result, err := i.buildResult(m)
@@ -373,7 +429,7 @@ func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 		}
 		logEntry.WithError(err).Error("Failed to persist check result")
 		i.ingestErrors.With(prometheus.Labels{}).Inc()
-		return queue.RetryAfter(err, retryDelay(msg.NumDelivered))
+		return i.retryOrGiveUp(logEntry, msg, err)
 	}
 
 	if outcome.duplicate {
@@ -389,6 +445,26 @@ func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 		i.publishStatusUpdate(m.MonitorID, m.TenantID, "state_change")
 	}
 	return nil
+}
+
+// retryOrGiveUp answers a message that failed for a reason not its own: a
+// delayed NAK while its retry budget lasts, then a TERM, so a message that
+// can never succeed stops holding a slot of the ack-pending window.
+func (i *Ingest) retryOrGiveUp(logEntry *logrus.Entry, msg *queue.Message, err error) error {
+	reason, budget := "platform", platformMaxDeliveries
+	if _, noKey := i.secretsEncryptor.(secrets.NoOpEncryptor); errors.Is(err, errUndecryptableCredential) && !noKey {
+		reason, budget = "credential", credentialMaxDeliveries
+	}
+	if msg.NumDelivered < budget {
+		return queue.RetryAfter(err, retryDelay(msg.NumDelivered))
+	}
+	fields := logrus.Fields{"delivery": msg.NumDelivered, "reason": reason}
+	if !msg.Timestamp.IsZero() {
+		fields["age_seconds"] = int(time.Since(msg.Timestamp).Seconds())
+	}
+	logEntry.WithError(err).WithFields(fields).Warn("Dropping check result after its retry budget")
+	i.abandoned.With(prometheus.Labels{"reason": reason}).Inc()
+	return queue.Terminate(err)
 }
 
 func (i *Ingest) buildResult(m models.CheckResultMessage) (monitorResult, error) {
