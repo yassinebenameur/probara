@@ -25,4 +25,5 @@ export * from './api/slas';
 export * from './api/discovery';
 export * from './api/monitor-versions';
 export * from './api/deliveries';
+export * from './api/status-page-domains';
 export * from './api/account';

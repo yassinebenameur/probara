@@ -737,8 +737,9 @@ or imported groups come back empty. Any other path that creates groups through
   `AuthMiddleware` applies it to every unsafe request the session cookie
   authenticates (403 `cross_origin_refused`; non-JSON body 415, multipart
   only on `MultipartUploadPaths`, pinned to the MCP catalog by
-  `TestMultipartUploadPathsMatchCatalog`), sign-in/refresh/sign-out wear
-  `RequireTrustedOrigin`, OAuth consent re-checks it. The UI's `/api` proxy
+  `TestMultipartUploadPathsMatchCatalog`); sign-in (both steps), refresh,
+  sign-out and the mailed-link POSTs wear `RequireTrustedOrigin` (same
+  origin + JSON rule), OAuth consent re-checks it. The UI's `/api` proxy
   vouches for its own origin's writes by dropping Origin/Referer/
   Sec-Fetch-Site (`vouchForSameOriginWrite`, `web/lib/api-proxy.ts`), which
   is why no origin configuration is needed. It judges by its `Host` header
@@ -762,6 +763,27 @@ or imported groups come back empty. Any other path that creates groups through
   each heartbeat and end at `CredentialExpiry`; a new stream must too. The
   `admin_sessions_default_family` trigger (000118) is rolling-deploy
   compatibility only: drop it in a later release's migration.
+- **Account links and two-factor** (local password accounts only; an SSO
+  account never gets a reset, email change, password or second factor
+  here): invite / reset / email-change links and the sign-in challenge are
+  single-use rows in `admin_account_tokens` (random, SHA-256 stored,
+  purpose-bound; `adminauth/tokens.go`), never `shared/actionlink`. Every
+  path that sets a password or resets two-factor retires the user's open
+  tokens (`RetireAccountTokens`; `cmd/admin` does it in SQL), or a pending
+  email change survives the recovery. Link tokens ride in the URL fragment
+  and `X-Action-Token`; the pages are in `web/lib/public-routes.ts`. Without
+  `SMTP_*` + `APP_BASE_URL` on the API (`accountmail.Enabled`) only a
+  superadmin's response carries a link. TOTP secrets are sealed with
+  `PROBARA_SECRETS_KEY` (no key, no enrolment; never the no-op encryptor).
+  Failed second factors and account-page password checks reserve an attempt
+  through the lockout before comparing; a correct password releases only its
+  own count, an internal error gives the attempt back, and a reset keeps a
+  two-factor account's ordinary lock (repeated second-factor lockouts hold
+  it until unlock or reset). Every password set also revokes the user's MCP
+  OAuth grants (`RevokeMCPAccess`), and an address change retires mailed
+  links. Passwords are capped at 72 bytes (bcrypt) in
+  `auth.ValidatePassword` and `web/lib/password.ts`. The rules and expiries:
+  `docs/auth-and-rbac.md`.
 
 ## MCP server
 
@@ -866,7 +888,9 @@ or imported groups come back empty. Any other path that creates groups through
   under their delivery key, which carries the episode
   (`releaseSupersededResolveClaim` and the relapse branch of
   `releaseMutedClaim` read it); a held relapse notice is handed back to the
-  exact row its claim replaced (`DispatchEnvelope.Release`). Dispatch message ids are the idempotency key plus the
+  exact row its claim replaced (`DispatchEnvelope.Release`), except a
+  `resolved` whose resolve never reached the channel, which goes back as
+  `created` (`recoveryReached`, the resolve's own marker). Dispatch message ids are the idempotency key plus the
   claim's `dispatchRound` (`notification_claim.go`): what a rolled-back claim
   finds again on retry (the resume clock for a page, `relapsed:` plus it
   for a relapse notice, the round for a reminder, `acknowledged_at` for an
@@ -991,7 +1015,10 @@ or imported groups come back empty. Any other path that creates groups through
   request logs and metric labels cannot record it; the public API routes are
   `api/internal/handlers/alertactions` (GET reads, only POST acknowledges).
   Paging plugins (PagerDuty, Opsgenie) never render it; SMS drops the deep
-  link when it has one.
+  link when it has one. A link acts only on its alert episode: the handler
+  refuses one issued (`actionlink.Claims.IssuedAt`, derived from the fixed
+  TTL) before the latest relapse's recovery (`issuedInEarlierEpisode`), so
+  changing an action's TTL shifts every outstanding link's issue time.
 - **Delivery history** (`alert_notification_deliveries`, 90 days) is written
   only through `shared/notifications/deliverylog`, from exactly two send
   paths — `deliverNotification` (`alerter/.../delivery_log.go`: in the claim
@@ -1077,6 +1104,37 @@ or imported groups come back empty. Any other path that creates groups through
   The gate passes its visibility on the request (`withPageVisibility`) and
   `cachedPage` rebuilds an entry built under another one; an access change
   invalidates the page, summary and feed together.
+- **Custom domains** (`shared/pagedomains` is the contract; the API alone
+  writes and verifies them in `api/internal/services/statuspagedomains`, TXT +
+  CNAME, DNS only, runner claims with `FOR UPDATE SKIP LOCKED` in batches
+  sized to finish within the lease). A hostname is unique only among
+  **verified** rows (partial unique index): unverified claims coexist, the
+  first to verify supersedes the rest (`record`, audited per workspace), and
+  pending/superseded claims expire after `ClaimTTL`. Verification messages
+  are fixed wording (`verify.go`), never resolver text or foreign names. On
+  the status page, `CustomHosts` (`custom_host.go`) runs **in front of the
+  mux** and **fails closed**: the platform routes only for platform hosts
+  (`STATUS_PAGE_BASE_URL`, `STATUS_PAGE_PLATFORM_HOSTS`) and names that can
+  never be a domain (`pagedomains.CanBeCustomDomain`: probes, in-cluster);
+  a verified host is rewritten onto `/public/status/{slug}/…` so the gate,
+  route table and caches apply unchanged (`/sw.js` included, not found on
+  gated pages); every other host, and every public host before the table
+  first loads, gets `writeNotFound`. The API keeps the feature off unless
+  the same settings make the status page fail closed
+  (`config.StatusPageFailsClosed`). Every domain query carries
+  `tenancy.LiveTenantSQL`; the workspace purge removes domains first. Hosts resolve only through the
+  in-memory `hostTable` (`domains.go`: every claimed hostname, one join
+  through `status_pages`, invalidated by page events above the subscriber's
+  guard, 30 s TTL), never a per-request query on the Host, and the gate
+  refuses a slug whose page ID differs from the table's
+  (`customHostPageMismatch`). Visitor-facing paths go through `pagePath`,
+  `pageSubPath`, `visitorPath` and `sessionCookieScope` (host-only `/`,
+  always `Secure`), never a literal `/public/status/`; absolute page URLs
+  (API and status page) come from `pagedomains.PublicBaseURL`/`PublicURL`
+  with the primary domain from `PrimaryHostSQL`, the same on every host, so
+  the slug-keyed render stays host-independent. Push subscriptions keep
+  `origin_host` for their deep link (`payloadsByOrigin`). New custom-host
+  path forms go in `customHostRouteTable` (`custom_host_test.go`).
 
 ## Web UI conventions
 

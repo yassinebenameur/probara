@@ -402,6 +402,7 @@ INSERT INTO incident_ai_analyses (tenant_id, incident_id, status) VALUES ('{T}',
 
 INSERT INTO status_pages (id, tenant_id, slug, title, visibility, password_hash) VALUES ('{P}', '{T}', 'page-{X}', 'Status', 'password', '$2a$04$hash');
 INSERT INTO status_page_access_tokens (status_page_id, label, token_hash) VALUES ('{P}', 'lobby', 'kiosk-{X}');
+INSERT INTO status_page_domains (status_page_id, hostname, verification_token, status) VALUES ('{P}', 'status-{X}.example.com', 'probara-verify={X}', 'verified');
 INSERT INTO status_page_sections (id, status_page_id, title) VALUES ('{S}', '{P}', 'Section');
 INSERT INTO status_page_section_monitors (section_id, monitor_id) VALUES ('{S}', '{M1}');
 INSERT INTO status_page_monitors (status_page_id, monitor_id) VALUES ('{P}', '{M1}');

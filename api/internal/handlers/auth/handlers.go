@@ -16,6 +16,7 @@ import (
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/accountmail"
 	"github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/api/internal/services/oidcauth"
@@ -38,11 +39,16 @@ type Handlers struct {
 	logger  *logger.Logger
 	audit   *audit.Recorder
 	oidc    *oidcauth.Service
+	// mail sends reset links and security notices (links.go); disabled
+	// without SMTP or APP_BASE_URL.
+	mail *accountmail.Mailer
+	// forgotSlots bounds the background work of forgot-password requests.
+	forgotSlots chan struct{}
 }
 
 // NewHandlers creates a new auth handler.
 func NewHandlers(service *adminauth.Service, cfg *config.APIConfig, log *logger.Logger, auditRecorder *audit.Recorder) *Handlers {
-	return &Handlers{service: service, cfg: cfg, logger: log, audit: auditRecorder}
+	return &Handlers{service: service, cfg: cfg, logger: log, audit: auditRecorder, forgotSlots: make(chan struct{}, forgotWorkers)}
 }
 
 // recordAuthEvent emits an explicit auth-lifecycle audit event. The auth
@@ -81,6 +87,19 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.service.Authenticate(r.Context(), req.Username, req.Password)
 	if err != nil {
+		// A correct password on a two-factor account: no session yet, only
+		// the challenge for the second step (mfa.go). Only a correct
+		// password gets here; a wrong one is the same 401 as for any
+		// account.
+		var second *adminauth.SecondFactorRequired
+		if errors.As(err, &second) {
+			httpx.WriteJSON(w, http.StatusOK, models.MFAChallengeResponse{
+				MFARequired: true,
+				MFAToken:    second.Challenge.Token,
+				ExpiresAt:   second.Challenge.ExpiresAt,
+			})
+			return
+		}
 		var failure *adminauth.LoginFailure
 		if !errors.As(err, &failure) {
 			// Still the generic 401, as before: an error tied to one
@@ -98,7 +117,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		h.logger.WithError(err).Warn("Failed to update admin last login")
 	}
 
-	if err := h.issueSession(w, r, user.ID, adminauth.AuthMethodPassword); err != nil {
+	if _, err := h.issueSession(w, r, user.ID, adminauth.AuthMethodPassword, ""); err != nil {
 		h.logger.WithError(err).Error("Failed to issue admin session")
 		apierrors.WriteInternalError(w, "failed to create session")
 		return
@@ -307,25 +326,31 @@ func (h *Handlers) AuthContext(w http.ResponseWriter, r *http.Request) {
 
 // issueSession starts a session (a new session family) for a completed
 // sign-in and sets its cookies. authMethod is adminauth.AuthMethodPassword
-// or AuthMethodOIDC.
-func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID uuid.UUID, authMethod string) error {
+// or AuthMethodOIDC; secondFactor is how a two-factor sign-in passed its
+// second step ("" without one), shown in the session list.
+func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID uuid.UUID, authMethod, secondFactor string) (uuid.UUID, error) {
 	refreshToken, refreshHash, err := generateRefreshToken()
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 
 	refreshTTL := time.Duration(h.cfg.AdminRefreshTTLDays) * 24 * time.Hour
 	familyID, err := h.service.CreateSession(r.Context(), adminID, refreshHash, time.Now().Add(refreshTTL), clientip.FromRequest(r), r.UserAgent(), authMethod)
 	if err != nil {
-		return err
+		return uuid.Nil, err
+	}
+	if secondFactor != "" {
+		if err := h.service.MarkSessionSecondFactor(r.Context(), familyID, secondFactor); err != nil {
+			h.logger.WithError(err).Warn("Failed to record the session's second factor")
+		}
 	}
 
 	if err := h.setAccessCookie(w, adminID, familyID); err != nil {
-		return err
+		return uuid.Nil, err
 	}
 
 	h.setRefreshCookie(w, refreshToken, refreshTTL)
-	return nil
+	return familyID, nil
 }
 
 // setAccessCookie issues the access JWT for a session; familyID becomes its

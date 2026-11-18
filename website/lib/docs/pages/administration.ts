@@ -124,8 +124,8 @@ export const ADMINISTRATION_PAGE: DocPage = {
               "`username`",
               "3–64 characters; letters, numbers, `.`, `_`, and `-`",
             ],
-            ["`email`", "Optional, used for OIDC linking and SSO-only users"],
-            ["`password`", "12–128 characters when local login is enabled"],
+            ["`email`", "Optional, used for OIDC linking, SSO-only users, and account emails (invites, reset links, security notices)"],
+            ["`password`", "At least 12 characters and at most 72 bytes (the bcrypt limit) when local login is enabled"],
             [
               "`platform_role`",
               "`superadmin` or `member`",
@@ -143,7 +143,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A user with email and no password can be provisioned as SSO-only. Superadministrator-only user routes create, list, update, and delete accounts. Safeguards prevent deleting the current user or leaving the installation without an administrator.",
+            "A user with email and no password can be provisioned as SSO-only, or [invited](#invites-resets-two-factor) to set a password. Superadministrator-only user routes create, list, update, and delete accounts. Safeguards prevent deleting the current user or leaving the installation without an administrator.",
         },
         {
           type: "callout",
@@ -167,6 +167,34 @@ export const ADMINISTRATION_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Every user manages their own sessions under **Account → Sessions** (the account menu in the sidebar): each sign-in, password or SSO, with its browser, client address, sign-in time and last activity, this device marked; sign out one, or everywhere else. A superadministrator sees and signs out any user's sessions on that user's page (`GET`/`DELETE /api/v1/users/{id}/sessions`, `DELETE /api/v1/users/{id}/sessions/{sessionId}`; MCP `list_user_sessions`, `revoke_user_session`, `revoke_user_sessions`). A signed-out session stops working on its next request. Setting a user's password signs them out everywhere (your own: everywhere else); deleting a user ends all their sessions; a lockout, an unlock and role or membership changes end none. Signing out an SSO session does not sign the user out of the identity provider. API keys and MCP connections are not sessions and are managed under Settings.",
+        },
+      ],
+    },
+    {
+      id: "invites-resets-two-factor",
+      title: "Invites, password resets and two-factor sign-in",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "A superadministrator manages another user's access from the **Sign-in access** panel of the user's page. **Send invite** (`POST /api/v1/users/{id}/invite`, MCP `invite_user`) gives an account without a password a single-use link to set one, valid 7 days; sending another replaces it. For an account that signs in with single sign-on, or with `method: \"sso\"`, the invite only tells the user to sign in with SSO. With single sign-on configured, inviting an account that is not linked yet needs an explicit choice (the panel preselects SSO): a password invite gives the account a Probara password, after which the identity provider can never link it by email, so the user signs in without the provider’s multi-factor authentication. **Generate reset link** (`POST /api/v1/users/{id}/password-reset`, MCP `create_password_reset_link`) issues a single-use reset link valid 1 hour for a password account; completing it signs the user out of every browser and revokes their MCP connections (workspace API keys stay). **Reset two-factor** (`POST /api/v1/users/{id}/reset-2fa`, MCP `reset_user_two_factor`) turns a user's two-factor sign-in off after a lost device: they sign in with the password alone and can enrol again; their sessions stay signed in and a pending email change is cancelled. All three are audited (`user.invite`, `user.password_reset_link`, `user.two_factor_reset`).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "With email delivery (`SMTP_*` and `APP_BASE_URL` on the API) links are emailed to the account's address and never shown. Without it, or for an account with no address, the response (and the panel) shows the link once: copy it and send it over a channel you trust; it is not logged or stored in readable form. When `APP_BASE_URL` is unset the link is a path on the operator UI, which the panel completes with the address you are using.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Users manage their own account under **Account**: **Password** (needs the current password; signs out every other browser), **Email** (a confirmation link goes to the new address and a notice to the current one; the change applies when the link is used; needs email delivery), and **Two-factor** (an authenticator app plus 10 single-use recovery codes, shown once; enrolment needs `PROBARA_SECRETS_KEY` on the API). The sign-in page links to **Forgot password**, which emails a reset link, or, without email delivery, tells the user to ask an administrator. None of this applies to SSO accounts, whose identity provider owns the password, email address and multi-factor authentication. Expiries, what each step signs out, and the anti-enumeration rules are in [Security](/docs/security/#account-links-two-factor).",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Lost authenticator on the last superadmin account",
+          text:
+            "Sign in with a recovery code (it signs out every other session). Without one and without another superadministrator, run `go run ./cmd/admin -reset-2fa <username>` with `POSTGRES_URL` set (it works on a database the migrations have not reached yet), then sign in with the password.",
         },
       ],
     },

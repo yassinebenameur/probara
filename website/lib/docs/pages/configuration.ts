@@ -226,6 +226,16 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Required whenever `PUBLIC_NATS_URL` is nonempty. It must be a NATS account seed for the API-hosted authorization callout.',
             ],
             [
+              '`STATUS_PAGE_CNAME_TARGET`',
+              'Empty; a bare host name (no scheme, port or path), or the API refuses to start',
+              'API. Host every status page [custom domain](/docs/status-pages/#custom-domains) must CNAME to, shown in the DNS instructions and checked by verification; usually the host status pages are published on. Empty turns custom domains off: none can be added, and none is re-verified (verified ones keep serving). They are also off (with a warning at startup) while neither `STATUS_PAGE_BASE_URL` nor `STATUS_PAGE_PLATFORM_HOSTS` on the API names a public status host, because the status service fails closed on unverified hostnames only then. Helm: `statusPage.cnameTarget`, else the host of `statusPage.baseUrl`.',
+            ],
+            [
+              '`STATUS_PAGE_BASE_URL` (API)',
+              'Empty',
+              'The status service\'s public origin, read by the API only to refuse its host as a custom domain (with the hosts of `APP_BASE_URL`, `PUBLIC_BASE_URL`, `PUBLIC_NATS_URL` and the CNAME target). Helm and Compose pass the status service\'s value.',
+            ],
+            [
               '`WORKER_LOCATION_ID`',
               'Empty or UUID',
               'Pins a worker to one private location. Empty selects the default platform worker fleet.',
@@ -321,7 +331,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PROBARA_SECRETS_KEY`',
               'Base64 encoding of exactly 32 bytes',
-              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback). The API, alerter and worker also derive the signing key for [acknowledge links](/docs/alerting/#acknowledge-links) from it; without it notifications carry none. The API signs the unsubscribe links of [scheduled SLA reports](/docs/slas/#schedules) with it too, so without it no report schedule can be enabled.',
+              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback). The API, alerter and worker also derive the signing key for [acknowledge links](/docs/alerting/#acknowledge-links) from it; without it notifications carry none. The API signs the unsubscribe links of [scheduled SLA reports](/docs/slas/#schedules) with it too, so without it no report schedule can be enabled. The API also seals [two-factor](/docs/security/#account-links-two-factor) authenticator secrets with it: without it nobody can turn two-factor sign-in on. Removing it, or the version that sealed a secret, stops authenticator codes from being checked (the API logs it once; those attempts do not count toward the lockout); recovery codes keep working, and a superadministrator’s two-factor reset lets the user enrol again.',
             ],
             [
               '`PROBARA_SECRETS_KEY_V2` … `PROBARA_SECRETS_KEY_V100`',
@@ -726,6 +736,11 @@ export const CONFIGURATION_PAGE: DocPage = {
             'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The API also mails [scheduled SLA reports](/docs/slas/#schedules), which additionally need `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; without all three no schedule can be enabled. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
         },
         {
+          type: 'paragraph',
+          text:
+            'Account emails come from the API too, and need both `SMTP_*` and `APP_BASE_URL` on it: [invites, password reset links, email-change confirmations](/docs/administration/#invites-resets-two-factor) and security notices (two-factor turned on or off, a recovery code used). Without either, nothing is mailed: a superadministrator who sends an invite or generates a reset link gets the link back once to hand over, the forgot-password page tells users to ask an administrator, and users cannot change their own email address. `GET /api/v1/auth/capabilities` reports which applies (`email_delivery`).',
+        },
+        {
           type: 'table',
           columns: ['SMTP variable', 'Code default', 'Important behavior'],
           rows: [
@@ -792,7 +807,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_BASE_URL`',
               'Empty',
-              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications) and each page\'s canonical link, `og:url` and absolute [feed and summary links](/docs/status-pages/#feed-summary-badges); when empty, the notification opens the page via the service worker scope, the head carries no canonical link or `og:url`, and the feed links by path, rather than a guessed host.',
+              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications) and each page\'s canonical link, `og:url` and absolute [feed and summary links](/docs/status-pages/#feed-summary-badges); when empty, the notification opens the page via the service worker scope, the head carries no canonical link or `og:url`, and the feed links by path, rather than a guessed host. A page with a verified [custom domain](/docs/status-pages/#custom-domains) uses that domain for all of these instead, and a subscription made there links to it. Its host is never served as a custom domain.',
             ],
             [
               '`STATUS_PAGE_API_BASE_URL`',
@@ -827,7 +842,17 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_COOKIE_SECURE`',
               'Empty (derived); `true`/`false`, anything else refuses to start',
-              'Secure attribute of the visitor session cookie. Empty: on when `STATUS_PAGE_BASE_URL` is `https://`, else set per request when it arrived over HTTPS (TLS terminated here, or `X-Forwarded-Proto: https` from a `TRUSTED_PROXY_CIDRS` peer). Set `true` behind a TLS-terminating proxy when the base URL is unset; `false` forces it off. Helm: `statusPage.cookieSecure`.',
+              'Secure attribute of the visitor session cookie. Empty: on when `STATUS_PAGE_BASE_URL` is `https://`, else set per request when it arrived over HTTPS (TLS terminated here, or `X-Forwarded-Proto: https` from a `TRUSTED_PROXY_CIDRS` peer). Set `true` behind a TLS-terminating proxy when the base URL is unset; `false` forces it off. On a [custom domain](/docs/status-pages/#custom-domains) the cookie is always `Secure` and this variable does not apply. Helm: `statusPage.cookieSecure`.',
+            ],
+            [
+              '`STATUS_PAGE_PLATFORM_HOSTS`',
+              'Empty; comma-separated host names, anything else refuses to start',
+              'Hosts besides `STATUS_PAGE_BASE_URL`\'s that serve the platform routes: every page under `/public/status/`, the API proxy, health and metrics. Once one of these or the base URL is a public name, any other public hostname is served only as a verified [custom domain](/docs/status-pages/#custom-domains) and otherwise answers not found; internal names (IP addresses, `localhost`, cluster Service names) always get the platform routes. With neither (development), every host does. Helm: `ingress.hosts` plus `statusPage.platformHosts`. The API reads it too, refuses these hosts as custom domains, and keeps custom domains off while neither it nor `STATUS_PAGE_BASE_URL` is a public name.',
+            ],
+            [
+              '`STATUS_PAGE_TRUST_FORWARDED_HOST`',
+              '`false`; `true`/`false`, anything else refuses to start',
+              'Match [custom domains](/docs/status-pages/#custom-domains) on `X-Forwarded-Host` (its first value) instead of `Host`, believed only from `TRUSTED_PROXY_CIDRS` peers. Only for a proxy that rewrites `Host`; leave it off otherwise. Helm: `statusPage.trustForwardedHost`.',
             ],
             [
               '`STATUSPAGE_UPDATES_SUBJECT`',

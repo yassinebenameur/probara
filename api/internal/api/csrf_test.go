@@ -84,6 +84,10 @@ func TestCookieWritesRefuseUntrustedOrigins(t *testing.T) {
 		"sign-out from a status page": {method: http.MethodPost, host: "app.example.com", path: "/api/v1/auth/logout", cookie: true, headers: otherPort},
 		"OAuth consent from a status page": {method: http.MethodPost, host: "app.example.com", path: "/api/v1/oauth/authorize/decision",
 			contentType: "application/json", body: `{}`, cookie: true, headers: siblingStatusPage},
+		"password reset link from a status page": {method: http.MethodPost, host: "app.example.com", path: "/api/v1/auth/password/reset",
+			contentType: "application/json", body: `{"password":"x"}`, headers: siblingStatusPage},
+		"sign-in second step from a status page": {method: http.MethodPost, host: "app.example.com", path: "/api/v1/auth/login/mfa",
+			contentType: "text/plain", body: `{}`, headers: otherPort},
 	}
 	for name, rq := range refused {
 		if rec := send(rq); rec.Code != http.StatusForbidden || code(rec) != apimiddleware.CrossOriginRefusedCode {
@@ -121,6 +125,14 @@ func TestCookieWritesRefuseUntrustedOrigins(t *testing.T) {
 		contentType: "text/plain", body: createWorkspace, cookie: true, headers: ui})
 	if rec.Code != http.StatusUnsupportedMediaType || code(rec) != apimiddleware.UnsupportedMediaTypeCode {
 		t.Fatalf("text/plain body from the UI: %d %s, want 415", rec.Code, rec.Body)
+	}
+	// The same holds on the anonymous routes that set a session or redeem a link.
+	for _, path := range []string{"/api/v1/auth/login", "/api/v1/auth/login/mfa", "/api/v1/auth/password/reset", "/api/v1/auth/invite/accept"} {
+		rec := send(request{method: http.MethodPost, host: "app.example.com", path: path,
+			contentType: "text/plain", body: `{"password":"x"}`, headers: ui})
+		if rec.Code != http.StatusUnsupportedMediaType {
+			t.Errorf("text/plain body to %s from the UI: %d %s, want 415", path, rec.Code, rec.Body)
+		}
 	}
 }
 
@@ -173,6 +185,18 @@ func TestCookieWritesThroughTheUIProxyWithoutOriginConfiguration(t *testing.T) {
 		"sign-out":         {http.MethodPost, "/api/v1/auth/logout", true},
 		"workspace create": {http.MethodPost, "/api/v1/tenants", true},
 		"OAuth consent":    {http.MethodPost, "/api/v1/oauth/authorize/decision", true},
+		// Account lane: the sign-in's second step and the mailed-link
+		// redemptions (no cookie; they act on an account), and the signed-in
+		// user's own account writes.
+		"sign-in second step":    {http.MethodPost, "/api/v1/auth/login/mfa", false},
+		"forgot password":        {http.MethodPost, "/api/v1/auth/password/forgot", false},
+		"password reset link":    {http.MethodPost, "/api/v1/auth/password/reset", false},
+		"invite accept":          {http.MethodPost, "/api/v1/auth/invite/accept", false},
+		"email change confirm":   {http.MethodPost, "/api/v1/auth/email/confirm", false},
+		"own password change":    {http.MethodPost, "/api/v1/account/password", true},
+		"own two-factor disable": {http.MethodPost, "/api/v1/account/two-factor/disable", true},
+		"own sessions revoke":    {http.MethodPost, "/api/v1/account/sessions/revoke-others", true},
+		"superadmin invite":      {http.MethodPost, "/api/v1/users/6f1c1f3e-8f39-4d6a-9d43-0b8a3c6e2b11/invite", true},
 	}
 
 	for _, peer := range []string{untrustedPod, trustedProxy} {

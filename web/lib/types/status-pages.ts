@@ -169,3 +169,48 @@ export interface CreatedStatusPageAccessToken extends StatusPageAccessToken {
 export interface StatusPageAccessTokenListResponse {
   items: StatusPageAccessToken[];
 }
+
+/**
+ * A custom domain's verification state; only verified domains are served.
+ * superseded: another status page verified the hostname first.
+ */
+export type StatusPageDomainStatus = 'pending' | 'verified' | 'failed' | 'superseded';
+
+/** A DNS record a custom domain needs, with what the last check found. */
+export interface StatusPageDomainRecord {
+  type: 'CNAME' | 'TXT';
+  name: string;
+  value: string;
+  /** null before the first check. */
+  found: boolean | null;
+}
+
+/** A status page's custom domain (status-page-domains API). */
+export interface StatusPageDomain {
+  id: string;
+  status_page_id: string;
+  /** Lower-case ASCII; an internationalized name is shown as punycode. */
+  hostname: string;
+  status: StatusPageDomainStatus;
+  /** The page's address on this domain. */
+  url: string;
+  /** The page's canonical domain: its oldest verified one. */
+  primary: boolean;
+  records: StatusPageDomainRecord[];
+  last_error?: string;
+  last_checked_at?: string;
+  verified_at?: string;
+  /** Set while a verified domain fails its checks (still served). */
+  failing_since?: string;
+  next_check_at: string;
+  created_at: string;
+  /** When an unverified claim (pending or superseded) is removed. */
+  expires_at?: string;
+}
+
+export interface StatusPageDomainListResponse {
+  items: StatusPageDomain[];
+  /** false when the installation has no STATUS_PAGE_CNAME_TARGET. */
+  enabled: boolean;
+  cname_target?: string;
+}

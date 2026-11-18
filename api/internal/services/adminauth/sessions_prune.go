@@ -115,6 +115,16 @@ func PruneSessions(ctx context.Context, q SessionQuerier, retention time.Duratio
 			WHERE expires_at < NOW() - make_interval(secs => $1)
 			LIMIT $2
 		)`,
+		// Account links and sign-in challenges (migration 000124, last: its
+		// absence ends the run) once long expired, kept as long as sessions
+		// for audit correlation.
+		`
+		DELETE FROM admin_account_tokens
+		WHERE id IN (
+			SELECT id FROM admin_account_tokens
+			WHERE expires_at < NOW() - make_interval(secs => $1)
+			LIMIT $2
+		)`,
 	} {
 		for {
 			res, err := q.ExecContext(ctx, stmt, retention.Seconds(), sessionPruneBatch)

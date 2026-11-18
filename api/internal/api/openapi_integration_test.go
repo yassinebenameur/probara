@@ -52,7 +52,12 @@ func TestOpenAPIServedToAPIKeys(t *testing.T) {
 // carries a documented media type.
 func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 	natsURL := startJetStream(t)
-	f := newMCPFixtureWith(t, func(cfg *config.APIConfig) { cfg.NATSURL = natsURL })
+	f := newMCPFixtureWith(t, func(cfg *config.APIConfig) {
+		cfg.NATSURL = natsURL
+		// Custom domains on, so their routes answer for real.
+		cfg.StatusPageCNAMETarget = "status.openapi-platform.example.com"
+		cfg.StatusPagePublicBaseURL = "https://status.openapi-platform.example.com"
+	})
 	key := f.apiKey(f.tenantA, "write")
 	doc := loadOpenAPIDoc(t)
 
@@ -227,6 +232,14 @@ func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 	check(post, "/status-pages/{id}/access-tokens/{accessTokenId}/revoke",
 		"/api/v1/status-pages/"+pageID+"/access-tokens/"+tokenID+"/revoke", nil, noContent)
 
+	// Status page custom domains: add, list, verify (its DNS lookups fail or
+	// time out here, which is recorded and still answers the domain), remove.
+	domainID := idOf(check(post, "/status-page-domains", "/api/v1/status-page-domains",
+		map[string]any{"status_page_id": pageID, "hostname": "status.openapi-customer.example.com"}, created))
+	nonEmptyList(check(get, "/status-page-domains", "/api/v1/status-page-domains?status_page_id="+pageID, nil, ok))
+	check(post, "/status-page-domains/{domainId}/verify", "/api/v1/status-page-domains/"+domainID+"/verify", nil, ok)
+	check(del, "/status-page-domains/{domainId}", "/api/v1/status-page-domains/"+domainID, nil, noContent)
+
 	// Config as code: plan, apply with the plan's fingerprint, and a refused
 	// apply (stale fingerprint), whose 409 carries the plan.
 	document := "kind: monitor_export\nversion: 2\nmonitors:\n  - key: openapi-apply\n    name: Applied\n" +
@@ -261,6 +274,19 @@ func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 	checkAs(session, post, "/users/{id}/unlock", "/api/v1/users/"+rootID+"/unlock", nil, ok)
 	nonEmptyList(checkAs(session, get, "/users/{id}/sessions", "/api/v1/users/"+rootID+"/sessions", nil, ok))
 	checkAs(session, del, "/users/{id}/sessions", "/api/v1/users/"+rootID+"/sessions", nil, ok)
+
+	// User reads carry the sign-in factors and lockout state; the account
+	// actions answer one shape with or without email delivery (none here,
+	// so the link comes back).
+	checkAs(session, get, "/users/{id}", "/api/v1/users/"+rootID, nil, ok)
+	nonEmptyList(checkAs(session, get, "/users", "/api/v1/users", nil, ok))
+	invitedID := idOf(checkAs(session, post, "/users", "/api/v1/users",
+		map[string]any{"username": "openapi-invited", "email": "invited@example.com", "platform_role": "member"}, created))
+	checkAs(session, post, "/users/{id}/invite", "/api/v1/users/"+invitedID+"/invite", nil, ok)
+	checkAs(session, post, "/users/{id}/invite", "/api/v1/users/"+invitedID+"/invite", map[string]any{"method": "sso"}, http.StatusConflict)
+	checkAs(session, post, "/users/{id}/password-reset", "/api/v1/users/"+rootID+"/password-reset", nil, ok)
+	checkAs(session, post, "/users/{id}/password-reset", "/api/v1/users/"+invitedID+"/password-reset", nil, http.StatusConflict)
+	checkAs(session, post, "/users/{id}/reset-2fa", "/api/v1/users/"+rootID+"/reset-2fa", nil, ok)
 
 	// Shared error answers the document names by code: a session scoped to a
 	// workspace it cannot open, and a session-cookie write from an origin the

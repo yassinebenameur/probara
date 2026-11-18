@@ -88,3 +88,18 @@ test('a deleted selected workspace is dropped once and the switcher settles on a
   assert.equal(server.calls[server.calls.length - 1].tenant, 'live');
   assert.equal(listReloads, 1);
 });
+
+test('account routes need no workspace and never carry X-Tenant-ID', async () => {
+  const server = fakeServer();
+  server.remove('gone');
+  server.remove('live');
+  tenant.setSelectedTenantId('gone'); // stale: the last workspace was deleted
+  const before = server.calls.length;
+  await apiRequest('GET', '/v1/account/security');
+  await apiRequest('POST', '/v1/account/password', { current_password: 'x', new_password: 'y' });
+  const after = server.calls.slice(before);
+  assert.deepEqual(after.map((c) => [c.path, c.tenant]), [
+    ['/v1/account/security', null],
+    ['/v1/account/password', null],
+  ]);
+});

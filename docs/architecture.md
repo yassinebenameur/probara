@@ -97,6 +97,21 @@ batch back) is absorbed by the stream's 2-minute duplicate window, so
 side-effecting checks are at-most-once across redelivery and dispatch retries
 alike. Run-now publishes without one: it is a deliberate manual trigger.
 
+Status page custom domains (`shared/pagedomains`) are written and verified
+by the API only: its domain runner, which every replica runs, claims due
+`status_page_domains` rows with `FOR UPDATE SKIP LOCKED` and a lease, checks
+their TXT and CNAME records with DNS lookups only, and publishes
+`status_page_domains_changed` on `statuspage.updates` when a domain starts or
+stops being served. The status-page service holds the verified domains in an
+in-memory table (one read query, reloaded on that event, on page updates, and
+every 30 s) and rewrites a request on a verified custom domain onto its
+page's slug paths before any route, so the visibility gate covers it; the
+platform routes answer only on platform hosts (`STATUS_PAGE_BASE_URL`,
+`STATUS_PAGE_PLATFORM_HOSTS`) and internal names, and every other host gets
+not found. Correctness never depends on the event, which only shortens the
+delay. A hostname is verified for one page at most; unverified claims
+coexist and the first to verify supersedes the rest.
+
 Private-location workers use location-scoped broker credentials and encrypted
 monitor configurations. The platform validates location result provenance
 before persistence. These workers do not receive the database connection or

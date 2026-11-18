@@ -39,6 +39,9 @@ import (
 // unlockSuffix is the password form's target, the one exempt sub-route.
 const unlockSuffix = "/unlock"
 
+// workerSuffix is the push service worker of a page on its custom domain.
+const workerSuffix = "/sw.js"
+
 // previewSuffix is the draft preview. On a gated page it opens with a valid
 // preview token (minted by the API for the template editor) as well as with
 // a visitor session.
@@ -126,6 +129,10 @@ func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request, slug, rest 
 		h.writeStatusPageError(w, slug, err, "Failed to load status page access")
 		return nil, nil, false
 	}
+	if customHostPageMismatch(r, acc.ID) {
+		writeNotFound(w)
+		return nil, nil, false
+	}
 
 	aw := &accessWriter{ResponseWriter: w, noIndex: pageaccess.NoIndex(acc.Visibility), noStore: pageaccess.Gated(acc.Visibility)}
 	if !pageaccess.Gated(acc.Visibility) {
@@ -142,8 +149,9 @@ func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request, slug, rest 
 
 	// Pages on one origin share it, so another page's script (a custom
 	// template runs script) could otherwise request this page with the
-	// visitor's cookie and read the answer, or frame it.
-	if crossPageRequest(r, slug) {
+	// visitor's cookie and read the answer, or frame it. A custom domain is
+	// an origin of its own holding this page alone (custom_host.go).
+	if _, onCustomHost := customHostFrom(r); !onCustomHost && crossPageRequest(r, slug) {
 		h.denyAccess(w, aw, r, acc, slug, rest, false)
 		return nil, nil, false
 	}
@@ -244,6 +252,9 @@ func (h *Handlers) stillAuthorized(ctx context.Context, r *http.Request, slug st
 		// authorize.
 		return false
 	}
+	if customHostPageMismatch(r, acc.ID) {
+		return false
+	}
 	if !pageaccess.Gated(acc.Visibility) {
 		return true
 	}
@@ -267,7 +278,7 @@ func (h *Handlers) setSession(w http.ResponseWriter, r *http.Request, slug strin
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    h.access.sessions.sign(pageID, cred, expires),
-		Path:     sessionCookiePath(slug),
+		Path:     sessionCookieScope(r, slug),
 		Expires:  expires,
 		MaxAge:   int(ttl.Seconds()),
 		HttpOnly: true,
@@ -281,8 +292,12 @@ func (h *Handlers) setSession(w http.ResponseWriter, r *http.Request, slug strin
 // cookieSecure is the session cookie's Secure flag: STATUS_PAGE_COOKIE_SECURE
 // when set, else on when STATUS_PAGE_BASE_URL is https (the usual setup is
 // TLS terminated at an ingress, which request detection cannot see unless
-// TRUSTED_PROXY_CIDRS names it), else detected from the request.
+// TRUSTED_PROXY_CIDRS names it), else detected from the request. On a custom
+// domain the base URL says nothing (customHostCookieSecure).
 func (h *Handlers) cookieSecure(r *http.Request) bool {
+	if _, ok := customHostFrom(r); ok {
+		return h.customHostCookieSecure(r)
+	}
 	switch h.access.cookieSecure {
 	case cookieSecureAlways:
 		return true
@@ -371,7 +386,7 @@ func gatedFrameAncestors(appBaseURL string) []string {
 func redirectWithoutToken(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	q.Del(tokenParam)
-	clean := url.URL{Path: r.URL.Path, RawQuery: q.Encode()}
+	clean := url.URL{Path: visitorPath(r), RawQuery: q.Encode()}
 	w.Header().Set(securityheaders.HeaderReferrerPolicy, "no-referrer")
 	http.Redirect(w, r, clean.String(), http.StatusSeeOther)
 }
@@ -390,7 +405,7 @@ func (h *Handlers) denyAccess(raw http.ResponseWriter, w *accessWriter, r *http.
 		return
 	}
 	if isPageRoute(rest) && r.Method == http.MethodGet {
-		h.writeUnlockPage(w, acc, slug, http.StatusUnauthorized, "")
+		h.writeUnlockPage(w, r, acc, slug, http.StatusUnauthorized, "")
 		return
 	}
 	http.Error(w, "Password required", http.StatusUnauthorized)
@@ -417,10 +432,10 @@ type unlockView struct {
 	Error   string
 }
 
-func (h *Handlers) writeUnlockPage(w http.ResponseWriter, acc *pageAccess, slug string, status int, message string) {
+func (h *Handlers) writeUnlockPage(w http.ResponseWriter, r *http.Request, acc *pageAccess, slug string, status int, message string) {
 	view := unlockView{
 		Title:  acc.Title,
-		Action: sessionCookiePath(slug) + unlockSuffix,
+		Action: pageSubPath(r, slug, unlockSuffix),
 		Error:  message,
 		Accent: template.CSS("#ff5a24"),
 	}
@@ -462,19 +477,23 @@ func (h *Handlers) HandleUnlock(w http.ResponseWriter, r *http.Request, slug str
 		h.writeStatusPageError(w, slug, err, "Failed to load status page access")
 		return
 	}
+	if customHostPageMismatch(r, acc.ID) {
+		writeNotFound(w)
+		return
+	}
 	if !pageaccess.AcceptsPassword(acc.Visibility) {
 		if pageaccess.Gated(acc.Visibility) {
 			writeNotFound(w)
 			return
 		}
 		// Public and unlisted pages need no unlocking.
-		http.Redirect(gw, r, sessionCookiePath(slug), http.StatusSeeOther)
+		http.Redirect(gw, r, pagePath(r, slug), http.StatusSeeOther)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		http.Redirect(gw, r, sessionCookiePath(slug), http.StatusSeeOther)
+		http.Redirect(gw, r, pagePath(r, slug), http.StatusSeeOther)
 		return
 	case http.MethodPost:
 	default:
@@ -496,7 +515,7 @@ func (h *Handlers) HandleUnlock(w http.ResponseWriter, r *http.Request, slug str
 	client := h.clientIPs.BucketKey(r)
 	if !h.access.failures.allowed(client, acc.ID) {
 		gw.Header().Set("Retry-After", "60")
-		h.writeUnlockPage(gw, acc, slug, http.StatusTooManyRequests, "Too many attempts. Try again in a minute.")
+		h.writeUnlockPage(gw, r, acc, slug, http.StatusTooManyRequests, "Too many attempts. Try again in a minute.")
 		return
 	}
 
@@ -512,11 +531,11 @@ func (h *Handlers) HandleUnlock(w http.ResponseWriter, r *http.Request, slug str
 	}
 	if !pageaccess.CheckPassword(acc.PasswordHash, r.PostForm.Get("password")) {
 		h.access.failures.fail(client, acc.ID)
-		h.writeUnlockPage(gw, acc, slug, http.StatusUnauthorized, "That password is not correct.")
+		h.writeUnlockPage(gw, r, acc, slug, http.StatusUnauthorized, "That password is not correct.")
 		return
 	}
 	h.setSession(gw, r, slug, acc.ID, sessionCredential{kind: sessionKindPassword, passwordVersion: acc.PasswordVersion})
-	http.Redirect(gw, r, sessionCookiePath(slug), http.StatusSeeOther)
+	http.Redirect(gw, r, pagePath(r, slug), http.StatusSeeOther)
 }
 
 // authorizeProxy applies the gate to /_sp_api calls that name a status page.

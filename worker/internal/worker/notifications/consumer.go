@@ -442,7 +442,9 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 // RelapseNotice), claimed by moving the route's row to 'relapsed' in the
 // alert's episode; handing it back restores the row the claim replaced
 // (DispatchEnvelope.Release), so the notice is due again and nothing else
-// about the route changed.
+// about the route changed. The one exception is a replaced 'resolved' whose
+// recovery notice provably reached nobody (recoveryReached): that row goes
+// back as 'created', still paged, so the route hears the next recovery.
 //
 // A held reminder keeps its claim: its next round counts from the later of
 // the last send and the way out of the mute, which comes after this claim,
@@ -464,20 +466,37 @@ func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.D
 		return err
 	}
 	if envelope.Event.Alert.RelapseNotice && envelope.Release != nil {
-		// The row exactly as the relapse claim found it (last event, its
-		// time, the episode of its last page), so a route that heard the
-		// earlier recovery is 'resolved' again and gets no second recovery
-		// notice, the same as when the acknowledgement had come before the
-		// claim.
-		release := envelope.Release
-		if _, err := tx.ExecContext(ctx, `
+		// The row as the relapse claim found it (last event, its time, the
+		// episode of its last page), so a route that heard the earlier
+		// recovery is 'resolved' again and gets no second recovery notice,
+		// the same as when the acknowledgement had come before the claim.
+		release := *envelope.Release
+		if release.EventType == "resolved" {
+			// But 'resolved' only says the alerter claimed that recovery
+			// notice, not that it went out: it may still wait on a retry, or
+			// have been dropped as superseded after this claim moved the row
+			// on, which no longer matched releaseSupersededResolveClaim. Left
+			// 'resolved', the route then never hears the relapse's recovery
+			// either (the alerter sends one only to rows not already
+			// 'resolved'), and its last word stays the earlier DOWN.
+			heard, err := recoveryReached(ctx, tx, alertID, channelID, release.PagedRelapse, envelope.Event.Alert.RelapseCount)
+			if err != nil {
+				return err
+			}
+			if !heard {
+				release.EventType = "created"
+			}
+		}
+		// Done here: the row the notice hands back is never a first page's
+		// claim, and one restored as 'created' at the claim's own time must
+		// not be mistaken for it by the delete below.
+		_, err := tx.ExecContext(ctx, `
 			UPDATE alert_notification_states
 			SET last_event_type = $4, last_sent_at = COALESCE($5::timestamptz, last_sent_at), paged_relapse = $6, updated_at = NOW()
 			WHERE alert_id = $1 AND channel_id = $2
 			  AND last_event_type = 'relapsed' AND last_sent_at = $3::timestamptz`,
-			alertID, channelID, envelope.Event.Timestamp, release.EventType, release.SentAt, release.PagedRelapse); err != nil {
-			return err
-		}
+			alertID, channelID, envelope.Event.Timestamp, release.EventType, release.SentAt, release.PagedRelapse)
+		return err
 	}
 	_, err = tx.ExecContext(ctx, `
 		DELETE FROM alert_notification_states
@@ -485,6 +504,28 @@ func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.D
 		  AND last_event_type = 'created' AND last_sent_at = $3::timestamptz`,
 		alertID, channelID, envelope.Event.Timestamp)
 	return err
+}
+
+// recoveryReached reports whether the recovery notice behind a route's
+// 'resolved' row possibly reached the channel, by the test
+// releaseSupersededResolveClaim applies: its attempt marker or a recipient
+// in the ledger under its delivery key (a delivered resolve keeps its marker;
+// one that failed with proof nothing was accepted clears it; a dropped one
+// never wrote one). That resolve was claimed after the route's last page
+// (episode pagedRelapse) and before the relapse notice of episode relapse, so
+// its key is the resolve key of an episode from pagedRelapse to relapse-1
+// (an alert muted through whole episodes can skip some). The row records one resolve
+// claim since its last page, so a key in that range is that resolve's (an
+// earlier one handed back under releaseSupersededResolveClaim provably
+// reached nobody). A resolve sent before attempt markers existed, or by the
+// alerter's synchronous path, reads as not reached: the safe side is a second
+// recovery notice, never none.
+func recoveryReached(ctx context.Context, tx *sql.Tx, alertID, channelID uuid.UUID, pagedRelapse, relapse int) (bool, error) {
+	var keys []string
+	for episode := pagedRelapse; episode < relapse; episode++ {
+		keys = append(keys, notifications.RecipientEventKeyFor("resolved", time.Time{}, episode))
+	}
+	return recipientledger.ReachedAny(ctx, tx, alertID, channelID, keys)
 }
 
 // releaseSupersededResolveClaim hands back the alerter's claim on a resolve

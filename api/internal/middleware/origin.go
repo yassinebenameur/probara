@@ -139,13 +139,14 @@ func (p *OriginPolicy) judge(r *http.Request) (bool, string) {
 	return true, ""
 }
 
-// RequireTrustedOrigin refuses an unsafe request from an untrusted origin
-// (Allows) with 403 cross_origin_refused. It guards the anonymous routes that
-// set or clear the session cookie -- sign-in (login CSRF), refresh and
-// sign-out (forced logout) -- which run outside AuthMiddleware.
+// RequireTrustedOrigin applies admitCookieRequest's rule (trusted origin,
+// JSON body) to the anonymous routes that set or clear the session cookie --
+// sign-in and its second step (login CSRF), refresh, sign-out (forced
+// logout) -- or redeem a mailed account link (forgot, reset, invite accept,
+// email confirm), which run outside AuthMiddleware.
 func (p *OriginPolicy) RequireTrustedOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if unsafeMethod(r.Method) && !p.admitOrigin(w, r) {
+		if !p.admitCookieRequest(w, r) {
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -167,7 +168,7 @@ func (p *OriginPolicy) admitCookieRequest(w http.ResponseWriter, r *http.Request
 	}
 	if !acceptableBody(r) {
 		apierrors.WriteError(w, http.StatusUnsupportedMediaType, UnsupportedMediaTypeCode,
-			"a signed-in request with a body must send Content-Type: application/json")
+			"a request with a body must send Content-Type: application/json")
 		return false
 	}
 	return true

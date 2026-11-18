@@ -13,8 +13,11 @@ type AdminSession struct {
 	ID uuid.UUID `json:"id"`
 	// AuthMethod is "password" or "oidc"; empty for sign-ins that predate
 	// session tracking.
-	AuthMethod string    `json:"auth_method,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	AuthMethod string `json:"auth_method,omitempty"`
+	// SecondFactor is how a two-factor sign-in passed its second step:
+	// "totp" or "recovery_code"; empty without one.
+	SecondFactor string    `json:"second_factor,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 	// LastUsedAt moves at sign-in and at each token refresh (about every
 	// access-token lifetime while the session is in use), not per request.
 	LastUsedAt time.Time `json:"last_used_at"`

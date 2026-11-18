@@ -106,6 +106,62 @@ func TestAcknowledgeLinkAgainstTheDatabase(t *testing.T) {
 	require.Equal(t, "link sent to On-call email", audit.events[0].ActorLabel)
 }
 
+// Against the real alerts service: after a relapse, a link from the first
+// episode's page reads as invalid and acknowledges nothing; a link from the
+// relapse's page acknowledges.
+func TestAcknowledgeLinkFromAnEarlierEpisodeAgainstTheDatabase(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenant := testutil.InsertTenant(ctx, t, dbClient, "")
+	channelID := insertChannel(ctx, t, dbClient, tenant, "On-call email")
+	alert := insertAlert(ctx, t, dbClient, tenant, "active")
+	firstPage := time.Now().Add(-time.Hour)
+	_, err := dbClient.ExecContext(ctx, `
+		WITH reopened AS (
+			UPDATE alerts SET relapse_count = 1, reopened_at = NOW() - INTERVAL '5 minutes'
+			WHERE id = $1 RETURNING id, reopened_at)
+		INSERT INTO alert_relapses (alert_id, relapse_number, recovered_at, reopened_at)
+		SELECT id, 1, reopened_at - INTERVAL '2 minutes', reopened_at FROM reopened`, alert)
+	require.NoError(t, err)
+
+	h := NewHandlers(signer, alertservice.NewService(dbClient, nil), DBChannels(dbClient), &fakeHub{}, &fakeAudit{}, nil)
+	r := chi.NewRouter()
+	r.Route("/api/v1/alert-actions", h.Routes)
+	call := func(method string, issued time.Time) (int, Response) {
+		tok, err := signer.ActionToken(actionlink.ActionAcknowledge, tenant.String(), alert.String(), channelID.String(), issued)
+		require.NoError(t, err)
+		req := httptest.NewRequest(method, "/api/v1/alert-actions/acknowledge", nil)
+		req.Header.Set(TokenHeader, tok)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		var resp Response
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		return w.Code, resp
+	}
+	acked := func() bool {
+		var ok bool
+		require.NoError(t, dbClient.QueryRowContext(ctx, `SELECT acknowledged_at IS NOT NULL FROM alerts WHERE id = $1`, alert).Scan(&ok))
+		return ok
+	}
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		code, resp := call(method, firstPage)
+		require.Equal(t, http.StatusNotFound, code, method)
+		require.Equal(t, StateInvalid, resp.State, method)
+	}
+	require.False(t, acked(), "an earlier episode's link acknowledged the relapse")
+
+	code, resp := call(http.MethodGet, time.Now())
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, StatePending, resp.State)
+	code, resp = call(http.MethodPost, time.Now())
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, StateAcknowledged, resp.State)
+	require.True(t, acked())
+}
+
 func insertChannel(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID uuid.UUID, name string) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
