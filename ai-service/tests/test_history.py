@@ -23,10 +23,12 @@ def test_generate_v1_regenerates_v1_provenance(tmp_path):
 @pytest.mark.parametrize("version", ["probara-laya-v3", "probara-laya-v4"])
 def test_generate_v3_regenerates_the_v3_and_v4_corpus(tmp_path, version):
     # probara-controlled-v3 in state format 2 with the probara-evidence-v1
-    # option texts: provenance.json byte for byte, partition hashes included.
+    # option texts: the same provenance.json, partition hashes included. Compared
+    # as JSON: the generator lists partitions in directory order, which is the
+    # filesystem's, so the key order differs between platforms.
     run("generate_v3.py", tmp_path)
-    assert (tmp_path / "provenance.json").read_bytes() == (ROOT / "artifacts" / version / "provenance.json").read_bytes()
     provenance = json.loads((tmp_path / "provenance.json").read_text())
+    assert provenance == json.loads((ROOT / "artifacts" / version / "provenance.json").read_text())
     for name, digest in provenance["partition_sha256"].items():
         assert hashlib.sha256((tmp_path / name).read_bytes()).hexdigest() == digest
     for row in map(json.loads, (tmp_path / "dependency-test.jsonl").read_text().splitlines()[:5]):
