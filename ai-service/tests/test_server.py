@@ -2,14 +2,14 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 from probara_ai.server import create_app
-from probara_ai.contract import options
+from probara_ai.contract import VERSION, options
 
 TOKEN = "test-internal-service-token"
 HEADERS = {"Authorization": "Bearer " + TOKEN}
 
 
 class FakeRuntime:
-    identity = {"engine": "laya-cpu", "version": "fixture", "sha256": "a" * 64, "catalogue": "probara-evidence-v1"}
+    identity = {"engine": "laya-cpu", "version": "fixture", "sha256": "a" * 64, "catalogue": VERSION}
     def prepare(self, decisions):
         if any(d.choices != options(d.task) for d in decisions): raise ValueError("invalid choices")
         return decisions

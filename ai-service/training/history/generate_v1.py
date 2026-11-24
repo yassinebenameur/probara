@@ -12,6 +12,8 @@ from probara_ai.contract import training_row
 
 SEED = 20261010
 HERE = Path(__file__).resolve().parents[1]
+# Frozen: v1 was trained on the catalogue probara-evidence-v1 option texts.
+CATALOGUE = json.loads(Path(__file__).with_name("catalogue-probara-evidence-v1.json").read_text())
 
 
 def generate(output):
@@ -86,7 +88,7 @@ def generate(output):
                         else:
                             e["co_fires"] = rng.randint(0, 1)  # missing history
                 # Frozen: v1 was trained and validated on evidence state format 1.
-                row = training_row(task, e, label, f"{task}-{group}", state_format=1)
+                row = training_row(task, e, label, f"{task}-{group}", state_format=1, catalogue=CATALOGUE)
                 # Randomise option order in all partitions and every variation.
                 opts = list(row["questions"][task]["criteria"].items()); rng.shuffle(opts)
                 row["questions"][task]["criteria"] = dict(opts)

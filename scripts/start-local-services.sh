@@ -198,7 +198,7 @@ fi
 start_local_ai() {
   local model head image
   model="$(awk -F= '/^ARG MODEL_VERSION=/ { print $2; exit }' "$ROOT_DIR/ai-service/Dockerfile")"
-  head="$ROOT_DIR/ai-service/artifacts/${model:-probara-laya-v4}/head.safetensors"
+  head="$ROOT_DIR/ai-service/artifacts/${model:-probara-laya-v5.4}/head.safetensors"
   image="$(cd "$ROOT_DIR" && docker compose config --images local-ai 2>/dev/null || true)"
   if ! docker image inspect "$image" >/dev/null 2>&1 && head -c 40 "$head" 2>/dev/null | grep -q '^version https://git-lfs'; then
     echo "local-ai: $head is a Git LFS pointer, so $image is pulled but never built. To build it: git lfs install && git lfs pull --include 'ai-service/artifacts/*/head.safetensors'"

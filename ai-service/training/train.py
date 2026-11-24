@@ -16,12 +16,29 @@ import numpy as np
 import torch
 from laya.train import TrainConfig, load_checkpoint, items_from_rows, train_model, calibration_records
 from laya.calibrate import fit_one_temperature
-from probara_ai.contract import STATE_FORMAT, VERSION
+from probara_ai.contract import STATE_FORMAT, VERSION, options
+from probara_ai.guard import DIRECTIONAL, NONE, dependency_guard
 from upstream import verify_base, package_notices
 from compose_artifact import CONFIG, check_version, prepare_output, record_composed, save_head, save_json, write_manifest
 from partitions import read, verify_partitions, verify_rendering
 
 MAX_LEN, HEAD_LEN = 512, 256
+
+
+def rca_eligible(e, prediction):
+    """The RCA evidence guard: the measured evidence supports this hypothesis."""
+    eligible = {"dns_failure": e.get("dns_failures", 0) > 0, "connection_failure": e.get("connection_failures", 0) > 0,
+                "tls_problem": e.get("tls_failures", 0) > 0 or (e.get("certificate_expired", False) and e["failures"] > 0),
+                "protocol_error": e.get("protocol_failures", 0) > 0,
+                "latency_degradation": e.get("slow_checks", 0) > 0 and e.get("baseline_ms", 0) > 0,
+                "resource_pressure": e.get("resource_pressure", False) and e.get("host_metrics_available", False) and e["failures"] > 0,
+                "upstream_failure": e.get("upstream_failed_before", False) and e["failures"] > 0,
+                "maintenance_downtime": e.get("maintenance_overlap", False) and e["failures"] > 0}
+    return eligible.get(prediction, False) and not e.get("conflict", False) and not e.get("missing_checks", False)
+
+
+def is_supported(task, label):
+    return label != "insufficient_evidence" and (task == "rca" or label in DIRECTIONAL)
 
 
 def metrics(rows, records, temperature, threshold):
@@ -32,47 +49,56 @@ def metrics(rows, records, temperature, threshold):
         idx = int(np.argmax(p)); gold = int(np.argmax(target))
         keys = list(row["questions"][row["task"]]["criteria"])
         label, prediction = keys[gold], keys[idx]
-        is_supported = label != "insufficient_evidence" and (row["task"] == "rca" or label in ("a_depends_b", "b_depends_a"))
-        emit = prediction != "insufficient_evidence" and p[idx] >= threshold and (row["task"] == "rca" or prediction in ("a_depends_b", "b_depends_a"))
-        # Apply identical explicit evidence guards in evaluation and production.
+        supported_row = is_supported(row["task"], label)
+        emit = prediction != "insufficient_evidence" and p[idx] >= threshold and (row["task"] == "rca" or prediction in DIRECTIONAL)
+        # Apply identical explicit evidence guards in evaluation and production:
+        # a pair emits only on a guard basis, and only the guard's own direction.
         e = row["evidence"]
         if row["task"] == "dependency":
-            emit &= (e["co_fires"] >= 2 and e["reverse_co_fires"] == 0 and (e["shared_service"] or e["shared_group"]) and e["a_leads_seconds"] != 0 and not e["common_upstream"])
-            emit &= (prediction == "a_depends_b" and e["a_leads_seconds"] < 0) or (prediction == "b_depends_a" and e["a_leads_seconds"] > 0)
+            basis, allowed = dependency_guard(e)
+            emit &= basis != NONE and prediction == allowed
         else:
-            eligible = {"dns_failure": e.get("dns_failures", 0) > 0, "connection_failure": e.get("connection_failures", 0) > 0,
-                        "tls_problem": e.get("tls_failures", 0) > 0 or (e.get("certificate_expired", False) and e["failures"] > 0),
-                        "protocol_error": e.get("protocol_failures", 0) > 0,
-                        "latency_degradation": e.get("slow_checks", 0) > 0 and e.get("baseline_ms", 0) > 0,
-                        "resource_pressure": e.get("resource_pressure", False) and e.get("host_metrics_available", False) and e["failures"] > 0,
-                        "upstream_failure": e.get("upstream_failed_before", False) and e["failures"] > 0,
-                        "maintenance_downtime": e.get("maintenance_overlap", False) and e["failures"] > 0}
-            emit &= eligible.get(prediction, False) and not e.get("conflict", False) and not e.get("missing_checks", False)
-        supported += is_supported; unsupported += not is_supported
+            emit &= rca_eligible(e, prediction)
+        supported += supported_row; unsupported += not supported_row
         emitted += bool(emit); correct += bool(emit and idx == gold)
-        abstained_unsupported += bool(not is_supported and not emit)
-        accuracy += bool((emit and idx == gold) or (not emit and not is_supported))
+        abstained_unsupported += bool(not supported_row and not emit)
+        accuracy += bool((emit and idx == gold) or (not emit and not supported_row))
     return {"n": len(rows), "supported": supported, "emitted": emitted, "correct_emitted": correct,
             "precision": correct / emitted if emitted else 0.0, "coverage": correct / supported if supported else 0.0,
             "unsupported_abstention": abstained_unsupported / unsupported if unsupported else 1.0,
             "decision_accuracy": accuracy / len(rows)}
 
 
+def _score(rows, predict):
+    """precision/coverage/decision_accuracy of a label-free rule predict(task, evidence)."""
+    correct = supported = emitted = accuracy = 0
+    for row in rows:
+        task = row["task"]
+        label = row["expected"][task]
+        prediction = predict(task, row["evidence"])
+        supported_row = is_supported(task, label)
+        emit = prediction != "insufficient_evidence"
+        supported += supported_row; emitted += emit; correct += bool(emit and prediction == label)
+        accuracy += bool((emit and prediction == label) or (not emit and not supported_row))
+    return {"precision": correct / emitted if emitted else 0, "coverage": correct / supported if supported else 0,
+            "decision_accuracy": accuracy / len(rows)}
+
+
 def rules(rows):
     """Predeclared conservative baseline, independent of gold labels.
 
-    Requires 3 repeated direct symptoms or 5 co-firing windows, rejects
-    conflicting domains and weak naming-only evidence. The relaxed evidence
-    guards are reported separately as a corpus construction upper bound.
+    Requires 3 repeated direct symptoms, or for a pair the guard's timing
+    basis with at least 5 co-firing windows (strictly more conservative than
+    the guard: no variant or structural basis), and rejects conflicting
+    domains and weak naming-only evidence. The evidence guards themselves are
+    reported separately (guard_rules) as a corpus construction upper bound.
     """
-    correct = supported = emitted = accuracy = 0
-    for row in rows:
-        task = row["task"]; e = row["evidence"]
-        label = row["expected"][task]
+    def predict(task, e):
         prediction = "insufficient_evidence"
         if task == "dependency":
-            if e["co_fires"] >= 5 and e["reverse_co_fires"] == 0 and (e["shared_service"] or e["shared_group"]) and e["a_leads_seconds"] != 0 and not e["common_upstream"]:
-                prediction = "b_depends_a" if e["a_leads_seconds"] > 0 else "a_depends_b"
+            basis, label = dependency_guard(e)
+            if basis == "timing" and e["co_fires"] >= 5:
+                prediction = label
         elif not e.get("conflict", False) and not e.get("missing_checks", False) and e["failures"] >= 3:
             for field, hypothesis in (("dns_failures", "dns_failure"), ("connection_failures", "connection_failure"), ("tls_failures", "tls_problem"), ("protocol_failures", "protocol_error"), ("slow_checks", "latency_degradation")):
                 if e.get(field, 0) >= 3:
@@ -80,11 +106,36 @@ def rules(rows):
             for field, hypothesis in (("resource_pressure", "resource_pressure"), ("upstream_failed_before", "upstream_failure"), ("maintenance_overlap", "maintenance_downtime")):
                 if e.get(field, False):
                     prediction = hypothesis
-        is_supported = label != "insufficient_evidence" and (task == "rca" or label in ("a_depends_b", "b_depends_a"))
-        emit = prediction != "insufficient_evidence"
-        supported += is_supported; emitted += emit; correct += bool(emit and prediction == label)
-        accuracy += bool((emit and prediction == label) or (not emit and not is_supported))
-    return {"precision": correct / emitted if emitted else 0, "coverage": correct / supported if supported else 0, "decision_accuracy": accuracy / len(rows)}
+        return prediction
+    return _score(rows, predict)
+
+
+def guard_rules(rows):
+    """The evidence guards as a rule, scored against the corpus labels (reported, never gated).
+
+    A pair predicts the guard's label when it returns a basis; an RCA row
+    predicts its single guard-eligible hypothesis, abstaining when none or
+    several are. The corpus is built so these agree with its labels, so a
+    value below 1.0 means the corpus and the guard have drifted apart.
+    """
+    def predict(task, e):
+        if task == "dependency":
+            basis, label = dependency_guard(e)
+            return label if basis != NONE else "insufficient_evidence"
+        eligible = [h for h in options("rca") if h != "insufficient_evidence" and rca_eligible(e, h)]
+        return eligible[0] if len(eligible) == 1 else "insufficient_evidence"
+    return _score(rows, predict)
+
+
+GUARD_NOTE = ("Dependency precision and unsupported_abstention are properties of the evidence guard "
+              "(probara_ai.guard), not of the model: a pair is emitted only on a guard basis and only with the "
+              "guard's own label, and corpus labels agree with the guard by construction. Coverage and "
+              "decision_accuracy measure the model.")
+
+
+def guard_note(task):
+    """Report key disclosing which dependency metrics the guard fixes; informational, never gated."""
+    return {"guard_note": GUARD_NOTE} if task == "dependency" else {}
 
 
 def run(args):
@@ -151,7 +202,7 @@ def run(args):
         base_temperature = fit_one_temperature([(v[1], v[2]) for _, v in base_cal], min_n=10)
         reports[task] = {"held_out": held_metrics, "conservative_rules": baseline,
                          "untuned_at_release_threshold": metrics([r for r, _ in base_held], [v for _, v in base_held], base_temperature, threshold),
-                         "evidence_guard_rules": {"precision": 1.0, "coverage": 1.0, "decision_accuracy": 1.0},
+                         "evidence_guard_rules": guard_rules([r for r, _ in held]), **guard_note(task),
                          "temperature": temperature, "threshold": threshold}
     # Gate against the predeclared conservative deployed-rule baseline. The
     # construction upper bound is disclosed, never called a learned result.

@@ -66,12 +66,16 @@ export interface AILabelExportResult {
   skipped: number | null;
 }
 
+/** The evidence rule that let a pair through the advisor's guard. */
+export type DependencySuggestionBasis = 'timing' | 'variant' | 'structural';
+
 export interface DependencySuggestion {
   metadata?: AIAnalysisMetadata;
   monitor_id: string;
   monitor_name: string;
   depends_on_id: string;
   depends_on_name: string;
+  basis: DependencySuggestionBasis;
   reason: string;
   confidence: string;
 }

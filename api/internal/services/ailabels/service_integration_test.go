@@ -296,6 +296,9 @@ func TestLabelDependencySuggestion(t *testing.T) {
 	disabled := testutil.InsertHTTPMonitor(f.ctx, t, f.db, tenant, "checkout-worker")
 	foreign := testutil.InsertHTTPMonitor(f.ctx, t, f.db, other, "checkout-foreign")
 	f.exec(`UPDATE monitors SET tags=ARRAY['service:checkout'] WHERE id=ANY($1)`, "{"+db.String()+","+api.String()+","+disabled.String()+"}")
+	// A second tag on api keeps the two http monitors from being same-role
+	// peers, so the evidence guard sends the pair to the model (timing basis).
+	f.exec(`UPDATE monitors SET tags=ARRAY['service:checkout','tier:edge'] WHERE id=$1`, api)
 	f.exec(`UPDATE monitors SET enabled=FALSE WHERE id=$1`, disabled)
 	f.seedCoFiring(tenant, db, api)
 

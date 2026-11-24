@@ -276,7 +276,9 @@ if __name__ == "__main__":
             raise SystemExit("Artifact directory name must equal the manifest version")
         if not manifest.get("composed"):
             raise SystemExit("Manifest has no composed checksums; run `record` with the pinned base")
+        from probara_ai.contract import historical
         print(json.dumps({"version": manifest["version"], "state_format": manifest.get("state_format", 1),
+                          "catalogue": manifest.get("catalogue"), "historical": historical(manifest),
                           "release_approved": manifest.get("release_approved") is True}))
         raise SystemExit(0)
     if args.base is None or args.output is None:

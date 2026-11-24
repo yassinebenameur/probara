@@ -14,12 +14,39 @@ RCA_FIELDS = {
     "resource_pressure", "host_metrics_available", "upstream_failed_before", "maintenance_overlap",
     "conflict", "missing_checks",
 }
-PAIR_FIELDS = {"co_fires", "a_leads_seconds", "reverse_co_fires", "shared_service", "shared_group", "naming_signal", "common_upstream"}
-BOOL_FIELDS = {"certificate_expired", "certificate_changed", "resource_pressure", "host_metrics_available", "upstream_failed_before", "maintenance_overlap", "conflict", "missing_checks", "shared_service", "shared_group", "naming_signal", "common_upstream"}
+# The first seven pair fields are the original contract; the rest came with
+# catalogue probara-evidence-v2 (shared/ai evidence twin). Every field is
+# optional on the wire, so an older caller's seven-field pair still validates;
+# a missing field reads as zero/false, exactly as the guard (probara_ai.guard)
+# and the renderers treat it.
+LEGACY_PAIR_FIELDS = ("co_fires", "a_leads_seconds", "reverse_co_fires", "shared_service", "shared_group",
+                      "naming_signal", "common_upstream")
+PAIR_FIELDS = {*LEGACY_PAIR_FIELDS, "a_windows", "b_windows", "window_monitors", "shared_tag_monitors",
+               "shared_group_monitors", "shared_name_prefix", "a_extends_b", "b_extends_a", "same_type",
+               "a_infra", "b_infra", "peers"}
+BOOL_FIELDS = {"certificate_expired", "certificate_changed", "resource_pressure", "host_metrics_available",
+               "upstream_failed_before", "maintenance_overlap", "conflict", "missing_checks", "shared_service",
+               "shared_group", "naming_signal", "common_upstream", "a_extends_b", "b_extends_a", "same_type",
+               "a_infra", "b_infra", "peers"}
 
 
-def options(task):
-    return {key: value["description"] for key, value in CATALOGUE[task].items()}
+def options(task, catalogue=None):
+    """The closed choices of a task; catalogue defaults to the current one.
+
+    Only frozen history (training/history/) passes an older catalogue, to
+    regenerate the option texts an older artifact was trained on.
+    """
+    return {key: value["description"] for key, value in (catalogue or CATALOGUE)[task].items()}
+
+
+def historical(manifest):
+    """True when an artifact was trained under another catalogue than the current one.
+
+    Such an artifact is a historical record: its option texts are not the
+    ones this service validates requests against, so verify_artifact refuses
+    to serve it and it can never be shipped, whatever its release flags say.
+    """
+    return manifest.get("catalogue") != VERSION
 
 
 def validate_evidence(task, evidence):
@@ -41,7 +68,7 @@ def validate_evidence(task, evidence):
 # STATE_FORMAT versions the evidence-to-text rendering. A checkpoint is trained
 # on one format and the runtime must render the same one (manifest
 # "state_format"); changing the wording below is a new model, not a refactor.
-STATE_FORMAT = 2
+STATE_FORMAT = 3
 
 
 def _state_text_v1(task, evidence):
@@ -145,7 +172,87 @@ def _state_text_v2(task, evidence):
     return " ".join(out)
 
 
-_RENDERERS = {1: _state_text_v1, 2: _state_text_v2}
+def _state_text_v3(task, evidence):
+    """Format 3 (catalogue probara-evidence-v2): the v5 pair evidence in that catalogue's words.
+
+    RCA is format 2's text, by delegation: only the dependency task changed.
+    A dependency state opens with format 2's direction and co-fire sentences,
+    then restates each measured v2 pair field in the vocabulary of the v2
+    option descriptions ("many monitors failing in the same windows", "rare
+    corroborating service evidence", "variant", "backing resource",
+    "same-role peers"). "Rare" and "many" use the guard's own bounds
+    (probara_ai.guard), so text and guard never disagree about a population.
+    Zero and false values are omitted (absence only), so a seven-field legacy
+    pair renders its booleans and nothing it did not measure. same_type is
+    not rendered on its own: it only matters through peers and the roles.
+    """
+    if task != "dependency":
+        return _state_text_v2(task, evidence)
+    from probara_ai.guard import PILE_UP_MIN, rare
+    e = evidence
+    co = e.get("co_fires", 0)
+    lead = e.get("a_leads_seconds", 0)
+    out = []
+    if lead > 0:
+        out.append(f"Repeated A-before-B failures in {co} co-firing windows; A fails first by {lead} seconds.")
+    elif lead < 0:
+        out.append(f"Repeated B-before-A failures in {co} co-firing windows; B fails first by {-lead} seconds.")
+    else:
+        out.append(f"{co} co-firing windows with no clear time direction.")
+    if co < 2:
+        out.append(f"Missing history: only {co} co-firing windows.")
+    if e.get("reverse_co_fires"):
+        out.append(f"Conflicting direction: {e['reverse_co_fires']} reverse-direction windows.")
+    crowd = e.get("window_monitors", 0)
+    if crowd >= PILE_UP_MIN:
+        out.append(f"Many monitors failing in the same windows: a median of {crowd} monitors alert in each co-firing window.")
+    elif crowd:
+        out.append(f"Few monitors failing in the same windows: a median of {crowd} monitors alert in each co-firing window.")
+    windows = [f"{side} {e[key]}" for side, key in (("A", "a_windows"), ("B", "b_windows")) if e.get(key)]
+    if windows:
+        out.append("Alert windows in the lookback: " + ", ".join(windows) + ".")
+    tag, group, prefix = e.get("shared_tag_monitors", 0), e.get("shared_group_monitors", 0), e.get("shared_name_prefix", 0)
+    if rare(tag):
+        out.append(f"Rare corroborating service evidence: a shared tag held by {tag} monitors.")
+    elif tag:
+        out.append(f"Common tag: a shared tag held by {tag} monitors.")
+    elif e.get("shared_service"):
+        out.append("Shared service tag.")
+    if rare(group):
+        out.append(f"Rare corroborating service evidence: a shared group of {group} monitors.")
+    elif group:
+        out.append(f"Large group: a shared group of {group} monitors.")
+    elif e.get("shared_group"):
+        out.append("Shared group.")
+    if prefix >= 2:
+        out.append(f"Shared name prefix: the names share their first {prefix} tokens.")
+    elif prefix == 1:
+        # The caller reports 1 also when a longer prefix is common, so only
+        # the absence of a rare multi-token prefix is certain.
+        out.append("The names share no rare multi-token prefix.")
+    elif e.get("naming_signal"):
+        out.append("The names share a naming token.")
+    if not (rare(tag) or rare(group) or prefix >= 2):
+        out.append("No rare corroborating service evidence or name prefix.")
+    if e.get("a_extends_b"):
+        out.append("A is a variant of B: its name extends B's name.")
+    if e.get("b_extends_a"):
+        out.append("B is a variant of A: its name extends A's name.")
+    a_infra, b_infra = e.get("a_infra", False), e.get("b_infra", False)
+    if a_infra and b_infra:
+        out.append("A and B are both backing resources.")
+    elif a_infra:
+        out.append("A is a backing resource and B a service.")
+    elif b_infra:
+        out.append("B is a backing resource and A a service.")
+    if e.get("peers"):
+        out.append("A and B are same-role peers: same monitor type and identical tags or numbered names.")
+    if e.get("common_upstream"):
+        out.append("Known common upstream evidence explains both failures.")
+    return " ".join(out)
+
+
+_RENDERERS = {1: _state_text_v1, 2: _state_text_v2, 3: _state_text_v3}
 STATE_FORMATS = frozenset(_RENDERERS)
 
 
@@ -170,15 +277,16 @@ def artifact_state_format(manifest):
     return state_format
 
 
-def training_row(task, evidence, label, group, state_format=STATE_FORMAT):
-    """One corpus row; new corpora use the current STATE_FORMAT.
+def training_row(task, evidence, label, group, state_format=STATE_FORMAT, catalogue=None):
+    """One corpus row; new corpora use the current STATE_FORMAT and catalogue.
 
-    state_format exists for frozen history (training/history/) only: it must
-    regenerate an older artifact's corpus byte for byte.
+    state_format and catalogue exist for frozen history (training/history/)
+    only: it must regenerate an older artifact's corpus byte for byte, option
+    texts included.
     """
     return {"task": task, "group": group, "evidence": evidence,
             "state": state_text(task, evidence, state_format),
-            "questions": {task: {"type": "choice", "instructions": "Select the hypothesis supported by the measured evidence; abstain when inconclusive.", "criteria": options(task)}},
+            "questions": {task: {"type": "choice", "instructions": "Select the hypothesis supported by the measured evidence; abstain when inconclusive.", "criteria": options(task, catalogue)}},
             "expected": {task: label}}
 
 
@@ -189,11 +297,28 @@ def training_row(task, evidence, label, group, state_format=STATE_FORMAT):
 LABEL_EXPORT_FORMAT = 1
 
 
+class StaleLabelExport(ValueError):
+    """An intact export row that cannot train a current-catalogue head.
+
+    It was labelled against another catalogue's option texts, or it is a
+    pair labelled under another catalogue (provenance.catalogue) or exported
+    without the catalogue v2 evidence fields. The Go export writes those
+    fields as zero for a pair labelled under v1, but they were never measured
+    for it: unknown, not absent, and rendering them as absent would teach the
+    head the wrong evidence. Training skips such rows explicitly
+    (train_head_cpu.read_extra_train reports how many); it never trains on
+    them. An RCA row from an older catalogue whose options are the current
+    ones is kept: its evidence and choices are unchanged.
+    """
+
+
 def from_label_export(row, state_format=STATE_FORMAT):
     """An exported label row as a training row in state_format.
 
     Refuses a row whose exported state is not this contract's format-1 text
-    for its evidence: the Go twin and Python have drifted, or the row was edited.
+    for its evidence: the Go twin and Python have drifted, or the row was
+    edited. Raises StaleLabelExport for an intact row labelled under another
+    catalogue or lacking any pair field.
     """
     task = row["task"]
     if row["state"] != state_text(task, row["evidence"], LABEL_EXPORT_FORMAT):
@@ -201,4 +326,15 @@ def from_label_export(row, state_format=STATE_FORMAT):
     question = row["questions"][task]
     if question.get("type") != "choice" or row["expected"][task] not in question["criteria"]:
         raise ValueError("Label export row has no valid choice answer")
+    if question["criteria"] != options(task):
+        raise StaleLabelExport(f"Label export row (group {row['group']}) was labelled under another catalogue's "
+                               f"{task} options than {VERSION}")
+    labelled_under = (row.get("provenance") or {}).get("catalogue")
+    if task == "dependency" and labelled_under and labelled_under != VERSION:
+        raise StaleLabelExport(f"Label export pair (group {row['group']}) was labelled under {labelled_under}: its "
+                               f"{VERSION} pair evidence was never measured (unknown, not absent)")
+    missing = PAIR_FIELDS - set(row["evidence"]) if task == "dependency" else set()
+    if missing:
+        raise StaleLabelExport(f"Label export pair (group {row['group']}) lacks the {VERSION} pair evidence "
+                               f"{', '.join(sorted(missing))}: unmeasured, not absent")
     return {**row, "state": state_text(task, row["evidence"], state_format)}

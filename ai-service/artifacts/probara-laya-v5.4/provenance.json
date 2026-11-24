@@ -1,0 +1,26 @@
+{
+  "corpus_version": "probara-controlled-v4",
+  "state_format": 3,
+  "catalogue": "probara-evidence-v2",
+  "generator_sha256": "b9120f5a8678ccc309d4ea1d0c9873deef09006e2fc65ebd3cc4f70a93da9722",
+  "seed": 20261010,
+  "examples_per_task": 5000,
+  "group_count_per_task": 1000,
+  "variations_per_group": 5,
+  "split": [
+    0.6,
+    0.2,
+    0.2
+  ],
+  "source": "worker/internal/worker/ai_fault_fixture_test.go",
+  "limitations": "Controlled synthetic variations of real loopback checker outputs and metric/topology fixtures; no real-world accuracy claim.",
+  "partition_sha256": {
+    "rca-train.jsonl": "f4c575ce0824c6aaa7d29c965a02c5cc1276871051398777d1211db68ff4d341",
+    "dependency-calibration.jsonl": "8132817ca2b772c263e3b271ef635e13096d59b4ccadffe6e46658da4205ca72",
+    "rca-test.jsonl": "41244c433b3885496aeabb19b0ea6091d1f04e281eac7e0ef73807920b263dc4",
+    "rca-calibration.jsonl": "23489f55d56da00e764d54d21b5c909a728683b16dd29627e8f15f9efb88bf8c",
+    "dependency-test.jsonl": "d23e8575f56deb99961d298001bb58c4518f3048f42656d0be7d57a7515283ea",
+    "dependency-train.jsonl": "4217cdb1d9047bbb7d2439d958558c9dff25420f2ec44a4d294cf0684dc07e5e"
+  },
+  "checker_fixture_sha256": "33f5c6f5efdd47ecfb6a0bb457eb985e8afc6d83f3ed2baff948c57779cfb47c"
+}

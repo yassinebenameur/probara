@@ -23,7 +23,7 @@ os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", USE_TF="0")
 import torch
 from safetensors.torch import save_file
 from laya.train import TrainConfig, load_checkpoint, items_from_rows, train_model
-from probara_ai.contract import STATE_FORMAT, VERSION, from_label_export, state_text
+from probara_ai.contract import STATE_FORMAT, VERSION, StaleLabelExport, from_label_export, state_text
 from probara_ai.cpu import CPU_FORMAT, prepare_cpu
 from train import read, MAX_LEN, HEAD_LEN
 from train_cpu import FrozenCPUEncoder
@@ -64,7 +64,9 @@ def current_format_row(row):
 
     Operator label exports (groups "op-<task>-...") carry the frozen format-1
     state and are re-rendered from their evidence by from_label_export, which
-    refuses an export whose state is not exactly that text. Any other row must
+    refuses an export whose state is not exactly that text and raises
+    StaleLabelExport for one labelled under an older catalogue or missing
+    pair fields (read_extra_train skips those). Any other row must
     already be current, as verify_rendering demands of the corpus: training on
     text the runtime never sends would silently skew the head.
     """
@@ -77,9 +79,15 @@ def current_format_row(row):
                      f"state format {STATE_FORMAT}")
 
 
-def read_extra_train(data, paths):
+def read_extra_train(data, paths, skipped=None):
     """Training-only rows (training/augment.py, operator label exports); never
-    calibration/test groups."""
+    calibration/test groups.
+
+    Intact export rows labelled under an older catalogue, or pairs exported
+    without the current pair fields, are skipped, never trained on: each
+    skip is printed, and counted per file name in `skipped` when given (the
+    trainer records it in training-config.json).
+    """
     if not paths:
         return []
     eval_groups = {r["group"] for t in ("rca", "dependency") for part in ("calibration", "test")
@@ -89,7 +97,18 @@ def read_extra_train(data, paths):
         extra = read(path)
         if {r["group"] for r in extra} & eval_groups:
             raise ValueError(f"{path.name}: extra training groups overlap calibration/test groups")
-        rows += [current_format_row(r) for r in extra]
+        stale = 0
+        for row in extra:
+            try:
+                rows.append(current_format_row(row))
+            except StaleLabelExport as error:
+                stale += 1
+                print(f"Skipping a label export row of {path.name}: {error}", flush=True)
+        if stale:
+            print(f"{path.name}: skipped {stale} of {len(extra)} rows labelled under an older catalogue or "
+                  "without the current pair evidence; they are not trained on", flush=True)
+        if skipped is not None:
+            skipped[path.name] = stale
     return rows
 
 
@@ -118,7 +137,8 @@ def run(args):
         initialised_from = load_init_head(model, args.init_head)
     rows = sum((read(args.data / f"{task}-train.jsonl") for task in ("rca", "dependency")), [])
     base_train = len(rows)
-    rows += read_extra_train(args.data, args.extra_train or [])
+    stale_exports = {}
+    rows += read_extra_train(args.data, args.extra_train or [], stale_exports)
     for row in rows:
         if len(tok.encode(row["state"], add_special_tokens=False)) > MAX_LEN - HEAD_LEN:
             raise ValueError("state exceeds token budget")
@@ -163,7 +183,8 @@ def run(args):
     (args.output / "training-config.json").write_text(json.dumps({**vars(config), "head_device": str(device),
         "encoder_device": "cpu", "frozen_encoder_cpu_format": CPU_FORMAT, "state_format": STATE_FORMAT,
         "initialised_from": initialised_from,
-        "extra_train": {p.name: hashlib.file_digest(p.open("rb"), "sha256").hexdigest() for p in (args.extra_train or [])}}, indent=2) + "\n")
+        "extra_train": {p.name: hashlib.file_digest(p.open("rb"), "sha256").hexdigest() for p in (args.extra_train or [])},
+        "extra_train_skipped_stale": stale_exports}, indent=2) + "\n")
     # No calibration settings or CPU release report exist yet.
     write_manifest(args.output, args.version, STATE_FORMAT, release_approved=False, cpu_format=CPU_FORMAT)
     record_composed(args.output, args.base, composed)

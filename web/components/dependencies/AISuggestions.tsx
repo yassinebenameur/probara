@@ -16,7 +16,14 @@ import { useAIAvailability } from '@/lib/useAIAvailability';
 import { dependencyLabelRequest, labelErrorMessage } from '@/lib/ai-labels';
 import { pluralize } from '@/lib/format';
 import { aiConfidenceTone } from '@/lib/status-tones';
-import type { DependencyLabelCorrection, DependencySuggestion } from '@/lib/types';
+import type { DependencyLabelCorrection, DependencySuggestion, DependencySuggestionBasis } from '@/lib/types';
+
+// What a suggestion rests on (ai.DependencyGuard's basis), shown as a neutral label.
+const BASIS_LABEL: Record<DependencySuggestionBasis, string> = {
+  timing: 'Alert timing',
+  variant: 'Same target',
+  structural: 'Structure',
+};
 
 // Dismiss reasons beyond the default "not a dependency" (the X button). Each
 // is recorded as a rejected training label with that correction.
@@ -110,7 +117,7 @@ export function useAISuggestions(onAccepted?: () => void) {
   const results = !error && !ran ? null : (
     <Panel
       title="AI dependency suggestions"
-      subtitle="Suspected relationships supported by repeated alert timing and service signals. Acceptance validates and updates the graph."
+      subtitle="Suspected relationships supported by ordered alert timing, monitor variants, or a service sharing a rare tag or name prefix with a backing resource. Acceptance validates and updates the graph."
     >
       {error && <Callout tone="danger">{error}</Callout>}
 
@@ -134,6 +141,11 @@ export function useAISuggestions(onAccepted?: () => void) {
                   <span className="font-medium">{s.monitor_name}</span>
                   <span className="text-slate-500">depends on</span>
                   <span className="font-medium">{s.depends_on_name}</span>
+                  {BASIS_LABEL[s.basis] && (
+                    <Pill tone="neutral" size="xs">
+                      {BASIS_LABEL[s.basis]}
+                    </Pill>
+                  )}
                   <Pill tone={aiConfidenceTone(s.confidence)} size="xs" className="capitalize">
                     {s.confidence}
                   </Pill>

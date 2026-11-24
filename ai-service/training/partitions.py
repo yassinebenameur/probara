@@ -36,9 +36,11 @@ def verify_partitions(data, artifact, current_generator=False):
     """The corpus matches the artifact's provenance and keeps groups separate.
 
     current_generator=True (training a new candidate, validating a
-    current-format one) also requires the corpus to come from the committed
+    current-catalogue one) also requires the corpus to come from the committed
     training/generate.py and checker-fixtures.json, so an approved artifact
     is reproducible from the repository and not from a local generator edit.
+    Corpora of historical artifacts come from training/history/ instead
+    (tests/test_history.py regenerates them against their provenance).
     """
     provenance = json.loads((artifact / 'provenance.json').read_text())
     if current_generator and (provenance.get('generator_sha256') != sha256(HERE / 'generate.py') or

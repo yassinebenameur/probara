@@ -28,6 +28,13 @@ const LabelInstructions = "Select the hypothesis supported by the measured evide
 // evidenceBound is contract.validate_evidence's integer bound.
 const evidenceBound = 100000000
 
+// dependencyStateLabels are the dependency fields evidence state format 1
+// renders. Format 1 is frozen: PairEvidence fields added later (catalogue
+// probara-evidence-v2: windows, populations, name structure, infra, peers)
+// are exported in "evidence" but never rendered in "state", and the
+// ai-service re-renders each row from its evidence in the current format.
+// Rows labelled under an older catalogue carry zero for the later fields;
+// provenance.catalogue tells them apart.
 var dependencyStateLabels = map[string]string{
 	"reverse_co_fires": "Reverse-direction windows",
 	"shared_service":   "Shared service tag",

@@ -5,6 +5,14 @@ import (
 	"testing"
 )
 
+// The constant is what the Go client checks the service's catalogue against;
+// the embedded file is what it sends as choices. They must name one catalogue.
+func TestCatalogueVersionMatchesJSON(t *testing.T) {
+	if catalogue.Version != CatalogueVersion {
+		t.Fatalf("catalogue.json version %q, CatalogueVersion %q", catalogue.Version, CatalogueVersion)
+	}
+}
+
 func TestMetadataListsEachIncompleteNoteOnce(t *testing.T) {
 	got := metadata(ModelIdentity{Engine: "laya-cpu"}, "insufficient_evidence", 0, nil,
 		[]string{"m1: missing checks", "m2: missing checks", "m1: missing checks"}).Incomplete

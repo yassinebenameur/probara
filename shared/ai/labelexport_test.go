@@ -121,9 +121,11 @@ func fixtureRecords(t *testing.T) []LabelRecord {
 		return LabelRecord{SubjectType: "dependency_pair", SubjectKey: a + ":" + b, GroupKey: "pair:" + a + ":" + b, Verdict: verdict,
 			Request: DecisionSnapshot{V: 1, Catalogue: CatalogueVersion, Decisions: []SnapshotDecision{d}}, Answers: map[string]LabelAnswer{d.ID: ans}, LabeledAt: at}
 	}
-	// 3. Pair confirmed a_depends_b (B fails first).
+	// 3. Pair confirmed a_depends_b (B fails first). Its catalogue-v2 fields
+	//    are exported in evidence but not rendered in the format-1 state.
 	records = append(records, pair("e1d2c3b4-a596-4877-9869-5a4b3c2d1e0f", "10000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000002",
-		PairEvidence{CoFires: 4, ALeadsSeconds: -95, SharedService: true, NamingSignal: true}, "10000000-0000-4000-8000-000000000001", "confirmed", "", at.Add(2*time.Minute)))
+		PairEvidence{CoFires: 4, ALeadsSeconds: -95, SharedService: true, NamingSignal: true,
+			AWindows: 6, BWindows: 5, WindowMonitors: 2, SharedTagMonitors: 3, SharedNamePrefix: 1, BInfra: true}, "10000000-0000-4000-8000-000000000001", "confirmed", "", at.Add(2*time.Minute)))
 	// 4. Pair rejected: no dependency.
 	records = append(records, pair("f2e3d4c5-b6a7-4988-a97a-6b5c4d3e2f10", "30000000-0000-4000-8000-000000000003", "40000000-0000-4000-8000-000000000004",
 		PairEvidence{CoFires: 2, ALeadsSeconds: 30, ReverseCoFires: 1, SharedGroup: true}, "40000000-0000-4000-8000-000000000004", "rejected", "", at.Add(3*time.Minute)))

@@ -6,9 +6,12 @@ The shipped checkpoint is the one ai-service/Dockerfile builds by default
 gate     Stdlib only, no Git LFS needed. Writes approved/version/reason for
          the shipped checkpoint to $GITHUB_OUTPUT. Approved means manifest.json
          AND cpu-evaluation.json both say release_approved: true, on device
-         cpu, and the report's held-out metrics meet probara_ai.gate. The
-         image's verify_artifact enforces the same rule (and more); this
-         decides whether a release or an image build may go ahead.
+         cpu, the report's held-out metrics meet probara_ai.gate, AND the
+         manifest's catalogue is the current shared/ai/catalogue.json version
+         (an artifact approved under an older catalogue is historical and is
+         never shipped). The image's verify_artifact enforces the same rule
+         (and more); this decides whether a release or an image build may go
+         ahead.
 sources  Stdlib, git and network, no Git LFS. Checks that the image build's
          two third-party sources still serve their pins: a shallow fetch of
          base-lock.json's upstream_commit from LAYA_GIT_URL, and the Hugging
@@ -21,9 +24,12 @@ verify   Needs the ai-service dependencies, the LFS head weights and a
          directory exactly as the image does (compose_artifact.compose, which
          refuses any result differing from the manifest's `composed`
          checksums), then runs probara_ai.runtime.verify_artifact on the
-         result: it must pass for an approved artifact and must refuse an
-         unapproved one, so the release gate itself is under test. Writes
-         approved/version/composed for the shipped checkpoint to $GITHUB_OUTPUT.
+         result: it must pass for an approved current artifact and must
+         refuse an unapproved or historical one (approved under an older
+         catalogue; a record, reported as a notice, not an error), so the
+         release gate itself is under test. Writes approved/version/composed
+         for the shipped checkpoint to $GITHUB_OUTPUT: approved only when it
+         is approved, current and accepted.
 reproduce
          Needs the same as verify, plus the generated controlled corpus
          (--data) and the composed, approved shipped checkpoint (--composed).
@@ -53,6 +59,8 @@ BASE_LOCK = Path("ai-service/training/base-lock.json")
 # dependencies; it is the one release-gate predicate (validator, verify_artifact).
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "ai-service"))
 from probara_ai.gate import TASKS, release_gate, task_passes  # noqa: E402
+# Stdlib only as well (it reads shared/ai/catalogue.json).
+from probara_ai.contract import VERSION, historical  # noqa: E402
 
 
 def shipped_version():
@@ -81,6 +89,25 @@ def approval(artifact):
     return flags and meets_gate, " ".join(str(reason).split())
 
 
+def historical_reason(artifact):
+    """Why an artifact is historical, or "" when its catalogue is the current one."""
+    manifest = json.loads((artifact / "manifest.json").read_text())
+    if not historical(manifest):
+        return ""
+    return (f"{artifact.name} was trained under catalogue {manifest.get('catalogue')}, but the service now uses "
+            f"{VERSION}, so verify_artifact refuses it as a historical artifact. Train and validate a new artifact "
+            "under the current catalogue and point ai-service/Dockerfile ARG MODEL_VERSION at it.")
+
+
+def shippable(artifact):
+    """(shippable, reason): release-approved (approval) AND trained under the current catalogue."""
+    approved, reason = approval(artifact)
+    if not approved:
+        return False, reason
+    stale = historical_reason(artifact)
+    return not stale, stale
+
+
 def write_outputs(outputs):
     with open(os.environ.get("GITHUB_OUTPUT", os.devnull), "a") as out:
         for key, value in outputs.items():
@@ -93,7 +120,7 @@ def gate(args):
     artifact = args.artifacts / version
     if not (artifact / "manifest.json").is_file():
         sys.exit(f"::error title=Local AI::the Dockerfile ships {version} but {artifact}/manifest.json does not exist")
-    approved, reason = approval(artifact)
+    approved, reason = shippable(artifact)
     write_outputs({"approved": str(approved).lower(), "version": version, "reason": "" if approved else reason})
 
 
@@ -166,6 +193,7 @@ def verify(args):
     for artifact in artifacts:
         version, output = artifact.name, args.work / artifact.name
         approved, reason = approval(artifact)
+        stale = historical_reason(artifact)
         try:
             composed = compose(artifact, args.base, output)
         except Exception as error:  # noqa: BLE001 - reported per artifact
@@ -177,7 +205,12 @@ def verify(args):
             accepted, refusal = True, ""
         except Exception as error:  # noqa: BLE001
             accepted, refusal = False, str(error)
-        if approved and not accepted:
+        if accepted and stale:
+            errors.append(f"{version}: verify_artifact accepted a historical checkpoint: {stale}")
+        elif approved and stale:
+            print(f"::notice title=Local AI historical checkpoint::{version}: release-approved under an older "
+                  f"catalogue and kept as a record; verify_artifact refuses it as designed ({refusal}).")
+        elif approved and not accepted:
             errors.append(f"{version}: release-approved, but verify_artifact refuses it: {refusal}")
         elif accepted and not approved:
             errors.append(f"{version}: verify_artifact accepted a checkpoint whose release flags are not approved")
@@ -187,8 +220,9 @@ def verify(args):
         else:
             print(f"{version}: release-approved and verified on the composed checkpoint")
         if version == shipped:
-            outputs = {"approved": str(approved and accepted).lower(), "version": version, "composed": str(output),
-                       "reason": "" if approved else reason}
+            ships = approved and accepted and not stale
+            outputs = {"approved": str(ships).lower(), "version": version, "composed": str(output),
+                       "reason": "" if ships else reason if not approved else stale or refusal}
     for error in errors:
         print(f"::error title=Local AI artifact::{error}")
     if errors:

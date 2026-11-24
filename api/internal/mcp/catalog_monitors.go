@@ -252,8 +252,10 @@ func monitorTools() []spec {
 		{
 			Name:  "suggest_dependencies",
 			Title: "Suggest dependencies (AI)",
-			Description: "Ask the local AI model to propose dependency edges from alerts that fire together, with " +
-				"reasons and confidence. Read-only; can take a while. 503 when local AI is off or busy (retry).",
+			Description: "Ask the local AI model to propose dependency edges, each with its basis (timing: alerts that " +
+				"fire in order; variant: a monitor variant failing after its base; structural: a service and a backing " +
+				"resource sharing a rare tag or name prefix), reasons and confidence. Read-only; can take a while. 503 " +
+				"when local AI is off or busy (retry).",
 			Method: http.MethodPost, Route: "/monitors/dependency-suggestions",
 		},
 		{

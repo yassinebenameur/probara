@@ -1,0 +1,11 @@
+{
+  "release_approved": false,
+  "scope": "Controlled scenarios only; no real-world accuracy claim.",
+  "gate_failure": "Separate CPU calibration and held-out validation required.",
+  "loss_history": [
+    0.2509996385233223,
+    0.15578783538667215,
+    0.1155699364137934
+  ],
+  "training_seconds": 20898.119751207996
+}

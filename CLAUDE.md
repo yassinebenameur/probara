@@ -346,7 +346,8 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; unsubscribe links are
   `shared/actionlink` tokens (`ActionUnsubscribeReport`, own TTL).
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
-  (version `probara-evidence-v1`) is the closed set of hypotheses the model may
+  (version `probara-evidence-v2`, equal to `ai.CatalogueVersion`, pinned by
+  `TestCatalogueVersionMatchesJSON`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the
   inference service validates requests against the same file (the image
   copies it in) and every artifact manifest pins its version, so a label or
@@ -355,8 +356,13 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   model and the Go client refuse its answers. What reaches
   the model is the counters-and-booleans allow-list in `shared/ai/evidence.go`
   (`MonitorEvidence`) plus opaque IDs — never names, URLs, error text, bodies
-  or monitor config. Model answers only count when `Supports` (and the
-  dependency gates in `dependencies.go`) agree with the measured evidence.
+  or monitor config. Model answers only count when `Supports` agrees with
+  the measured evidence; for dependency pairs the one gate is
+  `ai.DependencyGuard` (basis timing/variant/structural, twinned in the
+  ai-service and pinned for both by `shared/ai/testdata/dependency-guard-cases.json`
+  and `dependency-regression.json` — change the guard, both twins and the
+  fixtures together). Only guard-eligible pairs reach the model, and a
+  suggestion needs the model to pick the guard's label.
 - **AI label export format**: `shared/ai/labelexport.go` (`WriteLabelExport`,
   `StateText`) is the Go twin of ai-service `probara_ai/contract.py`
   (`training_row`/`state_text`/`validate_evidence`), pinned by

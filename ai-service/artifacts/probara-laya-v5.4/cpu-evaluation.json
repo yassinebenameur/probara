@@ -1,0 +1,111 @@
+{
+  "release_approved": true,
+  "device": "cpu",
+  "cpu_format": {
+    "encoder": "dynamic-int8-linear",
+    "head": "float32",
+    "backend": "qnnpack",
+    "torch": "2.8.0"
+  },
+  "version": "probara-laya-v5.4",
+  "state_format": 3,
+  "model_sha256": "178c34d80debe9df7e932ee93803da60e08e8c79f55995ff6da44be6c13c79fa",
+  "platform": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.13.3",
+    "threads": 4
+  },
+  "scope": "Controlled scenarios only; no real-world accuracy claim.",
+  "tasks": {
+    "rca": {
+      "held_out": {
+        "n": 1000,
+        "supported": 610,
+        "emitted": 607,
+        "correct_emitted": 607,
+        "precision": 1.0,
+        "coverage": 0.9950819672131147,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.997
+      },
+      "conservative_rules": {
+        "precision": 1.0,
+        "coverage": 0.759016393442623,
+        "decision_accuracy": 0.853
+      },
+      "untuned_matched_precision": {
+        "n": 1000,
+        "supported": 610,
+        "emitted": 498,
+        "correct_emitted": 498,
+        "precision": 1.0,
+        "coverage": 0.8163934426229508,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.888
+      },
+      "calibration_precision_target": 1.0,
+      "temperature": 0.9926485419273376,
+      "threshold": 0.98,
+      "evidence_guard_rules": {
+        "precision": 1.0,
+        "coverage": 1.0,
+        "decision_accuracy": 1.0
+      }
+    },
+    "dependency": {
+      "held_out": {
+        "n": 1000,
+        "supported": 510,
+        "emitted": 486,
+        "correct_emitted": 486,
+        "precision": 1.0,
+        "coverage": 0.9529411764705882,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.976
+      },
+      "conservative_rules": {
+        "precision": 1.0,
+        "coverage": 0.3411764705882353,
+        "decision_accuracy": 0.664
+      },
+      "untuned_matched_precision": {
+        "n": 1000,
+        "supported": 510,
+        "emitted": 59,
+        "correct_emitted": 59,
+        "precision": 1.0,
+        "coverage": 0.11568627450980393,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.549
+      },
+      "calibration_precision_target": 1.0,
+      "temperature": 0.9390015006065369,
+      "threshold": 0.45,
+      "evidence_guard_rules": {
+        "precision": 1.0,
+        "coverage": 1.0,
+        "decision_accuracy": 1.0
+      },
+      "guard_note": "Dependency precision and unsupported_abstention are properties of the evidence guard (probara_ai.guard), not of the model: a pair is emitted only on a guard basis and only with the guard's own label, and corpus labels agree with the guard by construction. Coverage and decision_accuracy measure the model."
+    }
+  },
+  "score_cache": {
+    "sha256": "184036d455c1f87fc3003b9e1476fe2b45a1da3051afe5519e8046269235ba2a",
+    "parts": [
+      "calibration"
+    ]
+  },
+  "training_record": {
+    "release_approved": false,
+    "scope": "Controlled scenarios only; no real-world accuracy claim.",
+    "gate_failure": "Separate CPU calibration and held-out validation required.",
+    "loss_history": [
+      0.2509996385233223,
+      0.15578783538667215,
+      0.1155699364137934
+    ],
+    "training_seconds": 20898.119751207996
+  },
+  "gate_failure": null
+}

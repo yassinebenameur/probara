@@ -394,11 +394,13 @@ lint/typecheck/build checks in `website/` when that application changes.
 
 ## Local AI analysis
 
-The API prepares at most 50 dependency candidates from 30-day co-firing
-history, service tags, groups and names. The internal authenticated service
-returns probabilities over supplied closed choices. `shared/ai` validates
-identity, probability sums and evidence support, rejects graph cycles and
-renders measured explanations. Proposals are written only through the existing
+The API builds dependency candidates from 30-day co-firing history, service
+tags, groups and names; `shared/ai` applies one evidence guard
+(`DependencyGuard`: timing, variant or structural basis) and sends at most 50
+guard-eligible pairs to the model, never the pairs it rejects. The internal
+authenticated service returns probabilities over supplied closed choices.
+`shared/ai` validates identity, probability sums and that the model's answer
+matches the guard, rejects graph cycles and renders measured explanations. Proposals are written only through the existing
 authoritative dependency endpoint after an operator accepts them.
 
 Incident requests reserve a pending row and publish the existing versioned

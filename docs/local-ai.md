@@ -124,8 +124,8 @@ committed; they come from the pinned base.
 
 The service renders evidence to text before tokenizing it, and a head only
 works on the rendering it was trained on. `probara_ai.contract.STATE_FORMAT`
-versions that rendering (current: 2, whose wording follows the catalogue
-descriptions). Each artifact pins its own in the manifest's `state_format`
+versions that rendering (current: 3, which adds the pair-structure evidence of catalogue
+`probara-evidence-v2`; 2 follows the first catalogue's descriptions). Each artifact pins its own in the manifest's `state_format`
 (absent means 1, the first artifact's generic labels), the corpus used to
 validate it must be rendered in the same format, and the runtime renders
 requests in the artifact's format. Changing the rendering is a new model,
@@ -156,7 +156,7 @@ images in stages:
 5. `runtime`: no git, compiler or pip; uid/gid 1000; root-owned code and
    weights; writes only `/tmp`; `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`.
 
-`ARG MODEL_VERSION` (default `probara-laya-v4`) names the artifact directory
+`ARG MODEL_VERSION` (default `probara-laya-v5.4`) names the artifact directory
 to ship. CI reads the shipped version from that line, so shipping a new
 artifact means committing its directory and changing that default. The
 service also runs `verify_artifact` at startup.
@@ -249,30 +249,31 @@ PROBARA_AI_FIXTURES=ai-service/training/checker-fixtures.json \
 python ai-service/training/generate.py --output ai-service/artifacts/dataset
 
 # Train a head from the base on the deployed CPU features (training rows only)
-python ai-service/training/train_head_cpu.py --version probara-laya-v3 \
+python ai-service/training/train_head_cpu.py --version probara-laya-v5 \
   --base ai-service/.cache/base --data ai-service/artifacts/dataset \
-  --output ai-service/artifacts/probara-laya-v3 \
+  --output ai-service/artifacts/probara-laya-v5 \
   --work ai-service/.cache/composed --epochs 3
 
 # Optional: training-only dependency augmentation (deterministic, seeded) and
-# a warm start from a previous head, as probara-laya-v4 was trained
+# a warm start from a previous head, as each round up to probara-laya-v5.4
+# was trained (--groups sets the number of augmentation groups, 5 rows each)
 python ai-service/training/augment.py --output ai-service/.cache/augment
-python ai-service/training/train_head_cpu.py --version probara-laya-v4 \
+python ai-service/training/train_head_cpu.py --version probara-laya-v5.1 \
   --base ai-service/.cache/base --data ai-service/artifacts/dataset \
   --extra-train ai-service/.cache/augment/dependency-train-augment.jsonl \
-  --init-head ai-service/.cache/composed/probara-laya-v3.epochs/head-epoch-3.safetensors \
-  --output ai-service/artifacts/probara-laya-v4 \
+  --init-head ai-service/.cache/composed/probara-laya-v5.epochs/head-epoch-3.safetensors \
+  --output ai-service/artifacts/probara-laya-v5.1 \
   --work ai-service/.cache/composed --epochs 3
 
 # Select on the calibration partition only (no report, no approval) ...
 python ai-service/training/validate_cpu.py --calibration-only \
-  --artifact ai-service/artifacts/probara-laya-v4 \
+  --artifact ai-service/artifacts/probara-laya-v5.1 \
   --base ai-service/.cache/base --data ai-service/artifacts/dataset \
   --work ai-service/.cache/composed
 
 # ... then calibrate, score held-out on CPU once, write the report and any approval
 python ai-service/training/validate_cpu.py \
-  --artifact ai-service/artifacts/probara-laya-v4 \
+  --artifact ai-service/artifacts/probara-laya-v5.1 \
   --base ai-service/.cache/base --data ai-service/artifacts/dataset \
   --work ai-service/.cache/composed
 
@@ -297,10 +298,15 @@ generated telemetry: 5,000 examples per task in 1,000 independent groups,
 split 60/20/20 into train, calibration and test before variations are
 expanded, with option order, names and timestamps randomized from a fixed
 seed. Hidden causes without visible evidence are labelled insufficient
-evidence. The conservative baseline requires three repeated direct symptoms
-or five co-firing windows; the stronger construction-aligned guards are a
-disclosed corpus upper bound, not a claim the model beats. Results measure
-this controlled corpus, not real-world incident accuracy.
+evidence. The conservative baseline requires three repeated direct symptoms,
+or for a pair the guard's timing basis with at least five co-firing windows
+(it never answers on the variant or structural basis); the stronger
+construction-aligned guards are a disclosed corpus upper bound, not a claim
+the model beats. For the dependency task, precision and unsupported
+abstention are properties of the guard, not of the model: a pair is emitted
+only on a guard basis and only with the guard's own label, so the gate's
+coverage and accuracy are what measure the head. Results measure this
+controlled corpus, not real-world incident accuracy.
 
 ### Operator labels
 
@@ -312,7 +318,11 @@ training row (`task`, `group`, `evidence`, `state`, `questions`, `expected`,
 plus `provenance`) whose `state` is rendered in evidence state format 1,
 frozen on the Go side (`shared/ai/labelexport.go`, pinned by
 `shared/ai/testdata/label-export-v1.jsonl`) whatever the current
-`STATE_FORMAT` is. Pass the file as `--extra-train`
+`STATE_FORMAT` is. Dependency `evidence` carries every current
+`PairEvidence` field, but format 1 renders only the seven
+`probara-evidence-v1` ones; a pair labelled under v1 exports the later
+fields as zero, and `provenance.catalogue` names the catalogue it was
+labelled under. Pass the file as `--extra-train`
 only, never as calibration or test data:
 
 ```sh
@@ -354,13 +364,73 @@ refused). A supported diagnosis is a **suspected cause**; unsupported
 incidents finish with insufficient evidence, and infrastructure failures
 (including repeated 429s) finish failed with a retry action.
 
-Suggestions examine up to 50 pairs, prioritizing 30-day co-firing history in
-ten-minute buckets before service/group and naming signals. An emitted edge
-needs repeated failures, consistent timing direction, service/group
-corroboration, no known common upstream and the calibrated threshold; names
-alone never establish dependency. Existing, duplicate, self-referencing and
-cycle-producing edges are rejected, and acceptance uses the existing
-dependency write endpoint.
+Dependency suggestions consider every candidate pair among up to 250 enabled
+monitors: pairs that co-fired (30-day lookback, ten-minute buckets, at least
+two shared windows; at most 50 co-firing pairs, keeping first the
+one-direction pairs with at most three monitors alerting per window, then
+other one-direction pairs), share a non-generic tag or group, share a naming
+token, or share a name prefix of two or more tokens. Only enabled,
+non-deleted, non-group monitors count anywhere: their alerts form the
+windows, and they are the populations below, counted across the whole
+workspace rather than the 250 loaded monitors. Pair evidence (catalogue
+`probara-evidence-v2`, `PairEvidence` in `shared/ai/dependencies.go`) holds
+counters and booleans only, oriented A < B by opaque reference:
+`co_fires`, `a_leads_seconds` (positive when A fails first),
+`reverse_co_fires`, `shared_service`, `shared_group`, `naming_signal`,
+`common_upstream`, each monitor's alert windows in the lookback (`a_windows`,
+`b_windows`), the median number of monitors alerting in the pair's shared
+windows (`window_monitors`), the workspace population of the least common
+shared non-generic tag (`shared_tag_monitors`), the member count of the
+smallest shared group, groups matched by identity rather than name
+(`shared_group_monitors`), the number of leading name tokens in common
+(`shared_name_prefix`; reported as 1 when the two names' first two tokens
+are carried by more than 10 monitors of the workspace, so an
+environment-style prefix is not a signal), whether one name is the other's
+tokens plus more, at least one of them not a number (`a_extends_b`,
+`b_extends_a`; `node-2` does not extend `node`), `same_type`, whether each
+type is a backing resource (`a_infra`, `b_infra`: mongodb, mysql, postgres,
+redis, rabbitmq, prometheus, agent), and `peers` (same type and either
+identical non-empty tag sets with neither name extending the other, or names
+equal apart from a trailing number, such as `web-01` and `web-02`). Name
+tokens are the lowercased name split on `-`, `_`, space and `.`. Generic tags
+(prod, production, dev, staging, test) never count.
+
+One evidence guard (`ai.DependencyGuard`, twinned in the ai-service and
+pinned by `shared/ai/testdata/dependency-guard-cases.json` and the
+operator-verified `dependency-regression.json`) decides whether a pair can
+support a dependency and in which direction. A rare tag or group is held by
+1 to 10 monitors. A known common upstream abstains; otherwise the first
+matching basis wins:
+
+- **variant**: exactly one name extends the other, at least two co-fires, none
+  reversed, a time direction, and the base fails first; the variant depends
+  on its base.
+- **timing**: at least three co-fires, none reversed, a time direction, a
+  median of at most three monitors alerting in those windows, not peers, and
+  corroboration by a rare tag, a rare group or a two-token name prefix; the
+  later monitor depends on the earlier.
+- **structural**: exactly one monitor is a backing resource, not peers, and a
+  rare tag or a two-token name prefix (a small group alone is not enough);
+  the service depends on the resource, whatever the alert timing.
+
+A backing resource never depends on the service that uses it. When exactly
+one monitor is a backing resource and the variant or timing direction would
+make it the dependent (a service check usually alerts sooner than its
+database's), that basis does not apply and the pair falls through to the
+structural rule or abstains.
+
+Only pairs with a basis are sent to the model, timing first, then variant,
+then structural, strongest evidence first, at most 50 per request; pairs the
+guard rejects count as analyzed and abstained without a model call, and no
+call is made when none qualifies. A suggestion needs the model's best choice
+to equal the guard's direction at or above the calibrated threshold. Each
+suggestion carries its `basis` and a measured explanation per basis;
+structural suggestions are always low confidence. Existing, duplicate,
+self-referencing and cycle-producing edges are rejected first; then, when one
+monitor would still be suggested against both a resource and a variant of
+it, only the suggestion to the base is kept. Every dropped pair counts as abstained
+(`analyzed_pairs` = `abstained_pairs` + suggestions), and acceptance uses the
+existing dependency write endpoint.
 
 ## Acceptance
 

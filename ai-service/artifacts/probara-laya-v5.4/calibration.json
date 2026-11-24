@@ -1,0 +1,10 @@
+{
+  "temperatures": {
+    "rca": 0.9926485419273376,
+    "dependency": 0.9390015006065369
+  },
+  "thresholds": {
+    "rca": 0.98,
+    "dependency": 0.45
+  }
+}
