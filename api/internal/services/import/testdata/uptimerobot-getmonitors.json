@@ -1,0 +1,150 @@
+{
+  "stat": "ok",
+  "pagination": {"offset": 0, "limit": 50, "total": 12},
+  "monitors": [
+    {
+      "id": 777749809,
+      "friendly_name": "Homepage",
+      "url": "https://www.example.com",
+      "type": 1,
+      "sub_type": "",
+      "keyword_type": null,
+      "keyword_case_type": null,
+      "keyword_value": "",
+      "http_username": "",
+      "http_password": "",
+      "port": "",
+      "interval": 300,
+      "timeout": 30,
+      "status": 2,
+      "create_datetime": 1462565497,
+      "ssl": {"brand": "LetsEncrypt", "product": "R11", "expires": 1767225600, "ignore_errors": 0, "disable_notifications": 0},
+      "alert_contacts": [{"id": "0993765", "value": "ops@example.com", "type": 2, "threshold": 0, "recurrence": 0}],
+      "mwindows": []
+    },
+    {
+      "id": 777749810,
+      "friendly_name": "Shop keyword",
+      "url": "https://shop.example.com/",
+      "type": 2,
+      "sub_type": "",
+      "keyword_type": 2,
+      "keyword_case_type": 0,
+      "keyword_value": "Add to cart",
+      "port": "",
+      "interval": 60,
+      "timeout": 20,
+      "status": 2,
+      "alert_contacts": [],
+      "mwindows": [{"id": 12, "type": 3, "value": "1-2-3-4-5", "start_time": "02:00", "duration": 60}]
+    },
+    {
+      "id": 777749811,
+      "friendly_name": "Error page absent",
+      "url": "https://shop.example.com/checkout",
+      "type": 2,
+      "keyword_type": 1,
+      "keyword_case_type": 1,
+      "keyword_value": "Fatal error",
+      "interval": 120,
+      "timeout": 30,
+      "status": 9
+    },
+    {
+      "id": 777749812,
+      "friendly_name": "Orders API",
+      "url": "https://api.example.com/v1/orders",
+      "type": 1,
+      "http_username": "monitor",
+      "http_password": "ur-secret-pass",
+      "http_auth_type": 1,
+      "http_method": 3,
+      "post_type": 2,
+      "post_value": "{\"ping\":true}",
+      "post_content_type": 1,
+      "custom_http_headers": {"X-Api-Key": "ur-api-key-123", "Accept": "application/json"},
+      "custom_http_statuses": "404:1_302:0",
+      "ignore_ssl_errors": 1,
+      "interval": 60,
+      "timeout": 15,
+      "status": 2
+    },
+    {
+      "id": 777749813,
+      "friendly_name": "Digest admin",
+      "url": "https://legacy.example.com/admin",
+      "type": 1,
+      "http_username": "admin",
+      "http_password": "ur-digest-pass",
+      "http_auth_type": 2,
+      "interval": 300,
+      "timeout": 30,
+      "status": 2
+    },
+    {
+      "id": 777749814,
+      "friendly_name": "Router ping",
+      "url": "198.51.100.7",
+      "type": 3,
+      "interval": 60,
+      "status": 2
+    },
+    {
+      "id": 777749815,
+      "friendly_name": "SMTP port",
+      "url": "mail.example.com",
+      "type": 4,
+      "sub_type": "4",
+      "port": "",
+      "interval": 300,
+      "status": 2
+    },
+    {
+      "id": 777749816,
+      "friendly_name": "Admin console port",
+      "url": "admin.example.com",
+      "type": 4,
+      "sub_type": 99,
+      "port": 8443,
+      "interval": 300,
+      "status": 2
+    },
+    {
+      "id": 777749817,
+      "friendly_name": "Cron heartbeat",
+      "url": "https://heartbeat.uptimerobot.com/m777749817-ur-heartbeat-token",
+      "type": 5,
+      "interval": 3600,
+      "status": 2
+    },
+    {
+      "id": 777749818,
+      "friendly_name": "Paused blog",
+      "url": "http://blog.example.com",
+      "type": 1,
+      "interval": 900,
+      "timeout": 30,
+      "status": 0
+    },
+    {
+      "id": 777749819,
+      "friendly_name": "Zone records",
+      "url": "example.com",
+      "type": 6,
+      "interval": 300,
+      "status": 2
+    },
+    {
+      "id": 777749820,
+      "friendly_name": "Partner portal",
+      "url": "https://partner.example.com/",
+      "type": 1,
+      "http_username": "ops",
+      "http_password": "",
+      "http_auth_type": 1,
+      "interval": 20,
+      "timeout": 30,
+      "status": 2
+    }
+  ]
+}

@@ -143,7 +143,7 @@ export const MCP_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "`tools/list` is tailored to the connection: read-only connections see no write tools, API keys see no tenant-admin or superadmin tools, and only superadmins see user and SSO-mapping tools. This is a convenience; the API enforces access on every call regardless. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) derived from the route, so clients can ask before running deletes.",
+            "`tools/list` is tailored to the connection: read-only connections see no write tools, API keys see no tenant-admin, superadmin or sign-in-only tools (`list_tenants`), and only superadmins see user and SSO-mapping tools. This is a convenience; the API enforces access on every call regardless. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) derived from the route, so clients can ask before running deletes.",
         },
         {
           type: "table",
@@ -152,18 +152,20 @@ export const MCP_PAGE: DocPage = {
             ["Fleet", "`whoami`, `get_dashboard_overview`, `list_problem_monitors`, `list_recent_failures`, `get_group_sparkline`"],
             ["Monitors", "`list_monitors`, `get_monitor`, `create_monitor`, `update_monitor`, `delete_monitor`, `test_monitor_config`, `run_monitor_now`, `snooze_monitor`, `bulk_update_alerting`, `bulk_delete_monitors`"],
             ["History", "`get_monitor_analytics`, `get_monitor_results`, `get_monitor_results_batch` (up to 100 monitors per call), `get_monitor_metrics_snapshots`, `get_synthetic_screenshot` (returns the image), `delete_monitor_history`"],
+            ["Configuration history", "`list_monitor_versions`, `get_monitor_version`, `diff_monitor_version` (against another version or `current`), `restore_monitor_version` (destructive; keeps current secrets)"],
             ["Structure", "group members, `get_dependency_graph`, dependency add/remove, `suggest_dependencies` (local AI)"],
             ["Host agents", "`list_metric_series`, `query_metrics`, collector config and install/uninstall scripts, `get_push_info`"],
             ["Import / export", "`export_monitors`, `preview_monitor_import` (send the file's text), `import_monitors`"],
-            ["Alerts", "`list_alerts`, `get_alert` (with AI triage), `acknowledge_alert`, `resolve_alert`, `bulk_acknowledge_alerts`, `bulk_resolve_alerts`, `label_alert_triage`, `wait_for_alert_events`"],
+            ["Config as code", "`plan_monitor_apply` (read-only), `apply_monitors` (destructive): plan and apply a monitors file from `export_monitors` with `keyed=true`; see [config as code](/docs/monitors/#config-as-code)"],
+            ["Alerts", "`list_alerts`, `get_alert` (with AI triage), `acknowledge_alert`, `resolve_alert`, `unacknowledge_alert`, `snooze_alert`, `unsnooze_alert`, their `bulk_*` forms, `label_alert_triage`, `wait_for_alert_events`, `list_alert_deliveries` (an alert's [notification attempts](/docs/alerting/#delivery-history))"],
             ["Incidents", "create, update, state transitions, timeline entries, alert/monitor links, status-page publishing, AI analysis request/read/label"],
             ["Operations", "maintenance windows, private locations and their deploy info, `get_mesh`, `get_mesh_edge_history`, `probe_mesh_edge`"],
             ["Kubernetes discovery", "`list_discovery_integrations`, `create_discovery_integration`, `update_discovery_integration` (rename, location, namespace add/remove; destructive), `get_discovery_namespaces`, `get_discovery_coverage`, `approve_discovery_suggestion`, monitor link/unlink, collector token rotation"],
-            ["Reporting", "SLAs, live reports (`format` json/csv/pdf returns a file), issued reports"],
-            ["Status pages", "pages, sections and settings, custom template draft/publish/revert, template library"],
-            ["Notifications", "alert channels, channel plugins (config schemas), notification settings, `test_alert_channel` (sends a real message)"],
+            ["Reporting", "SLAs, live reports (`format` json/csv/pdf returns a file), issued reports, `get_sla_report_schedule`, `set_sla_report_schedule`, `delete_sla_report_schedule`"],
+            ["Status pages", "pages, sections and settings, visibility and visitor password, kiosk tokens, email subscribers (`get_status_page_subscriber_summary`; with write access `list_status_page_subscribers`, `remove_status_page_subscriber`, `remove_status_page_subscribers`), custom template draft/publish/revert, template library"],
+            ["Notifications", "alert channels, channel plugins (config schemas), notification settings, `test_alert_channel` (sends a real message), `list_channel_deliveries` (a channel's delivery history, filterable by outcome)"],
             ["Workspace", "local AI settings, `export_ai_labels`, API keys, workspace settings, audit log"],
-            ["Platform", "`list_tenants`, users, SSO group mappings (superadmins)"],
+            ["Platform", "`list_tenants`, users, SSO group mappings, and workspace management: `list_workspace_overview`, `create_tenant`, `rename_tenant`, `delete_tenant` (destructive; `confirm_name` repeats the name); another user's sign-in: `unlock_user`, `list_user_sessions`, `revoke_user_session`, `revoke_user_sessions`, `invite_user`, `create_password_reset_link`, `reset_user_two_factor` (superadmins). Your own sessions, password, email address and two-factor sign-in (Account) are browser-only and not tools, nor are the sign-in steps and the emailed-link pages"],
           ],
         },
         {
@@ -190,6 +192,11 @@ export const MCP_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the in-cluster discovery collector's config and snapshot routes (`/discovery-collectors/…`, collector-token authenticated); the retired legacy agent endpoint and alert-policy routes (410); and the OAuth protocol routes themselves.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The same catalog generates the REST API's [OpenAPI document](/docs/api/#openapi), where each operation's `operationId` is the tool name, so the tools and the documented REST surface cannot drift apart.",
         },
       ],
     },

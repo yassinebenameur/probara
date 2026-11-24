@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/yassinebenameur/probara/shared/buildinfo"
 	"github.com/yassinebenameur/probara/shared/discovery"
 )
 
@@ -49,6 +50,7 @@ func main() {
 	}
 }
 func run() error {
+	log.Printf("Probara discovery collector %s", buildinfo.Version)
 	base, err := platformBase(os.Getenv("PROBARA_URL"))
 	if err != nil {
 		return err

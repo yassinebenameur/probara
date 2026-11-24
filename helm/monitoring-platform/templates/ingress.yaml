@@ -4,6 +4,7 @@
 {{- $frontendPort := .Values.frontend.httpPort -}}
 {{- $statusPagePort := .Values.statusPage.httpPort -}}
 {{- range .Values.ingress.hosts }}
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -79,5 +80,71 @@ spec:
           {{- end }}
           {{- end }}
           {{- end }}
+{{- end }}
+{{- /*
+Status page custom domains: one Ingress per verified domain, routing all of
+it to the status-page service (which serves only that page there) with the
+domain's own TLS Secret. A host that is also an app host above would hand
+that host to a status page, so the render fails instead.
+*/}}
+{{- if and .Values.statusPage.enabled .Values.statusPage.customDomains }}
+{{- if not (or .Values.statusPage.baseUrl (include "monitoring-platform.statusPagePlatformHosts" .)) }}
+{{- fail "statusPage.customDomains needs statusPage.baseUrl, ingress.hosts or statusPage.platformHosts: without a platform host the status-page service cannot refuse unverified hostnames" }}
+{{- end }}
+{{- $annotations := deepCopy ($.Values.ingress.annotations | default dict) }}
+{{- with $.Values.statusPage.customDomainsClusterIssuer }}
+{{- $_ := set $annotations "cert-manager.io/cluster-issuer" . }}
+{{- end }}
+{{- $appHosts := dict }}
+{{- range .Values.ingress.hosts }}
+{{- $_ := set $appHosts (lower .host) true }}
+{{- end }}
+{{- $seen := dict }}
+{{- range .Values.statusPage.customDomains }}
+{{- if not .host }}
+{{- fail "statusPage.customDomains: every entry needs a host" }}
+{{- end }}
+{{- if not .tlsSecretName }}
+{{- fail (printf "statusPage.customDomains: %s needs a tlsSecretName (custom domains are served over TLS)" .host) }}
+{{- end }}
+{{- if hasKey $appHosts (lower .host) }}
+{{- fail (printf "statusPage.customDomains: %s is also in ingress.hosts" .host) }}
+{{- end }}
+{{- if hasKey $seen (lower .host) }}
+{{- fail (printf "statusPage.customDomains: %s is listed twice" .host) }}
+{{- end }}
+{{- $_ := set $seen (lower .host) true }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}-sp-{{ .host | lower | replace "." "-" }}
+  labels:
+    {{- include "monitoring-platform.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: status-page
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if $.Values.ingress.className }}
+  ingressClassName: {{ $.Values.ingress.className }}
+  {{- end }}
+  tls:
+    - hosts:
+        - {{ .host | lower | quote }}
+      secretName: {{ .tlsSecretName }}
+  rules:
+    - host: {{ .host | lower | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}-status-page
+                port:
+                  number: {{ $statusPagePort }}
+{{- end }}
 {{- end }}
 {{- end }}

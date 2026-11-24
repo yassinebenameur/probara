@@ -39,9 +39,35 @@ func renderCacheTTLFromEnv() time.Duration {
 }
 
 type cacheEntry struct {
-	html    string
+	page    renderedPage
 	etag    string
 	expires time.Time
+}
+
+// renderedPage is one cached render: the HTML (with the CSP nonce still a
+// placeholder) and the page's CSP inputs, so every response can mint its own
+// nonce without re-rendering. noindex is the page's indexing opt-out, sent
+// as X-Robots-Tag with the HTML. summary is the summary.json document built
+// from the same data, which the badges read too, and summaryJSON/summaryETag
+// its encoded body and validator; none of them is served with the HTML, so
+// they are not part of the page's ETag.
+type renderedPage struct {
+	html        string
+	csp         pageCSP
+	noindex     bool
+	summary     *pageSummary
+	summaryJSON []byte
+	summaryETag string
+	// visibility is the page access mode the entry was built under
+	// (cachedPage rebuilds an entry built under another one).
+	visibility string
+}
+
+// feedCacheKey is the cache key of a page's rendered Atom feed. The feed
+// shares the page's TTL and invalidation (Invalidate drops both); a NUL
+// cannot appear in a slug, so the key never names a page.
+func feedCacheKey(slug string) string {
+	return slug + "\x00feed"
 }
 
 // renderCache caches the rendered HTML of public status pages per slug so N
@@ -77,16 +103,28 @@ func newRenderCache(ttl time.Duration) *renderCache {
 // returned to every waiter of the flight and are never cached. A nil cache
 // degrades to calling build directly.
 func (c *renderCache) Get(slug string, build func() (string, error)) (string, string, error) {
-	if c == nil {
+	page, etag, err := c.GetPage(slug, func() (renderedPage, error) {
 		html, err := build()
+		return renderedPage{html: html}, err
+	})
+	return page.html, etag, err
+}
+
+// GetPage is Get for a full renderedPage. The ETag covers the CSP inputs as
+// well as the HTML: a 304 makes the browser keep its stored headers, so a
+// changed policy (csp_mode, APP_BASE_URL) must change the ETag even when the
+// markup did not.
+func (c *renderCache) GetPage(slug string, build func() (renderedPage, error)) (renderedPage, string, error) {
+	if c == nil {
+		page, err := build()
 		if err != nil {
-			return "", "", err
+			return renderedPage{}, "", err
 		}
-		return html, computeETag(html), nil
+		return page, page.etag(), nil
 	}
 
 	if entry, ok := c.lookup(slug); ok {
-		return entry.html, entry.etag, nil
+		return entry.page, entry.etag, nil
 	}
 
 	v, err, _ := c.group.Do(slug, func() (interface{}, error) {
@@ -95,40 +133,59 @@ func (c *renderCache) Get(slug string, build func() (string, error)) (string, st
 			return entry, nil
 		}
 		gen := c.generation(slug)
-		html, err := build()
+		page, err := build()
 		if err != nil {
 			return nil, err
 		}
 		entry := &cacheEntry{
-			html:    html,
-			etag:    computeETag(html),
+			page:    page,
+			etag:    page.etag(),
 			expires: c.now().Add(c.ttl),
 		}
 		c.storeIfCurrent(slug, gen, entry)
 		return entry, nil
 	})
 	if err != nil {
-		return "", "", err
+		return renderedPage{}, "", err
 	}
 	entry := v.(*cacheEntry)
-	return entry.html, entry.etag, nil
+	return entry.page, entry.etag, nil
 }
 
-// Invalidate drops the cached entry for slug so the next Get rebuilds it.
-// In-flight builds for the slug are detached (singleflight Forget) and their
-// result is discarded, since it was computed from pre-invalidation data.
+func (p renderedPage) etag() string {
+	if p.csp.mode == "" && !p.noindex {
+		return computeETag(p.html)
+	}
+	// A custom template may print no robots meta, so the header can be the
+	// only thing an indexing change alters.
+	robots := ""
+	if p.noindex {
+		robots = "\x00noindex"
+	}
+	return computeETag(p.html + "\x00" + p.csp.mode + "\x00" + strings.Join(p.csp.frameAncestors, " ") + robots)
+}
+
+// Invalidate drops the cached entries for slug (its page and its feed) so
+// the next Get rebuilds them. In-flight builds for the slug are detached
+// (singleflight Forget) and their result is discarded, since it was computed
+// from pre-invalidation data.
 func (c *renderCache) Invalidate(slug string) {
 	if c == nil {
 		return
 	}
+	keys := [2]string{slug, feedCacheKey(slug)}
 	c.mu.Lock()
-	delete(c.entries, slug)
-	if _, seen := c.gens[slug]; !seen && len(c.gens) >= renderCacheGenerationCap {
-		c.gens = make(map[string]uint64)
+	for _, key := range keys {
+		delete(c.entries, key)
+		if _, seen := c.gens[key]; !seen && len(c.gens) >= renderCacheGenerationCap {
+			c.gens = make(map[string]uint64)
+		}
+		c.gens[key]++
 	}
-	c.gens[slug]++
 	c.mu.Unlock()
-	c.group.Forget(slug)
+	for _, key := range keys {
+		c.group.Forget(key)
+	}
 }
 
 // HasEntries reports whether any unexpired rendered page is currently cached.

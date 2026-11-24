@@ -1,0 +1,21 @@
+{
+  "version": "probara-evidence-v1",
+  "rca": {
+    "dns_failure": {"description": "Measured DNS resolution failures", "title": "DNS resolution failure", "actions": ["Check resolver reachability and query the monitored record from the affected location.", "Compare DNS answers and resolver errors across locations."]},
+    "connection_failure": {"description": "Measured connection refusals or unreachable routes", "title": "Connection failure", "actions": ["Verify the target listener, routes and firewall from the affected location.", "Compare connectivity from an independent location."]},
+    "tls_problem": {"description": "Measured TLS handshake or certificate validity errors", "title": "TLS or certificate problem", "actions": ["Inspect the served certificate chain, expiry and hostname match.", "Verify TLS negotiation from the affected location."]},
+    "protocol_error": {"description": "Measured application or protocol status and assertion failures", "title": "Application or protocol error", "actions": ["Inspect application logs around the first failing check.", "Verify the expected protocol response and recent releases."]},
+    "latency_degradation": {"description": "Measured latency increase against healthy checks in this window", "title": "Latency degradation", "actions": ["Compare DNS, connection, TLS and first-byte timings with the healthy baseline.", "Inspect application latency and traffic around the failure window."]},
+    "resource_pressure": {"description": "Fresh monitored host metrics show high CPU or memory utilization during failures", "title": "Monitored resource pressure", "actions": ["Inspect CPU and memory utilization on the monitored host during the failure window.", "Check workload saturation and capacity before changing limits."]},
+    "upstream_failure": {"description": "Configured upstream has measured failures before dependent failures", "title": "Configured upstream failure", "actions": ["Inspect the configured upstream's first failing checks.", "Restore upstream health and verify dependent recovery."]},
+    "maintenance_downtime": {"description": "A maintenance window overlaps measured downtime", "title": "Maintenance-associated downtime", "actions": ["Confirm the maintenance owner expected this downtime.", "Verify recovery after the maintenance window ends."]},
+    "insufficient_evidence": {"description": "Missing, conflicting, unsupported or inconclusive evidence", "title": "Insufficient evidence", "actions": ["Review the linked monitor transitions and collect missing telemetry.", "Compare failures across locations and configured upstreams before assigning a cause."]}
+  },
+  "dependency": {
+    "a_depends_b": {"description": "Repeated B-before-A failures with corroborating service evidence support a suspected B upstream of A"},
+    "b_depends_a": {"description": "Repeated A-before-B failures with corroborating service evidence support a suspected A upstream of B"},
+    "shared_upstream": {"description": "Known common upstream evidence explains both failures"},
+    "no_dependency": {"description": "Independent failures or healthy counterpart evidence"},
+    "insufficient_evidence": {"description": "Correlation, names alone, conflicting direction or missing history cannot establish a dependency"}
+  }
+}

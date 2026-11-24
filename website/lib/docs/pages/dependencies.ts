@@ -106,22 +106,24 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "With [workspace local AI](/docs/administration/#ai-settings) enabled, at most 50 candidates are prioritized by co-firing alerts, shared service tags/groups, then naming signals. The alert lookback is 30 days, with co-firing measured in fixed 10-minute buckets. Proposals require repeated directional timing, service corroboration and a calibrated score threshold; conflicting directions and known common upstreams abstain. Correlation alone does not prove a dependency.",
+            "With [workspace local AI](/docs/administration/#ai-settings) enabled, candidate pairs come from co-firing alerts, shared service tags and groups, naming tokens, and shared name prefixes. The alert lookback is 30 days, with co-firing measured in fixed 10-minute buckets. An evidence guard gives each pair at most one basis, and only pairs with a basis are sent to the model: **Alert timing** (at least three co-firing windows, always in the same order, with at most three monitors alerting in those windows, corroborated by a tag or group held by at most 10 monitors or a two-token name prefix), **Same target** (a monitor whose name extends another's, such as `checkout` and `checkout slow` but not `node` and `node-2`, failing after its base at least twice), and **Structure** (a service and a backing resource monitor — MongoDB, MySQL, PostgreSQL, Redis, RabbitMQ, Prometheus or agent — sharing a tag held by at most 10 monitors or a two-token name prefix, with no alert correlation required). A backing resource is never proposed as depending on the service that uses it: when alert timing points that way, the pair is treated as Structure or not proposed. Same-role peers (same type and either the same tags or names that differ only by a trailing number, such as `web-01` and `web-02`), tags held by more than 10 monitors of the workspace, name prefixes shared by more than 10 monitors, simultaneous pile-ups, conflicting directions and known common upstreams abstain. A proposal also needs the model to pick the guard's direction at or above a calibrated score threshold. Correlation alone does not prove a dependency.",
         },
         {
           type: "table",
           columns: ["Bound", "Current limit"],
           rows: [
             ["Monitors considered", "Up to 250"],
-            ["Candidate pairs sent for analysis", "Up to 50"],
-            ["Minimum observed co-firings", "2"],
+            ["Co-firing pairs collected", "Up to 50 (one-direction pairs with at most 3 monitors alerting per window first)"],
+            ["Candidate pairs sent for analysis", "Up to 50 that pass the evidence guard (timing, then same target, then structure)"],
+            ["Minimum observed co-firings", "2 (3 for an alert-timing suggestion)"],
+            ["Rare tag or group", "Held by 1 to 10 monitors"],
             ["Historical window", "30 days"],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Suggestions include measured counts, median timing, corroborating signals, calibrated score, model identity, evidence references and abstained-pair context. Duplicate, existing, self and cycle-producing proposals are rejected, including paths through monitors outside the candidate set. The endpoint is compute-only: it does not write an edge until an operator explicitly accepts and creates it. The **Suggest with AI** button is disabled while local AI is off for the workspace or installation, or the local service is unavailable (see [Settings → AI](/docs/administration/#ai-settings)); the page rechecks every 30 seconds and when you return to the tab, and re-enables the button once local AI is ready. The endpoint itself answers 503 while local AI is off, or busy or restarting (with `Retry-After`).",
+            "Each suggestion shows its basis (Alert timing, Same target or Structure) and an explanation built from the measured evidence, plus calibrated score, model identity, evidence references and abstained-pair context; pairs the guard rejects count as abstained without reaching the model. Structure suggestions are always low confidence. When a monitor would still be suggested against both a resource and a variant of it (`orders-db` and `orders-db replica lag`) after existing and cycle-producing edges are removed, only the suggestion to the base is kept. Duplicate, existing, self and cycle-producing proposals are rejected, including paths through monitors outside the candidate set. The endpoint is compute-only: it does not write an edge until an operator explicitly accepts and creates it. The **Suggest with AI** button is disabled while local AI is off for the workspace or installation, or the local service is unavailable (see [Settings → AI](/docs/administration/#ai-settings)); the page rechecks every 30 seconds and when you return to the tab, and re-enables the button once local AI is ready. The endpoint itself answers 503 while local AI is off, or busy or restarting (with `Retry-After`).",
         },
         {
           type: "paragraph",

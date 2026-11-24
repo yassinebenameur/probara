@@ -1,5 +1,5 @@
 {
-  "version": "probara-evidence-v1",
+  "version": "probara-evidence-v2",
   "rca": {
     "dns_failure": {"description": "Measured DNS resolution failures", "title": "DNS resolution failure", "actions": ["Check resolver reachability and query the monitored record from the affected location.", "Compare DNS answers and resolver errors across locations."]},
     "connection_failure": {"description": "Measured connection refusals or unreachable routes", "title": "Connection failure", "actions": ["Verify the target listener, routes and firewall from the affected location.", "Compare connectivity from an independent location."]},
@@ -12,10 +12,10 @@
     "insufficient_evidence": {"description": "Missing, conflicting, unsupported or inconclusive evidence", "title": "Insufficient evidence", "actions": ["Review the linked monitor transitions and collect missing telemetry.", "Compare failures across locations and configured upstreams before assigning a cause."]}
   },
   "dependency": {
-    "a_depends_b": {"description": "Repeated B-before-A failures with corroborating service evidence support a suspected B upstream of A"},
-    "b_depends_a": {"description": "Repeated A-before-B failures with corroborating service evidence support a suspected A upstream of B"},
-    "shared_upstream": {"description": "Known common upstream evidence explains both failures"},
+    "a_depends_b": {"description": "Repeated B-before-A failures with rare corroborating service evidence, an A variant of B failing after it, or service A sharing a rare tag or name prefix with backing resource B support a suspected B upstream of A"},
+    "b_depends_a": {"description": "Repeated A-before-B failures with rare corroborating service evidence, a B variant of A failing after it, or service B sharing a rare tag or name prefix with backing resource A support a suspected A upstream of B"},
+    "shared_upstream": {"description": "Known common upstream evidence, or many monitors failing in the same windows without a variant or backing-resource relation, explains both failures"},
     "no_dependency": {"description": "Independent failures or healthy counterpart evidence"},
-    "insufficient_evidence": {"description": "Correlation, names alone, conflicting direction or missing history cannot establish a dependency"}
+    "insufficient_evidence": {"description": "Correlation among same-role peers, common tags or names alone, conflicting direction or missing history cannot establish a dependency"}
   }
 }

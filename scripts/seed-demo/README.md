@@ -205,6 +205,9 @@ The writer respects the invariants the services rely on:
   - Hourly rollups match the rebuild exactly wherever raw rows exist.
   - Hours with no raw rows are synthetic and are never marked.
   - Daily rollups equal SUM(hourly).
+- **Maintenance:** windows are one-offs written straight to the database,
+  each with its single occurrence (its own span) in
+  `maintenance_window_occurrences`; coverage is read from occurrences only.
 - **Ownership:** monitor and group structure goes through the API, so the
   `monitor_groups` junction, secret encryption and audit behave as they do
   for a user.

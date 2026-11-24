@@ -7,6 +7,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
+import Checkbox from '@/components/ui/Checkbox';
 import Pill from '@/components/ui/Pill';
 import TypeBadge from '@/components/ui/TypeBadge';
 import SortableHeader from '@/components/ui/SortableHeader';
@@ -14,6 +15,7 @@ import { FOCUS_RING } from '@/components/ui/focus';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import { previewImport, executeImport } from '@/lib/api';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+import { IMPORT_SOURCES, derivedRows, importSourceFor, rowsToImport } from '@/lib/import-sources';
 import type {
   ImportPreviewResponse,
   ImportRow,
@@ -27,7 +29,7 @@ import { SELECTED_SEGMENT } from '@/components/ui/roving';
 
 // Recognized schemas arrive pre-translated: every field is already mapped, so
 // the mapping step is informational rather than something to fill in.
-const PRE_MAPPED_SCHEMAS: string[] = [IMPORT_SCHEMA_PORTABLE, IMPORT_SCHEMA_UPTIME_KUMA];
+const PRE_MAPPED_SCHEMAS: string[] = [IMPORT_SCHEMA_PORTABLE, ...IMPORT_SOURCES.map((source) => source.schema)];
 
 // Preview and result tables sort locally (the wizard's data never leaves
 // this page, so the order is not kept in the URL). '#' is the file order.
@@ -44,8 +46,13 @@ function describeSource(preview: ImportPreviewResponse): string {
       return `${preview.total_rows} monitors from a portable YAML export`;
     case IMPORT_SCHEMA_UPTIME_KUMA:
       return `${preview.total_rows} monitors translated from an Uptime Kuma export`;
-    default:
+    default: {
+      const source = importSourceFor(preview.schema);
+      if (source) {
+        return `${preview.total_rows} monitors translated from a ${source.label} export`;
+      }
       return `${preview.total_rows} rows in ${preview.format.toUpperCase()} format`;
+    }
   }
 }
 
@@ -68,6 +75,7 @@ const TARGET_FIELDS = [
   { key: 'enabled', label: 'Enabled', required: false },
   { key: 'group_members', label: 'Group Members', required: false },
   { key: 'consecutive_failures_threshold', label: 'Retries before down', required: false },
+  { key: 'recovery_threshold', label: 'Passes before up', required: false },
 ];
 
 type WizardStep = 'upload' | 'mapping' | 'review' | 'importing' | 'results';
@@ -92,6 +100,7 @@ const SUPPORTED_TYPES = [
   { value: 'rabbitmq', description: 'AMQP connect + auth checks' },
   { value: 'websocket', description: 'WebSocket connect + message checks' },
   { value: 'prometheus', description: 'PromQL query + numeric threshold checks' },
+  { value: 'domain', description: 'Domain registration expiry (RDAP/WHOIS)' },
 ];
 
 // Step indicator component
@@ -330,6 +339,8 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
         const port = getConfigValue(row, 'port');
         return port ? `${host}:${port}` : host;
       }
+      case 'domain':
+        return getConfigValue(row, 'domain') ?? '-';
       case 'push':
         return getConfigValue(row, 'expected_interval_seconds')
           ? `every ${getConfigValue(row, 'expected_interval_seconds')}s`
@@ -410,8 +421,13 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
               return (
                 <tr key={row.index} className={`${supported ? '' : 'opacity-50'}`}>
                   <td className="text-sm tabular-nums text-slate-400">{row.index + 1}</td>
-                  <td className="max-w-[200px] truncate text-sm font-medium text-white">
-                    {getFieldValue(row, 'name') || `Monitor ${row.index + 1}`}
+                  <td className="max-w-[240px] text-sm font-medium text-white">
+                    <span className="block truncate">{getFieldValue(row, 'name') || `Monitor ${row.index + 1}`}</span>
+                    {row.derived && (
+                      <Pill tone="info" size="xs" className="mt-1">
+                        Added from a domain expiry check
+                      </Pill>
+                    )}
                   </td>
                   <td><TypeBadge type={type || 'http'} config={rowConfig(row)} /></td>
                   <td className="max-w-[200px] truncate font-mono text-xs text-slate-400" title={target === '-' ? undefined : target}>
@@ -582,6 +598,10 @@ export default function ImportPage() {
   // Import results
   const [importResults, setImportResults] = useState<ImportExecuteResponse | null>(null);
 
+  // Domain monitors an adapter added from a source's domain-expiration
+  // checks: created unless the operator leaves them out on the review step.
+  const [includeDerived, setIncludeDerived] = useState(true);
+
   // Handle file upload
   const handleFileSelect = async (file: File) => {
     setLoading(true);
@@ -590,6 +610,7 @@ export default function ImportPage() {
     try {
       const result = await previewImport(file);
       setPreviewData(result);
+      setIncludeDerived(true);
       setMapping(result.suggested_mapping);
       setTypeMapping(result.suggested_type_mapping || {});
       setStep('mapping');
@@ -640,7 +661,7 @@ export default function ImportPage() {
 
     try {
       const result = await executeImport({
-        rows: previewData.rows,
+        rows: rowsToImport(previewData.rows, includeDerived),
         mapping: mapping,
         type_mapping: typeMapping,
       });
@@ -683,6 +704,11 @@ export default function ImportPage() {
     return undefined;
   };
 
+  // What a recognized foreign source's translation covers (lib/import-sources).
+  const sourceNote = importSourceFor(previewData?.schema)?.previewNote;
+  const addedRows = previewData ? derivedRows(previewData.rows) : [];
+  const reviewRows = previewData ? rowsToImport(previewData.rows, includeDerived) : [];
+
   return (
     <Page width="wide">
       <PageHeader
@@ -719,6 +745,15 @@ export default function ImportPage() {
                   <span className="w-12 flex-shrink-0 font-medium text-slate-200">CSV</span>
                   <span>Header row followed by data rows</span>
                 </li>
+              </ul>
+              <h3 className="mb-2 mt-4 text-ui font-medium text-white">Migrating from another tool</h3>
+              <ul className="space-y-1 text-xs text-slate-400">
+                {IMPORT_SOURCES.map((source) => (
+                  <li key={source.schema} className="flex items-start gap-2">
+                    <span className="w-24 flex-shrink-0 font-medium text-slate-200">{source.label}</span>
+                    <span>{source.exportHint}</span>
+                  </li>
+                ))}
               </ul>
             </div>
           </div>
@@ -762,9 +797,17 @@ export default function ImportPage() {
                   automatically, so the mappings below are already complete.
                 </p>
                 <p className="mt-2 text-ui text-slate-400">
-                  Uptime Kuma notifications are never migrated and no credential is imported. Check the per-monitor
-                  notes on the review step, then attach Probara alert channels once the monitors exist.
+                  Uptime Kuma notifications are never migrated. HTTP basic auth and credential headers carry over
+                  into encrypted fields, but database passwords do not, so those monitors arrive disabled. Check the
+                  per-monitor notes on the review step, then attach Probara alert channels once the monitors exist.
                 </p>
+              </Callout>
+            )}
+
+            {sourceNote && (
+              <Callout tone="info">
+                <p>{sourceNote.translated}</p>
+                <p className="mt-2 text-ui text-slate-400">{sourceNote.notMigrated}</p>
               </Callout>
             )}
 
@@ -856,12 +899,25 @@ export default function ImportPage() {
               <h2 className="text-title font-semibold text-white">Review import</h2>
               <p className="mt-1 text-sm text-slate-400">
                 {isPreMapped(previewData.schema)
-                  ? `${previewData.total_rows} monitors will be recreated`
-                  : `${previewData.total_rows} monitors will be processed`}
+                  ? `${reviewRows.length} monitors will be recreated`
+                  : `${reviewRows.length} monitors will be processed`}
               </p>
             </div>
 
-            <PreviewTable rows={previewData.rows} mapping={mapping} typeMapping={typeMapping} />
+            {addedRows.length > 0 && (
+              <div className="glass-well p-4">
+                <Checkbox
+                  checked={includeDerived}
+                  onChange={setIncludeDerived}
+                  label={`Also create ${addedRows.length} domain expiry monitor${addedRows.length === 1 ? '' : 's'}`}
+                  description={`Added from the source's domain-expiration checks, one daily monitor per domain: ${addedRows
+                    .map((row) => String(row.fields[mapping.name || 'name'] ?? ''))
+                    .join(', ')}.`}
+                />
+              </div>
+            )}
+
+            <PreviewTable rows={reviewRows} mapping={mapping} typeMapping={typeMapping} />
 
             {previewData.skipped_rows && previewData.skipped_rows.length > 0 && (
               <SkippedTable rows={previewData.skipped_rows} />

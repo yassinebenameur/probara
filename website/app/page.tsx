@@ -5,6 +5,7 @@ import {
   Boxes,
   Braces,
   Cable,
+  CalendarClock,
   CircleDot,
   CloudCog,
   Database,
@@ -37,7 +38,7 @@ import { SiteHeader } from '@/components/SiteHeader';
 
 const dataPlate = [
   ['Type', 'Self-hosted blackbox monitor'],
-  ['Protocols', '18 monitor types'],
+  ['Protocols', '19 monitor types'],
   ['Transport', 'NATS JetStream'],
   ['State', 'PostgreSQL'],
   ['Deploy', 'Docker Compose · Helm'],
@@ -64,6 +65,7 @@ const monitorGroups = [
       { name: 'gRPC', icon: Network },
       { name: 'TCP', icon: CircleDot },
       { name: 'SIP', icon: Send },
+      { name: 'Domain expiry', icon: CalendarClock },
     ],
   },
   {
@@ -150,7 +152,7 @@ export default function HomePage() {
         <section className="signal-strip" aria-label="Platform highlights">
           <div className="signal-strip__inner">
             <div className="signal-stat">
-              <strong>17</strong>
+              <strong>19</strong>
               <span>monitor types across web, network, data, hosts, and journeys</span>
             </div>
             <div className="signal-stat">
@@ -227,7 +229,7 @@ export default function HomePage() {
                   Tune consecutive-failure and latency-anomaly sensitivity, route per
                   monitor or by workspace defaults, and mute named maintenance or quick
                   snoozes. Deliver through email, Slack, Discord, Teams, PagerDuty,
-                  Opsgenie, Telegram, SMS, or signed HTTPS webhooks—with delays,
+                  Opsgenie, Telegram, ntfy, Gotify, SMS, or signed HTTPS webhooks—with delays,
                   reminders, acknowledgement sync, and optional incidents.
                 </p>
                 <div className="feature-card__visual alert-stack" aria-hidden="true">
@@ -353,7 +355,7 @@ export default function HomePage() {
         <section className="monitor-section" id="monitoring">
           <div className="section-shell monitor-layout">
             <div className="monitor-layout__sticky">
-              <span className="section-kicker">18 monitor types</span>
+              <span className="section-kicker">19 monitor types</span>
               <h2 className="section-heading">
                 Check the protocol, <em>not a proxy for it.</em>
               </h2>

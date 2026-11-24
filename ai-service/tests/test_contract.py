@@ -2,10 +2,12 @@ import json
 import hashlib
 from pathlib import Path
 import pytest
-from probara_ai.contract import options, state_text, validate_evidence
+from probara_ai.contract import (BOOL_FIELDS, LEGACY_PAIR_FIELDS, PAIR_FIELDS, historical, options, state_text,
+                                 validate_evidence)
 from probara_ai.runtime import HEAD, REQUIRED_COMPOSED, REQUIRED_FILES, verify_artifact
 from probara_ai.cpu import CPU_FORMAT
 from probara_ai.contract import VERSION
+from probara_ai.guard import dependency_guard
 from approval import passing_tasks, write_approval
 
 
@@ -17,6 +19,31 @@ def test_allowlist_and_budgets():
     assert "B precedes A" in state_text("dependency", {"co_fires": 5, "a_leads_seconds": -20}, 1)
     assert "B-before-A" in state_text("dependency", {"co_fires": 5, "a_leads_seconds": -20})
     assert len(options("rca")) == 9
+
+
+def test_pair_fields_are_the_v2_contract_and_all_optional():
+    assert VERSION == "probara-evidence-v2"
+    assert PAIR_FIELDS == {*LEGACY_PAIR_FIELDS, "a_windows", "b_windows", "window_monitors", "shared_tag_monitors",
+                           "shared_group_monitors", "shared_name_prefix", "a_extends_b", "b_extends_a", "same_type",
+                           "a_infra", "b_infra", "peers"}
+    assert {"a_extends_b", "b_extends_a", "same_type", "a_infra", "b_infra", "peers"} <= BOOL_FIELDS
+    assert not {"a_windows", "b_windows", "window_monitors", "shared_tag_monitors", "shared_group_monitors",
+                "shared_name_prefix"} & BOOL_FIELDS
+    # Older callers send the seven legacy fields, or fewer.
+    validate_evidence("dependency", {key: 0 if key not in BOOL_FIELDS else False for key in LEGACY_PAIR_FIELDS})
+    validate_evidence("dependency", {"shared_tag_monitors": 3, "b_infra": True})
+    validate_evidence("dependency", {})
+    with pytest.raises(ValueError, match="boolean"): validate_evidence("dependency", {"peers": 1})
+    with pytest.raises(ValueError, match="integer"): validate_evidence("dependency", {"window_monitors": True})
+    with pytest.raises(ValueError, match="negative"): validate_evidence("dependency", {"shared_tag_monitors": -1})
+    with pytest.raises(ValueError, match="bounded"): validate_evidence("dependency", {"a_windows": 100000001})
+    with pytest.raises(ValueError, match="allowlist"): validate_evidence("dependency", {"tag_name": 1})
+    with pytest.raises(ValueError, match="allowlist"): validate_evidence("rca", {"checks": 1, "failures": 0, "peers": True})
+
+
+def test_historical_means_another_catalogue():
+    assert historical({"catalogue": "probara-evidence-v1"}) and historical({})
+    assert not historical({"catalogue": VERSION})
 
 
 def test_failing_checkpoint_blocks_startup(tmp_path):
@@ -117,6 +144,15 @@ def test_release_gate_is_recomputed_from_the_report(tmp_path, tamper, message):
         verify_artifact(tmp_path)
 
 
+def test_informational_report_keys_are_tolerated(tmp_path):
+    # validate_cpu.py writes a dependency "guard_note"; the gate ignores it.
+    seal = approved_fixture(tmp_path)
+    report = report_of(tmp_path)
+    report['tasks']['dependency']['guard_note'] = 'precision is a property of the guard'
+    seal(report)
+    verify_artifact(tmp_path)
+
+
 def test_calibration_must_be_the_validated_one(tmp_path):
     seal = approved_fixture(tmp_path)
     (tmp_path / 'calibration.json').write_text(json.dumps({'temperatures': {'rca': 1.5, 'dependency': 1.5},
@@ -133,6 +169,21 @@ def test_format_two_report_must_record_its_format(tmp_path):
     del report['state_format']
     seal(report)
     with pytest.raises(ValueError, match='different evidence state format'):
+        verify_artifact(tmp_path)
+
+
+def test_approved_artifact_of_an_older_catalogue_is_historical(tmp_path):
+    from probara_ai.runtime import HistoricalArtifact
+    approved_fixture(tmp_path)
+    verify_artifact(tmp_path)
+    manifest = json.loads((tmp_path / 'manifest.json').read_text())
+    (tmp_path / 'manifest.json').write_text(json.dumps({**manifest, 'catalogue': 'probara-evidence-v1'}))
+    with pytest.raises(HistoricalArtifact, match='Historical checkpoint.*probara-evidence-v1'):
+        verify_artifact(tmp_path)
+    # An unapproved one is refused by the release gate first, as before.
+    (tmp_path / 'manifest.json').write_text(json.dumps({**manifest, 'catalogue': 'probara-evidence-v1',
+                                                        'release_approved': False}))
+    with pytest.raises(ValueError, match='release gates'):
         verify_artifact(tmp_path)
 
 
@@ -176,12 +227,19 @@ def test_grouped_dataset_partition():
                 assert row["expected"][task] in row["questions"][task]["criteria"]
                 assert row["state"] == state_text(task, row["evidence"])
             if task == "dependency":
-                supported = [row['evidence'] for row in rows
-                             if row['expected'][task] in ('a_depends_b', 'b_depends_a')]
-                # Real installations can have tags without groups, or groups
-                # without tags. Both require training and independent audits.
-                assert any(e['shared_service'] and not e['shared_group'] for e in supported)
-                assert any(e['shared_group'] and not e['shared_service'] for e in supported)
+                supported = [row for row in rows if row['expected'][task] in ('a_depends_b', 'b_depends_a')]
+                # Every basis, in both directions, in every partition; and
+                # timing corroborated by each kind of rare evidence alone.
+                assert {(dependency_guard(row['evidence'])[0], row['expected'][task]) for row in supported} == {
+                    (basis, label) for basis in ("timing", "variant", "structural")
+                    for label in ("a_depends_b", "b_depends_a")}
+                timing = [row['evidence'] for row in supported if dependency_guard(row['evidence'])[0] == "timing"]
+                assert any(0 < e['shared_tag_monitors'] <= 10 and not 0 < e['shared_group_monitors'] <= 10
+                           and e['shared_name_prefix'] < 2 for e in timing)
+                assert any(0 < e['shared_group_monitors'] <= 10 and not 0 < e['shared_tag_monitors'] <= 10
+                           and e['shared_name_prefix'] < 2 for e in timing)
+                assert any(e['shared_name_prefix'] >= 2 and not 0 < e['shared_tag_monitors'] <= 10
+                           and not 0 < e['shared_group_monitors'] <= 10 for e in timing)
         assert count == 5000
         assert not groups["train"] & groups["test"]
         assert not groups["train"] & groups["calibration"]

@@ -31,10 +31,13 @@ import SipForm from './SipForm';
 import GrpcForm from './GrpcForm';
 import TcpForm from './TcpForm';
 import PrometheusForm from './PrometheusForm';
+import DomainForm from './DomainForm';
 import WebsocketForm from './WebsocketForm';
 import DatabaseForm from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow, sectionsWithErrors } from './HttpMonitorForm';
 import DnsEditor from './DnsEditor';
+import PingEditor from './PingEditor';
+import { PING_DEFAULT_COUNT } from '@/lib/monitor-form/ping';
 import SyntheticApiEditor from './SyntheticApiEditor';
 import SyntheticBrowserEditor, { useSyntheticBrowserSetup } from './SyntheticBrowserEditor';
 import { SyntheticLiveTestPanel, useSyntheticEditorMode } from './synthetic-kit';
@@ -42,8 +45,10 @@ import { useSyntheticLiveTest } from './useSyntheticLiveTest';
 import { MonitorTypeBar, MonitorTypePicker, type MonitorTypeMeta } from './MonitorTypePicker';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
-import { FormInput, FormPanel, LabelsSection, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar, WIDE_STACK_OFFSET, useWideForm } from './form-kit';
+import { FormInput, FormPanel, LabelsSection, MonitorKeyContext, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar, WIDE_STACK_OFFSET, useWideForm } from './form-kit';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+import { MONITOR_KEY_TAKEN, monitorKeyError, monitorKeyPatch } from '@/lib/monitor-key';
+import { errorCode, errorMessage } from '@/lib/errors';
 
 interface MonitorFormProps {
   monitor?: Monitor;
@@ -79,6 +84,7 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   typeMeta('grpc', { description: 'gRPC health checks', category: 'Network', namePlaceholder: 'My gRPC service' }),
   typeMeta('tcp', { description: 'Connect to a host and port', category: 'Network', namePlaceholder: 'Postgres port reachability' }),
   typeMeta('sip', { description: 'OPTIONS, REGISTER, test calls', category: 'Network', namePlaceholder: 'My SIP server' }),
+  typeMeta('domain', { description: 'Registration expiry via RDAP/WHOIS', category: 'Network', namePlaceholder: 'example.com registration' }),
   typeMeta('postgres', { description: 'Connect, auth and query', category: 'Databases & brokers', namePlaceholder: 'Postgres production' }),
   typeMeta('mysql', { description: 'Connect, auth and query', category: 'Databases & brokers', namePlaceholder: 'MySQL production' }),
   typeMeta('redis', { description: 'Connect and PING latency', category: 'Databases & brokers', namePlaceholder: 'Redis cache' }),
@@ -107,6 +113,7 @@ const TYPE_FORMS: Partial<Record<MonitorType, ComponentType<MonitorFormProps>>> 
   prometheus: PrometheusForm,
   tcp: TcpForm,
   websocket: WebsocketForm,
+  domain: DomainForm,
 };
 
 const isDatabaseType = (type: MonitorType): type is DatabaseMonitorType => type in DB_TYPE_META;
@@ -166,6 +173,37 @@ export default function MonitorForm({
   const liveTest = useSyntheticLiveTest({ monitorId: monitor?.id, monitorType, locationIds: formData.location_ids });
   const [availableLocations, setAvailableLocations] = useState<Location[]>([]);
 
+  // The config-as-code key, for every type: the type forms submit their
+  // request through submitWithKey, which adds the key (lib/monitor-key).
+  const [keyValue, setKeyValue] = useState(monitor?.key ?? '');
+  const [keyError, setKeyError] = useState<string | undefined>();
+  const keyField = {
+    value: keyValue,
+    onChange: (value: string) => {
+      setKeyValue(value);
+      setKeyError(undefined);
+    },
+    error: keyError,
+    original: monitor?.key,
+  };
+  const submitWithKey = async (data: CreateMonitorRequest | UpdateMonitorRequest) => {
+    const error = monitorKeyError(keyValue);
+    if (error) {
+      setKeyError(error);
+      revealFirstError(shellRef.current);
+      return;
+    }
+    try {
+      await onSubmit({ ...data, ...monitorKeyPatch(monitor?.key, keyValue, isEditMode) });
+    } catch (err) {
+      // The pages report every other failure themselves and pass a taken
+      // key on, so it shows next to the field.
+      if (errorCode(err) !== MONITOR_KEY_TAKEN) throw err;
+      setKeyError(errorMessage(err, 'Another monitor already has this key.'));
+      revealFirstError(shellRef.current);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (reportConstraintViolation(formRef.current)) return;
@@ -179,7 +217,7 @@ export default function MonitorForm({
       return;
     }
 
-    await onSubmit(buildMonitorFormRequest(monitorType, formData, browserSetup.guided));
+    await submitWithKey(buildMonitorFormRequest(monitorType, formData, browserSetup.guided));
   };
 
   const selectType = (type: MonitorType) => {
@@ -238,13 +276,13 @@ export default function MonitorForm({
         // Hidden rather than unmounted while the picker is reopened, so a
         // half-filled form survives a look at the other types.
         <div ref={formBodyRef} hidden={typePickerOpen} className={`${formWidth} ${wide ? WIDE_STACK_OFFSET : ''}`}>
-          {body}
+          <MonitorKeyContext.Provider value={keyField}>{body}</MonitorKeyContext.Provider>
         </div>
       )}
     </div>
   );
 
-  const typeFormProps: MonitorFormProps = { monitor, initialData, onSubmit, onCancel, loading };
+  const typeFormProps: MonitorFormProps = { monitor, initialData, onSubmit: submitWithKey, onCancel, loading };
   const TypeForm = TYPE_FORMS[monitorType];
   if (TypeForm) {
     return shell(<TypeForm {...typeFormProps} />);
@@ -282,8 +320,11 @@ export default function MonitorForm({
         }
         return [<PlanTarget key="t">{formData.method} {host}</PlanTarget>, `expects ${formData.status_rules.trim() || '2xx'}`];
       }
-      case 'ping':
-        return formData.host.trim() ? [<PlanTarget key="t">ping {formData.host.trim()}</PlanTarget>] : null;
+      case 'ping': {
+        if (!formData.host.trim()) return null;
+        const echoes = Number(formData.ping_count.trim()) || PING_DEFAULT_COUNT;
+        return [<PlanTarget key="t">ping {formData.host.trim()}</PlanTarget>, `${echoes} ${echoes === 1 ? 'echo' : 'echoes'}`];
+      }
       case 'dns':
         return formData.host.trim()
           ? [<PlanTarget key="t">{formData.dns_record_type} {formData.host.trim()}</PlanTarget>]
@@ -349,6 +390,8 @@ export default function MonitorForm({
         />
       )}
 
+      {monitorType === 'ping' && <PingEditor data={formData} onChange={patchForm} errors={errors} />}
+
       {monitorType === 'dns' && <DnsEditor data={formData} onChange={patchForm} />}
 
       {monitorType === 'synthetic_api' && (
@@ -409,6 +452,8 @@ export default function MonitorForm({
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
           onThresholdChange={(n) => patchForm({ consecutive_failures_threshold: n })}
+          recoveryThreshold={formData.recovery_threshold}
+          onRecoveryThresholdChange={(n) => patchForm({ recovery_threshold: n })}
           mode={formData.notification_mode}
           onModeChange={(m) => patchForm({ notification_mode: m })}
           dependencySuppression={formData.dependency_suppression}

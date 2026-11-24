@@ -11,6 +11,7 @@ import (
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // ErrStatusPageNotFound is returned when a slug or ID resolves to no status
@@ -59,9 +60,33 @@ type StatusPageData struct {
 	CustomCSS        string `json:"-"` // For template use only
 	CustomHeadHTML   string `json:"-"` // For template use only
 	CustomFooterHTML string `json:"-"` // For template use only
+	// CSPMode is the stored csp_mode ("" = automatic); the handler turns it
+	// into the page's Content-Security-Policy (csp.go).
+	CSPMode string `json:"-"`
 	// Published custom template ("" = render with the built-in template).
 	CustomTemplateSource  string `json:"-"` // For template use only
 	CustomTemplateVersion int    `json:"-"` // For template use only
+	// Template is the page's built-in template setting (statustemplate
+	// names); it renders the page when no custom template is published.
+	Template string `json:"-"`
+	// SEOTitle and SEODescription are the stored overrides ("" = derived in
+	// seo.go); AllowSearchIndexing is the page's indexing opt-out.
+	SEOTitle            string `json:"-"`
+	SEODescription      string `json:"-"`
+	AllowSearchIndexing bool   `json:"-"`
+	// Visibility is the page's access mode as the gate read it
+	// (shared/pageaccess), set by the handler; it forces noindex
+	// (pageIndexable) and turns push off for gated pages.
+	Visibility string `json:"-"`
+	// CanonicalURL is the page's absolute public URL, injected by the
+	// handler from STATUS_PAGE_BASE_URL like PushPublicKey; "" when the
+	// deployment does not name its public origin.
+	CanonicalURL string `json:"-"`
+	// EmailSubscriptionsEnabled is the page's enable_email_subscriptions;
+	// SubscribeFormEnabled, set by the handler, is that AND a public or
+	// unlisted page AND a configured API to forward to (subscribe.go).
+	EmailSubscriptionsEnabled bool `json:"-"`
+	SubscribeFormEnabled      bool `json:"-"`
 	// Uptime history for different time ranges
 	UptimeHistory7   []DailyUptime  `json:"-"` // Last 7 days
 	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (1-min buckets)
@@ -95,7 +120,8 @@ type StatusPageIncidentUpdate struct {
 }
 
 // StatusPageMaintenanceWindow is an active or upcoming maintenance window shown
-// to public viewers, scoped to windows affecting monitors on this page.
+// to public viewers, scoped to windows affecting monitors on this page, at
+// its in-progress or next occurrence.
 type StatusPageMaintenanceWindow struct {
 	Title            string    `json:"title"`
 	Description      string    `json:"description"`
@@ -103,6 +129,15 @@ type StatusPageMaintenanceWindow struct {
 	EndsAt           time.Time `json:"ends_at"`
 	IsActive         bool      `json:"is_active"`
 	AffectedMonitors []string  `json:"affected_monitors,omitempty"`
+	// Repeating marks a recurring window; StartsAt/EndsAt are then its
+	// earliest listed occurrence and NextStartsAt the following ones (up to
+	// three, within the 14-day look-ahead).
+	Repeating    bool        `json:"repeating,omitempty"`
+	NextStartsAt []time.Time `json:"next_starts_at,omitempty"`
+	// ID and UpdatedAt (the window's last edit) identify the listed
+	// occurrence in the Atom feed; not part of the /data JSON.
+	ID        uuid.UUID `json:"-"`
+	UpdatedAt time.Time `json:"-"`
 }
 
 // MonitorStatus represents a monitor's status on a status page
@@ -242,17 +277,11 @@ func NewService(database db.Querier, analytics sharedanalytics.Reader) *Service 
 	}
 	return svc
 }
-func (s *Service) GetTenantIDByStatusPageID(ctx context.Context, statusPageID uuid.UUID) (uuid.UUID, error) {
-	query := `SELECT tenant_id FROM status_pages WHERE id = $1`
-	var tenantID uuid.UUID
-	if err := s.db.QueryRowContext(ctx, query, statusPageID).Scan(&tenantID); err != nil {
-		if err == sql.ErrNoRows {
-			return uuid.UUID{}, ErrStatusPageNotFound
-		}
-		return uuid.UUID{}, fmt.Errorf("failed to get tenant id: %w", err)
-	}
-	return tenantID, nil
-}
+
+// livePage keeps a deleted workspace's status pages unserved from the moment
+// it is deleted (shared/tenancy): every lookup of a page by slug or ID adds
+// it, over the status_pages table unaliased.
+var livePage = tenancy.LiveTenantSQL("status_pages.tenant_id")
 
 // getPublishedTemplate returns the published custom template for a page, or
 // ("", 0, nil) when the page renders with the built-in template. A missing
@@ -284,7 +313,7 @@ func (s *Service) GetDraftTemplateBySlug(ctx context.Context, slug string) (page
 		FROM status_pages sp
 		LEFT JOIN status_page_templates t
 			ON t.status_page_id = sp.id AND t.status = 'draft'
-		WHERE sp.slug = $1
+		WHERE sp.slug = $1 AND `+tenancy.LiveTenantSQL("sp.tenant_id")+`
 	`, slug).Scan(&pageID, &draftSource)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -293,7 +322,7 @@ func (s *Service) GetDraftTemplateBySlug(ctx context.Context, slug string) (page
 		if pgerr.IsUndefinedTable(err) {
 			// Templates table missing: resolve the page alone so previews
 			// degrade to the live render instead of erroring.
-			if err := s.db.QueryRowContext(ctx, `SELECT id FROM status_pages WHERE slug = $1`, slug).Scan(&pageID); err != nil {
+			if err := s.db.QueryRowContext(ctx, `SELECT id FROM status_pages WHERE slug = $1 AND `+livePage, slug).Scan(&pageID); err != nil {
 				if err == sql.ErrNoRows {
 					return uuid.Nil, "", false, ErrStatusPageNotFound
 				}
@@ -312,7 +341,7 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	query := `
 		SELECT id, tenant_id, slug, title, description, logo_url, primary_color, secondary_color, settings
 		FROM status_pages
-		WHERE slug = $1
+		WHERE slug = $1 AND ` + livePage + `
 	`
 
 	var pageID, tenantID uuid.UUID
@@ -378,6 +407,12 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.CustomCSS = settings.CustomCSS
 	page.CustomHeadHTML = settings.CustomHeadHTML
 	page.CustomFooterHTML = settings.CustomFooterHTML
+	page.CSPMode = settings.CSPMode
+	page.SEOTitle = settings.SEOTitle
+	page.SEODescription = settings.SEODescription
+	page.AllowSearchIndexing = settings.AllowSearchIndexing
+	page.EmailSubscriptionsEnabled = settings.EnableEmailSubscriptions
+	page.Template = settings.Template
 
 	if source, version, err := s.getPublishedTemplate(ctx, pageID); err != nil {
 		return nil, fmt.Errorf("failed to get custom template: %w", err)

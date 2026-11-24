@@ -15,6 +15,7 @@ export const ALERTING_PAGE: DocPage = {
     "incidents",
     "latency anomaly",
     "alert triage",
+    "delivery history",
   ],
   sections: [
     {
@@ -49,8 +50,18 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`tls_expiry`",
-              "An HTTPS or SIP-over-TLS monitor's certificate has fewer remaining validity days than `tls_min_days_valid`",
+              "An HTTPS, SIP-over-TLS or TLS-wrapped TCP monitor's earliest-expiring certificate (leaf or presented intermediate) has fewer remaining validity days than `tls_min_days_valid`",
               "A renewed certificate is observed, or the threshold is removed",
+            ],
+            [
+              "`domain_expiry`",
+              "A [domain monitor](/docs/monitors/#domain)'s registration has fewer days left than `min_days_valid` (default 30), or its expiry date has not been determinable for a while",
+              "A renewed registration or a readable date is observed, the window is narrowed, or the monitor is paused or deleted",
+            ],
+            [
+              "`location_offline`",
+              "A check location that has reported before sends no worker heartbeat for 180 seconds ([details](/docs/locations/#heartbeats)); always on, routed to the default channels",
+              "The location reports again, or is disabled or deleted; the closing notification says which",
             ],
           ],
         },
@@ -61,27 +72,32 @@ export const ALERTING_PAGE: DocPage = {
             ["`active`", "Condition is open and unacknowledged"],
             [
               "`acknowledged`",
-              "An operator has acknowledged the alert; the underlying condition remains open",
+              "An operator has acknowledged the alert; the underlying condition remains open, and its reminders and further escalation have stopped",
             ],
             ["`resolved`", "Alert lifecycle is closed"],
           ],
         },
         {
           type: "callout",
-          tone: "warning",
-          title: "Acknowledgement does not silence reminders",
+          tone: "info",
+          title: "Acknowledging stops reminders and escalation",
           text:
-            "Acknowledging records operator ownership but leaves the condition open. Reminder notifications to chat, email, SMS and webhook channels continue at the configured interval until resolution or until reminders are disabled. Paging channels (PagerDuty, Opsgenie / JSM) are the exception: they receive the acknowledgement itself and never receive reminders, because the provider runs its own escalation.",
+            "Once an alert is acknowledged it sends no more reminders and no first page to an escalation route whose delay had not run out yet. What still goes out: the recovery notice when it resolves, and the opt-in [suspected-cause follow-up](#ai-triage), which helps whoever is working the alert. Paging channels (PagerDuty, Opsgenie / JSM) that were already paged receive the acknowledgement itself, so the provider stops its own escalation. This applies to every workspace, alert kind and route; there is no setting. **Unacknowledge** returns the alert to `active`: reminders and the routes not paged yet resume, with their reminder interval and escalation delay counted from the unacknowledge, so nothing fires in a burst and no route is paged twice. A provider already told about the acknowledgement stays acknowledged there; acknowledging again tells it once more.",
         },
         {
           type: "paragraph",
           text:
-            "The Alerts page reads as a timeline over a list, for the range chosen in the header (1 hour to 1 year). The timeline draws one thin line per monitor that alerted in the range: red while active, amber from the moment of acknowledgement, dashed while its notifications are suppressed by a dependency, grey once resolved, with a dot where each alert began so a short alert still shows. Monitors with an open alert lead; the rest are gathered into collapsible groups, by the dashboard's group tags when the workspace has any and by monitor type otherwise, and a collapsed group draws all its lines on one row. Selecting a line opens that alert in the list. The list below is that same history as rows: every alert that was open at some point in the range, by start time with the newest first, under a heading for each date (each hour, for ranges up to a day). A date or hour with no alert is still listed, as a stretch marked **No alerts**, so the list reads as the calendar it covers; alerts that started before the range and are still open, or ended inside it, close the list under **Started before this range**. The status chips narrow it to the open queue (active and acknowledged) or to one status. An alert suppressed by a dependency folds under the open alert of its root cause, which is the one that notifies; unfold it to see and act on the suppressed alerts. An alert that still pages is never folded. A row's details show its lifecycle times, the recorded error or measured value, and the suspected cause when triage has one. The page loads every open alert (up to 1,000 per status) and the newest 500 resolved alerts of the range; past that it says so, hatches the part of the timeline it has no alerts for, and reaching the end of the list (or **Load older alerts** there) reads 500 more. The list shows 25 rows at first and adds 25 as you scroll to its end.",
+            "**Snooze** mutes an open alert's reminders and unpaged escalation routes the same way without acknowledging it: for 1, 4 or 24 hours, or until a chosen time (1 minute to 7 days ahead). The alert stays `active` (it counts as active and open, and draws in a muted tone on the Alerts page), its recovery notice and suspected-cause follow-up are still sent, and a paging channel is not told anything. Snoozing again replaces the end; **End snooze** cancels it early. When it ends, by itself or early, reminders and unpaged routes resume counted from that moment, as after an unacknowledge. A snooze is per alert and writes no maintenance window, so it never counts as planned downtime in SLA reports; to silence a monitor rather than one alert, [snooze the monitor](#maintenance). Alert reads report `snoozed_until`, `snoozed_at` and who snoozed (`snoozed_by` / `snoozed_by_user_id`) only while the snooze holds, and who acknowledged (`acknowledged_by` / `acknowledged_by_user_id`) with `acknowledged_at`; the user is absent for an action taken with an API key. Unacknowledging clears the current acknowledgement, but SLA reports measure time to acknowledge from the alert's first acknowledgement, which is kept: an alert acknowledged, unacknowledged and resolved still counts as acknowledged, and a later re-acknowledgement does not stretch its time to acknowledge.",
         },
         {
           type: "paragraph",
           text:
-            "On the Alerts page, users who can write work the queue in bulk: tick open alerts (Shift-click selects a range, the box beside the list heading selects every open alert shown, Escape clears), then Acknowledge or Resolve from the bar. Each action sends only the selected alerts it applies to, and alerts that changed state meanwhile are reported as skipped rather than failing the batch. Bulk acknowledge and resolve notify and record incident recovery as the single actions do; they skip alerts of deleted monitors (reported as not found), which the list no longer shows. With a row focused, `A` acknowledges and `R` resolves that alert; these keys work only while focus is on an alert row, never while typing or with Ctrl, Alt or Cmd held, and a press on an alert that is already past that step says so instead of acting.",
+            "The Alerts page reads as a timeline over a list, for the range chosen in the header (1 hour to 1 year). The timeline draws one thin line per monitor that alerted in the range: red while active, faint red from the start of a running snooze, amber from the moment of acknowledgement, dashed while its notifications are suppressed by a dependency, grey once resolved, with a dot where each alert began so a short alert still shows. Monitors with an open alert lead; the rest are gathered into collapsible groups, by the dashboard's group tags when the workspace has any and by monitor type otherwise, and a collapsed group draws all its lines on one row. Selecting a line opens that alert in the list. The list below is that same history as rows: every alert that was open at some point in the range, by start time with the newest first, under a heading for each date (each hour, for ranges up to a day). A date or hour with no alert is still listed, as a stretch marked **No alerts**, so the list reads as the calendar it covers; alerts that started before the range and are still open, or ended inside it, close the list under **Started before this range**. The status chips narrow it to the open queue (active and acknowledged) or to one status. An alert suppressed by a dependency folds under the open alert of its root cause, which is the one that notifies; unfold it to see and act on the suppressed alerts. An alert that still pages is never folded. A row's details show its lifecycle times, the recorded error or measured value, and the suspected cause when triage has one. The page loads every open alert (up to 1,000 per status) and the newest 500 resolved alerts of the range; past that it says so, hatches the part of the timeline it has no alerts for, and reaching the end of the list (or **Load older alerts** there) reads 500 more. The list shows 25 rows at first and adds 25 as you scroll to its end.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "On the Alerts page, users who can write work the queue in bulk: tick open alerts (Shift-click selects a range, the box beside the list heading selects every open alert shown, Escape clears), then Acknowledge, Resolve, Unacknowledge or Snooze from the bar (Snooze opens the same choice of length as on one alert and applies to the selected active alerts not already snoozed). Each action sends only the selected alerts it applies to, and alerts that changed state meanwhile are reported as skipped rather than failing the batch. Bulk acknowledge and resolve notify and record incident recovery as the single actions do; they skip alerts of deleted monitors (reported as not found), which the list no longer shows. With a row focused, `A` acknowledges and `R` resolves that alert; these keys work only while focus is on an alert row, never while typing or with Ctrl, Alt or Cmd held, and a press on an alert that is already past that step says so instead of acting.",
         },
       ],
     },
@@ -96,8 +112,8 @@ export const ALERTING_PAGE: DocPage = {
             "A check failure first passes through the monitor's consecutive-failure confirmation and, when locations are selected, its [location failure quorum](/docs/locations/#assignment). A check's `error` and `failure` are both failing evidence, including a check's own assertions: a SIP test call failing a [call-quality](/docs/monitors/#network-protocols) threshold (`max_loss_pct`, `min_mos`, …) is a failure like any other, while its `warn_*` thresholds only add warnings to the check and never alert.",
             "The alerter opens an availability alert only when effective state is `down`, the monitor is enabled, and maintenance/rollup rules do not mute it.",
             "The initial notification is sent through eligible routes after each route's configured delay.",
-            "While the condition remains down, reminders are sent at the tenant reminder interval.",
-            "When the monitor is fully `up`, the alert resolves and resolution notifications go only to channels that previously received that alert.",
+            "While the condition remains down, reminders are sent at the tenant reminder interval, unless the alert is acknowledged or snoozed.",
+            "When the monitor is fully `up`, the alert resolves and resolution notifications go only to channels that previously received that alert. A monitor with a [`recovery_threshold`](/docs/monitors/#scheduling-and-state) above 1 is `up` only once that many checks in a row pass, so the alert stays open, and reminders continue, until then. A down monitor that is already passing again never opens a new availability alert: one that went down inside a maintenance window and recovers as it ends is not announced, and a group whose down members are all recovering raises no group alert.",
           ],
         },
         {
@@ -109,6 +125,36 @@ export const ALERTING_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Location-aware availability alerts include failing-location context so operators can distinguish a regional failure from a broad outage.",
+        },
+      ],
+    },
+    {
+      id: "relapses",
+      title: "Flapping: reopening relapsed alerts",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "A flapping target recovers and fails again over and over, and by default every new failure opens a new alert and pages again. A workspace can instead reopen the alert that just recovered: set **Reopen relapses within** on the Settings page (`alert_reopen_cooldown_minutes` in the [notification settings](#routing), 1 to 1,440 minutes; 0, the default, is off). When an alert resolved because its condition cleared (the monitor came back up, the latency or metric returned to normal with fresh readings, the certificate was renewed, the mesh path recovered, the location sent heartbeats again) fails again within that many minutes of the resolve, that same alert reopens instead of a new one opening. It applies to every alert kind, matched by the alert's subject: the monitor and kind, plus the metric series for a host-metric alert, the location pair for a mesh alert and the location for an offline-location alert. Only the subject's latest alert can reopen. An alert someone resolved by hand never does, nor one the alerter closed because its subject left evaluation: a paused, disabled or deleted monitor, a group left without enabled members, a removed metric rule, TLS threshold or latency detection, host readings gone stale, a latency alert closed because there were too few successful checks to judge (a slow service that went hard down), a location that stopped counting as offline only because it was disabled and re-enabled, a mesh path or location removed or disabled, or a domain alert switching between \"expiry unknown\" and a dated warning (each form only ever reopens as itself). The subject failing again then opens a new alert, so pausing and resuming a monitor never counts as a relapse.",
+        },
+        {
+          type: "list",
+          items: [
+            "The reopened alert is `active` again, keeps its first `triggered_at`, and counts the relapse: `relapse_count` goes up by one and `reopened_at` is set. Alert reads report both; `GET /alerts/{id}` and the MCP `get_alert` tool also list the relapse history (`relapses`: each relapse's number, the recovery it interrupted and when it reopened). The Alerts page marks the alert **Relapsed ×N**.",
+            "A reopened alert starts unacknowledged and unsnoozed: the earlier acknowledgement and snooze belonged to the episode that recovered. Its first acknowledgement is kept for [SLA reports](/docs/slas/), which measure time to acknowledge from it.",
+            "Each channel paged before the relapse is told once that the alert relapsed: a page worded **Relapsed — down again 4m after recovering, relapse #2** (in each alert kind's own terms), with the [acknowledge link](#acknowledge-links) like any page. This includes a channel whose earlier recovery notice never went out. A channel paged for the first time during a relapse (an escalation route whose delay had not run out before) gets an ordinary page that lists the relapse count among its details. Escalation delays and reminders count from the reopen, as after an unacknowledge, so an escalation route waits its full delay again and the next reminder comes one interval after the relapse notice. Acknowledging or snoozing the relapsed alert holds the relapse notice like any page (a channel whose earlier recovery notice never reached it still gets the relapse's recovery notice); the suspected-cause follow-up still goes out as for any acknowledged or snoozed alert. The notice appears in the [delivery history](#delivery-history) as its own event, **Relapse notice**. Its acknowledge link, like every acknowledge link, acts only on the episode it was sent in: a link from a page before the relapse no longer acknowledges the alert.",
+            "PagerDuty and Opsgenie open a new incident for each relapse: the trigger uses its own dedup key or alias (`probara:<alert>:relapse-N`, `probara-<alert>-relapse-N`; the first episode keeps `probara:<alert>` / `probara-<alert>`), and the relapse notice first resolves or closes that channel's previous incident. Both providers fold a trigger with the key of an incident that is still open into it and do not notify again, and an acknowledged one stays acknowledged, so reusing the key would leave a relapse unpaged whenever the earlier recovery had not reached the provider. Acknowledge and resolve go to the incident of the channel's latest page the provider actually received (a page claimed but not yet delivered opens nothing), so a late recovery notice closes only the incident it was for. A relapse notice that is dropped (the alert recovered or was acknowledged before it went out) or fails for good still closes the earlier incident on its own, so no PagerDuty or Opsgenie incident is left escalating after its outage recovered.",
+            "A recovery notice that had not gone out yet when the alert relapsed is dropped while the alert is open again, so a chat, email, SMS or webhook channel is never told \"recovered\" after the alert failed again; PagerDuty and Opsgenie still receive it, since it closes only the earlier incident. Once the alert has recovered again, a recovery notice still queued from an earlier episode is delivered: a channel whose escalation delay outlasted the relapse heard neither the relapse nor its recovery, and that notice is the one that tells it.",
+            "The relapse adds an **Alert relapsed** entry to the timeline of every open incident linked to the alert. For the alert kinds that open automatic incidents (availability and latency), it joins the monitor's open automatic incident, or opens a new one if that was resolved meanwhile; each recovery writes its own **All linked alerts recovered** entry. Status pages, uptime and SLA availability are unaffected: they come from the monitor's state history, never from alerts.",
+            "A relapse keeps the alert's [triage](#ai-triage): an alert is triaged at most once, so no new triage runs for the relapse, and no channel receives the suspected-cause follow-up twice.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "A relapsed alert spans its gaps",
+          text:
+            "The alert's duration on the Alerts page and in notifications runs from its first trigger to its last recovery, recovered gaps included, and a flapping outage counts as one alert in SLA alert counts. Downtime itself is measured from the monitor's state history and never includes the gaps.",
         },
       ],
     },
@@ -139,7 +185,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
+            "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open, and not acknowledged or snoozed, when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
         },
         {
           type: "callout",
@@ -199,6 +245,10 @@ export const ALERTING_PAGE: DocPage = {
               "Defaults to 3,600; set 0 to disable reminders",
             ],
             [
+              "`alert_reopen_cooldown_minutes`",
+              "Defaults to 0 (off); 1 to 1,440 reopens an alert that fails again this soon after it recovered ([relapses](#relapses))",
+            ],
+            [
               "`auto_create_incident`",
               "Defaults to false; verified for availability and latency-anomaly opening paths",
             ],
@@ -238,7 +288,7 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`slack`",
               "HTTPS `webhook_url` on `slack.com` or a subdomain of it",
-              "Slack incoming webhook (Block Kit, with an open-the-monitor button when `APP_BASE_URL` is set)",
+              "Slack incoming webhook (Block Kit, with an open-the-monitor button when `APP_BASE_URL` is set, and an [Acknowledge](#acknowledge-links) button on pages)",
             ],
             [
               "`discord`",
@@ -253,12 +303,12 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`pagerduty`",
               "32-character Events API v2 `routing_key`, `region` `us` or `eu`",
-              "Triggers, acknowledges and resolves one PagerDuty alert per Probara alert (`dedup_key` `probara:<alert id>`)",
+              "Triggers, acknowledges and resolves one PagerDuty alert per Probara alert (`dedup_key` `probara:<alert id>`), and one more per [relapse](#relapses) (`probara:<alert id>:relapse-N`)",
             ],
             [
               "`opsgenie`",
               "Integration `api_key`, `site` `us`, `eu` or `jsm` (Jira Service Management), outage `priority` `P1`–`P5`",
-              "Creates, acknowledges and closes one alert per Probara alert (alias `probara-<alert id>`). Degradations are sent one level below the outage priority, never above `P3`",
+              "Creates, acknowledges and closes one alert per Probara alert (alias `probara-<alert id>`), and one more per [relapse](#relapses) (`probara-<alert id>-relapse-N`). Degradations are sent one level below the outage priority, never above `P3`",
             ],
             [
               "`telegram`",
@@ -268,25 +318,35 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`twilio_sms`",
               "`account_sid`, optional `api_key_sid`, `auth_token` (API key secret or account token), `from` number or Messaging Service SID, up to 10 E.164 `to` numbers",
-              "One SMS per recipient per event, the short form of the alert plus the deep link",
+              "One SMS per recipient per event, the short form of the alert plus the deep link, or on pages the [acknowledge link](#acknowledge-links) in its place",
+            ],
+            [
+              "`ntfy`",
+              "HTTPS `server_url` (defaults to the public `https://ntfy.sh`), `topic` (stored encrypted), optional `access_token` **or** `username` + `password`, outage `priority` `5`, `4` (default) or `3`",
+              "Push notification published to the topic: title, summary and details as the body, an emoji tag by severity, and a tap-through plus an action button to the monitor when `APP_BASE_URL` is set. Degradations are sent one level below the outage priority (never below `3`), recoveries at `3`, AI triage notes at `2`",
+            ],
+            [
+              "`gotify`",
+              "HTTPS `server_url` of your Gotify server (a path prefix is fine), application `app_token` (sent in the `X-Gotify-Key` header, never in the URL), outage `priority` `10`, `8` (default) or `5`",
+              "Plain-text Gotify message; the monitor link is printed under the body and opens on tap in the Android app when `APP_BASE_URL` is set. Degradations are sent one level below the outage priority (`10` → `8`, otherwise `5`), recoveries at `4`, AI triage notes at `2`",
             ],
             [
               "`generic_webhook`",
               "HTTPS `url`, optional `hmac_secret`, optional custom headers encoded as JSON (stored encrypted and write-only; leaving the field blank on edit keeps them, **Remove stored value** deletes them)",
-              "Structured Probara event JSON",
+              "Structured Probara event JSON; pages add `alert.links.acknowledge` ([acknowledge links](#acknowledge-links))",
             ],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not.",
+            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not. Pages also carry a one-click [acknowledge link](#acknowledge-links) on every channel except PagerDuty and Opsgenie.",
         },
         {
           type: "table",
-          columns: ["Event", "Chat, email, SMS, webhook", "PagerDuty, Opsgenie / JSM"],
+          columns: ["Event", "Chat, email, SMS, push, webhook", "PagerDuty, Opsgenie / JSM"],
           rows: [
-            ["`created`", "Message", "Trigger / create"],
+            ["`created`", "Message; a [relapse](#relapses) notice is a `created` event with `relapse_count` above 0", "Trigger / create"],
             ["`reminder`", "Message at the reminder interval", "Skipped — the provider escalates and re-notifies on its own"],
             ["`acknowledged`", "Not sent", "Acknowledge, once per paged channel"],
             ["`suspected_cause`", "One follow-up message per paged channel when triage names a cause ([opt-in](#ai-triage))", "Not sent: their APIs add content by re-triggering, and an advisory hint must never re-page"],
@@ -296,13 +356,13 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. The event type is `created`, `reminder`, `resolved` or, when a workspace opts in, `suspected_cause`, whose body adds `alert.suspected_cause` (`triage_id`, `key`, `title`, `confidence`, `actions`) and keeps `alert.status` at the alert's own `active` or `acknowledged`. Branch on the event type, not the status, and ignore event types you do not handle. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
+            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. The event type is `created`, `reminder`, `resolved` or, when a workspace opts in, `suspected_cause`, whose body adds `alert.suspected_cause` (`triage_id`, `key`, `title`, `confidence`, `actions`) and keeps `alert.status` at the alert's own `active` or `acknowledged`. Branch on the event type, not the status, and ignore event types you do not handle. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key (`alert:channel:event`; events of a [relapsed](#relapses) alert end in `:relapse-N`, since its page and recovery are new events, and carry `alert.relapse_count`; the relapse notice itself is a `created` event with `alert.relapse_notice` set). Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
         },
         {
           type: "list",
           items: [
             "Create a channel from a registered plugin and save its plugin-specific configuration. Updates are validated by the plugin against the merged configuration, including kept secrets, so an edit cannot move a channel to a host create would have rejected.",
-            "Use the channel test action before assigning production monitors. Tests send a real notification and require write permission. PagerDuty and Opsgenie tests open an informational alert and resolve it immediately, which may still notify whoever is on call. Opsgenie processes requests asynchronously, so its test waits (up to four seconds) for the alert to exist before closing it; if Opsgenie is slower than that, the test reports the alias so you can close the alert by hand. Email tests are served by the API process, so they need the same [platform SMTP configuration](/docs/configuration/#alerter-and-smtp) as the alerter; without it the test reports `mailer not configured` even when alert email is being delivered.",
+            "Use the channel test action before assigning production monitors. Tests send a real notification and require write permission. PagerDuty and Opsgenie tests open an informational alert and resolve it immediately, which may still notify whoever is on call. Opsgenie processes requests asynchronously, so its test waits (up to four seconds) for the alert to exist before closing it; if Opsgenie is slower than that, the test reports the alias so you can close the alert by hand. Email tests are served by the API process, so they need the same [platform SMTP configuration](/docs/configuration/#alerter-and-smtp) as the alerter; without it the test reports `mailer not configured` even when alert email is being delivered. Every test lands in the channel's [delivery history](#delivery-history), marked as a test.",
             "Activate or deactivate the channel. Inactive channels remain configured but are skipped for delivery.",
             "Assign it in tenant defaults or in a monitor's custom routing.",
           ],
@@ -310,7 +370,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: if an operator acknowledges while a paging trigger is still waiting on a retry, the acknowledgement that went ahead is a no-op at the provider, so the worker acknowledges again right after the late trigger lands, and the incident does not keep escalating.",
+            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once, recorded in the [delivery history](#delivery-history), and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: a page or reminder still waiting on a retry when the alert is acknowledged or snoozed is dropped instead of delivered, and one already being delivered holds the alert, so acknowledging waits for it. A dropped page counts as never sent only when no earlier attempt can have been accepted (every earlier attempt failed before connecting, was refused by the egress policy, or got an error status back), so after an unacknowledge that route is paged again. Otherwise (a timeout after the request was sent, a worker stopped mid-send, an SMS that reached some recipients) it still counts as paged, so that route gets the acknowledgement and the recovery notice. A delivery retried after the alerter lost track of whether it was queued is collapsed by the broker instead of being sent twice. A [relapse](#relapses) is ordered the same way: a recovery notice still waiting on a retry when the alert reopens is dropped while the alert stays open (except on PagerDuty and Opsgenie, where it closes only the earlier incident), and one already being delivered holds the reopen for at most a second; past that the reopen waits for the next evaluation. A dropped recovery notice that no earlier attempt can have delivered (by the same test as a held page) leaves the route counted as still paged, so it also hears the relapse's own recovery if the relapse ends before the route's escalation delay. Once the alert has recovered again, a recovery notice still queued from an earlier episode is delivered.",
         },
         {
           type: "callout",
@@ -321,10 +381,61 @@ export const ALERTING_PAGE: DocPage = {
         },
         {
           type: "callout",
+          tone: "warning",
+          title: "Self-hosted ntfy and Gotify servers on a private network",
+          text:
+            "A self-hosted ntfy or Gotify server on a private network needs **both** of these, or no alert reaches it: (1) its address range in `NOTIFICATION_ALLOWED_CIDRS` on the API, alerter and worker (for example `10.20.0.15/32`, not the whole private network), and (2) an `https` endpoint with a certificate the platform trusts, meaning one that chains to a public CA in the system trust store. Without the allow-list entry the server is refused: the channel test fails with `ssrf_blocked`, and real alerts fail permanently and are not retried. An `http://` server URL, or one with a query string or fragment, is rejected when the channel is saved; there is no plain-HTTP option and no custom CA setting. With a self-signed or private-CA certificate the channel saves, but the test fails with the TLS verification error (for example `x509: certificate signed by unknown authority`), and every alert send fails the same way: it is retried as a transient network failure and is never delivered until the server presents a trusted certificate.",
+        },
+        {
+          type: "callout",
           tone: "info",
           title: "Known gaps",
           text:
             "Acknowledgement syncs one way: acknowledging in Probara acknowledges the PagerDuty or Opsgenie alert, but acknowledging or resolving in the provider does not change the Probara alert. Retrying an SMS send for one recipient does not text the others again: every number Twilio accepted for that event (or that reminder round) is skipped. A number can still get a duplicate when Twilio accepted the message but its answer never arrived (a timeout or a crash mid-request), or when recording the acceptance failed while another number's failure forced a retry.",
+        },
+      ],
+    },
+    {
+      id: "delivery-history",
+      title: "Notification delivery history",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every attempt to deliver an alert notification is recorded: each synchronous send by the alerter, each attempt a delivery worker makes after the alerter queued the event (`ALERTER_ASYNC_DISPATCH`), each queued event the worker decides not to send, and each channel test. A row holds the alert, the channel, the event (`created`, `reminder`, `resolved`, `acknowledged`, `suspected_cause`), the attempt number, which path sent it (alerter or delivery worker), the outcome and its reason, the provider's HTTP status when it answered with an error, how long the attempt took, and the error. An SMS channel gets one row per recipient, with the number masked (`********4321`); a retry adds rows only for the numbers it texted, never for the ones an earlier attempt reached. An email with several addresses is one send, so one row.",
+        },
+        {
+          type: "table",
+          columns: ["Outcome", "Reason", "What happened"],
+          rows: [
+            ["Delivered", "—", "The provider accepted the notification (for that recipient)."],
+            ["Failed, retrying", "—", "A timeout, connection error, 5xx or 429. Retried: by the alerter's next cycle, or by the delivery worker's backoff (10 s, 30 s, 2 min, 10 min)."],
+            ["Failed, gave up", "`retries_exhausted`", "The delivery worker's fifth and last attempt failed; nothing retries it."],
+            ["Failed, retrying", "`plugin_missing`", "The delivery worker that took the event has no plugin for the channel type (a deployment mismatch); retried."],
+            ["Rejected", "—", "The provider refused the channel itself (revoked key, deleted webhook, unknown chat, invalid number, any other 4xx, a redirect). Not retried."],
+            ["Rejected", "`egress_blocked`", "The [notification egress policy](/docs/security/#ssrf-network-policy) refused the address. Not retried; allow the range in `NOTIFICATION_ALLOWED_CIDRS` if it is yours."],
+            ["Rejected", "`invalid_config`", "The stored channel configuration could not be read. Not retried; save the channel again."],
+            ["Not sent", "`resolved`", "A queued page, reminder, acknowledgement or follow-up whose alert resolved before it went out. Sending it would reopen the alert at the provider, so it is dropped; the recovery notice goes out instead."],
+            ["Not sent", "`unacknowledged`", "A queued acknowledgement notice whose alert was unacknowledged before it went out. A later acknowledgement is sent again."],
+            ["Not sent", "`muted_requeued`", "A queued page whose alert was acknowledged or snoozed before it went out, and that provably reached no one (every earlier attempt failed before connecting, was refused by the egress policy or got an error status back). It is sent again once the alert is unacknowledged or the snooze ends."],
+            ["Not sent", "`muted`", "A queued page or reminder held the same way that is not sent again: a reminder resumes with its next round once the mute lifts, and a page an earlier attempt may have delivered (a timeout after sending, an SMS that reached some numbers) still counts as sent, so the channel gets the acknowledgement and the recovery notice instead."],
+            ["Not sent", "`reopened`", "A queued recovery notice whose alert [relapsed](#relapses) and is open again before it went out: \"recovered\" must not follow \"relapsed\". When no earlier attempt can have delivered it, the channel still counts as paged and hears the relapse's own recovery. PagerDuty and Opsgenie are not affected: their notice closes only the earlier incident and is sent."],
+            ["Not sent", "`earlier_episode`", "A queued page, reminder, acknowledgement or follow-up from before the alert [relapsed](#relapses); the relapse notifies on its own."],
+            ["Not sent", "`channel_inactive`", "The channel was deactivated after the event was queued."],
+            ["Not sent", "`channel_changed`", "The channel's type changed after the event was queued."],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "An alert's attempts, across all its channels and in the order they happened, are under **Notifications** in its details on the Alerts page. A channel's attempts, newest first and filterable by outcome, are under **Recent deliveries** on the channel's page. Offline-location and mesh-edge alerts are recorded like monitor alerts and are named by their locations. There is no workspace-wide list. A channel is flagged **Failing**, in the channel list and on its page, when a delivery to it failed (transiently or for good) in the last 24 hours and none has succeeded since; test sends count both ways, so a successful test after a fix clears the flag. A partly failed SMS send counts as a failure, and a not-sent row counts as neither. The same data is in the API (`GET /alerts/{id}/deliveries`, `GET /alert-channels/{id}/deliveries`, `failing`, `last_delivered_at` and `last_failed_at` on channels) and the [MCP tools](/docs/mcp/).",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "What the history keeps, and for how long",
+          text:
+            "Rows are kept 90 days for every workspace, whatever its data retention setting, and go with their alert, channel or workspace when those are deleted. Errors are stored sanitized: URLs are cut to their host, bearer and basic credentials, tokens and credential-named parameters are masked, the channel's own secret values (webhook URLs, tokens, keys, header values) are removed wherever they appear, even cut short by a truncated provider response, phone numbers and email addresses a provider echoed are masked like stored recipients, and the text is capped at 512 characters. Recipients are stored masked plus the hash the SMS retry ledger already uses. Not recorded: an event the alerter queued for the delivery workers (the worker's rows say what became of it, so a queue outage shows as no rows), a send another alerter replica claimed first, and an event that was never due (muted, in an escalation delay, suppressed by a dependency).",
         },
       ],
     },
@@ -340,7 +451,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
+            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host. A page (created or reminder) also carries an **Acknowledge** button, which then leads and the open-the-monitor button sits beside it, and the plain-text part carries the same [acknowledge link](#acknowledge-links). `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
         },
         {
           type: "table",
@@ -363,7 +474,53 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Templates receive the raw alert fields (`event_type`, `monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out, once: the failure is logged (and returned by a test send, so you see it there) but never retried, because retrying would only mail the whole `to` list the same fallback again. Overrides apply to pages only: a [suspected-cause follow-up](#ai-triage) always uses the built-in rendering and the subject `[Suspected Cause] <monitor>`, so a template written for outages (status is still `active` on a follow-up) never turns it into a second DOWN email.",
+            "Templates receive the raw alert fields (`event_type`, `monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, `ack_url` and `ack_label` (the [acknowledge link](#acknowledge-links), empty when the email carries none), and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out, once: the failure is logged (and returned by a test send, so you see it there) but never retried, because retrying would only mail the whole `to` list the same fallback again. Overrides apply to pages only: a [suspected-cause follow-up](#ai-triage) always uses the built-in rendering and the subject `[Suspected Cause] <monitor>`, so a template written for outages (status is still `active` on a follow-up) never turns it into a second DOWN email.",
+        },
+      ],
+    },
+    {
+      id: "acknowledge-links",
+      title: "Acknowledge from a notification",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every page — the `created` notification and each `reminder` — carries a signed one-click acknowledge link on chat, email, SMS and webhook channels. PagerDuty and Opsgenie never carry it: acknowledge in the paging tool there. The link opens a page in the operator UI that works without signing in: it shows the monitor, what kind of alert it is, its state and since when, and an **Acknowledge alert** button. Opening the link never acknowledges anything; only pressing the button does, because mail scanners and chat link previews open every link they see. The acknowledgement is the same as one made on the Alerts page: the alert's state and time, the live alert stream and the acknowledgement sent to PagerDuty and Opsgenie all follow from it.",
+        },
+        {
+          type: "list",
+          items: [
+            "The link acknowledges, and nothing else: it cannot resolve the alert or change anything about it, its monitor or its routing.",
+            "It is valid for 72 hours from when the notification was built. Each reminder carries a fresh link.",
+            "It acts only on the episode of the alert it was sent in: once the alert [relapses](#relapses), a link from a page sent before the relapse opens as not valid, and the relapse notice carries a new one.",
+            "Resolve notices, acknowledgement notices, suspected-cause follow-ups and channel test sends carry no link. An acknowledged alert stops sending reminders (only its resolve notice follows), so nothing sent after an acknowledgement carries one; links already delivered still open the page, which then says the alert is already acknowledged.",
+            "It needs both `APP_BASE_URL` (the link points at the operator UI) and `PROBARA_SECRETS_KEY` (it is signed with a key derived from it). Without either, notifications carry no acknowledge link.",
+            "Opening a link for an alert someone already acknowledged says so; that is not an error. A resolved alert, an expired link and an invalid link each get their own message. Every state offers an **Open in Probara** link onward, to that alert on the Alerts page (or to the Alerts page when the link is expired or invalid), which works for anyone signed in to the workspace.",
+            "The audit log records the use that acknowledged as `alert.acknowledge` on the alert (repeat uses of a link write nothing), with the actor shown as `link sent to <channel name>` and `details.via` `acknowledge_link`, `details.channel_id` and `details.channel_name`.",
+          ],
+        },
+        {
+          type: "table",
+          columns: ["Channel", "How the link appears"],
+          rows: [
+            ["Email", "Primary **Acknowledge** button, and an `Acknowledge:` line in the plain-text part"],
+            ["Slack", "**Acknowledge** button before the open-the-monitor button"],
+            ["Microsoft Teams", "**Acknowledge** action on both the Adaptive Card and the legacy MessageCard"],
+            ["Discord", "Bold **Acknowledge** link in the embed text (plain webhooks cannot post buttons)"],
+            ["Telegram", "**Acknowledge** link above the open-the-monitor link"],
+            ["SMS (Twilio)", "Last line, `Acknowledge: <link>`, in place of the open-the-monitor link (a text without an acknowledge link keeps that one). The link is never cut: a long alert text is shortened instead. Expect a page to take more than one SMS segment"],
+            ["Generic webhook", "`alert.links.acknowledge`; the field is absent when the delivery carries no link"],
+            ["ntfy", "**Acknowledge** action button, first of the notification's actions"],
+            ["Gotify", "`Acknowledge: <link>` line under the message body"],
+            ["PagerDuty, Opsgenie / JSM", "None: acknowledge in the paging tool"],
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Anyone holding the notification can acknowledge",
+          text:
+            "The link is the credential: whoever has the message (a forwarded email, a shared chat channel, an SMS) can acknowledge that one alert for 72 hours, without an account. They learn only the alert's monitor or location name, kind, state and times. Deleting the channel revokes every link it delivered. The link carries its token after a `#`, which browsers never send to a server; a mail security gateway that rewrites links must keep that part, or the page reports the link as not valid. See [security](/docs/security/#notifications-integrations-ai).",
         },
       ],
     },
@@ -445,14 +602,24 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An HTTPS or SIP-over-TLS monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
+            "A check location that stops reporting opens one `location_offline` alert, routed to the tenant default channels like mesh alerts. It names the location, its last heartbeat, and how many monitors run from it and how many of those have no other location. There is no setting: every location that has reported at least once in the last 7 days is covered, with a fixed 180-second threshold. Resolving it by hand sends a \"closed by an operator\" notice; if the location is still silent, a new alert opens on the next evaluation. While one of its locations is disconnected and its offline alert is about to open or open, a mesh edge's alert stays open but sends nothing and reads as suppressed (`suppression_reason` `location_offline`), so a dead site pages once instead of once per path; see [heartbeats](/docs/locations/#heartbeats).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "An HTTPS, SIP-over-TLS or TLS-wrapped TCP monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate chain has fewer remaining validity days than the threshold. The chain is always checked: the expiry that counts is the earliest among the leaf and the intermediates the server presents, never a root from the trust store; with `tls_skip_verify` it follows the leaf's issuer path as presented, skipping stray certificates and an expired cross-sign of a root. The alert names the certificate that expires and its date (`tls: intermediate certificate CN=… expires on 2026-12-01 (in 9d, < 14d)`); when it is an intermediate, the notification's summary says so (\"An intermediate certificate (R3) expires in 9 days, inside the 14-day warning window.\"), as do the alert row and toast, and the monitor's Server panel and status page show the same expiry. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A [domain monitor](/docs/monitors/#domain) opens a `domain_expiry` alert when the newest expiry date recorded in the last 7 days leaves fewer days than `min_days_valid` (default 30); a passed date inside the registry's renew grace period counts as 0 days left. The monitor stays `up` meanwhile, as with certificates; once the registration has expired the check fails too, so the availability alert pages as well (after two failing lookups), and the `domain_expiry` alert reads as expired. The open alert's days left, date and registrar follow every evaluation, so reminders stay current. When no lookup in those 7 days found a date and at least two check rounds could not determine one (the registry publishes none, the TLD has no RDAP or WHOIS service, every lookup failed or was throttled), the alert opens without a value as \"Domain Expiry Unknown\", with the reason in its last error: a warning, never an outage. It never opens for a registry known to publish no date at all (`.de`), where nobody could act on it. When the alert changes between that form and a dated one, it is resolved and a new one opens, so channels hear about the change. It resolves when a renewed registration or a readable date is observed, the window is narrowed, or the monitor is paused or deleted.",
         },
         {
           type: "callout",
           tone: "info",
           title: "Automatic incident coverage is specific",
           text:
-            "The verified automatic-incident paths cover availability and latency anomaly alerts. Do not assume the tenant switch automatically creates incidents for every host-metric, mesh-edge, or TLS-expiry alert.",
+            "The verified automatic-incident paths cover availability and latency anomaly alerts. Do not assume the tenant switch automatically creates incidents for every host-metric, mesh-edge, TLS-expiry, or offline-location alert.",
         },
       ],
     },
@@ -466,8 +633,12 @@ export const ALERTING_PAGE: DocPage = {
           rows: [
             ["`title`", "Required operator-facing title"],
             ["`description`", "Optional maintenance context"],
-            ["`starts_at`", "RFC 3339 start timestamp"],
-            ["`ends_at`", "RFC 3339 end timestamp, after the start"],
+            ["`starts_at`", "RFC 3339 start timestamp of a one-off window"],
+            ["`ends_at`", "RFC 3339 end timestamp of a one-off window, after the start"],
+            [
+              "`recurrence`",
+              "Makes the window repeat weekly instead (then send no `starts_at`/`ends_at`): `frequency: \"weekly\"`, `weekdays` (0 = Sunday … 6 = Saturday; all seven is daily), `start_time` (local `HH:MM`), `duration_minutes` (1 to 10080, 7 days), `timezone` (IANA), optional `until` (last local date, `YYYY-MM-DD`)",
+            ],
             [
               "`monitor_ids`",
               "Selected tenant monitors; selecting a group also covers its members for muting",
@@ -477,7 +648,32 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Maintenance windows are classified as upcoming, active, or past. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during the active interval. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end, upcoming by soonest start, past (and the unfiltered list) by most recent end, so a page cut never drops the next window.",
+            "Maintenance windows are classified as upcoming, active, or past, from their occurrences: active while one is in progress, upcoming while one that is not skipped is ahead, past otherwise. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during each occurrence. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end, upcoming by soonest next start, past by most recent end (the unfiltered list newest first), so a page cut never drops the next window.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A repeating window runs on the chosen weekdays at its start time in its timezone, so \"Tuesday and Thursday 02:00 Europe/Paris for 90 minutes\" stays at 02:00 local time across daylight-saving changes. On the night the clocks go forward, a start time that does not exist runs at the next valid instant, the moment the gap ends (02:30 runs at 03:00). On the night they go back, a start time that happens twice runs once, at its first instance. The duration is elapsed time, so an occurrence lasts exactly its minutes even when a clock change falls inside it. At most one occurrence starts per local day; an occurrence longer than the gap to the next simply overlaps it, and overlapping coverage counts once. The form previews the next occurrences, and `POST /maintenance-windows/preview` returns them for any rule without saving it.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Occurrences are materialized 35 days ahead: the API writes them when a window is saved and the scheduler rolls the horizon forward every hour. Each window response carries `recurrence` (repeating windows only) and `next_occurrence` (the one in progress, else the next that is not skipped); for a repeating window `starts_at`/`ends_at` are the first occurrence of its current schedule. For a one-off they are always the span it actually covers: after an edit or an early end they are its occurrence's times rather than the times sent (a start that has passed never moves, ending one stores the moment it ended, and a finished one-off given a new future end shows it covering from the edit). `GET /maintenance-windows/{id}/occurrences?status=upcoming|past` lists the concrete occurrences, each `active`, `upcoming`, `past` or `skipped`.",
+        },
+        {
+          type: "list",
+          items: [
+            "**Edits apply from now on.** Changing the schedule never rewrites an occurrence that already started: the one in progress keeps its start and takes the end the new schedule gives the present (or ends at the edit when the new schedule does not cover the present), and every future occurrence is regenerated. Coverage is never backdated by an edit: a new occurrence already under way when you save starts at the save. A skipped occurrence stays skipped when the new schedule still has it.",
+            "**Monitor changes apply from now on too.** A monitor removed from a window stays covered for the time the window already covered it; a monitor added is covered from the edit.",
+            "**End this occurrence now** (`POST /maintenance-windows/{id}/end-occurrence`) ends the occurrence in progress; a repeating window runs again at its next occurrence, a one-off is over.",
+            "**Skip next occurrence** (`POST /maintenance-windows/{id}/skip-next`) skips the next occurrence that has not started; the series carries on after it.",
+            "**Deleting a window** ends coverage immediately and removes its future occurrences. Time it already covered stays in availability and SLA history; a window that never started is removed entirely.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Occurrences are never pruned: like the state timeline, they are the history SLA reports and uptime read back for any period. Two things still change past coverage: creating a one-off whose start is already in the past covers from that start (backdated maintenance), and group membership is read as it is now, so adding a monitor to a group that a window targets also covers it for that window's past occurrences.",
         },
         {
           type: "paragraph",
@@ -656,7 +852,7 @@ export const ALERTING_PAGE: DocPage = {
             ["Less than 3 minutes since that channel's page", "Waits, so it reads as a follow-up"],
             ["Triage and the channel's page both more than an hour old", "Not sent"],
             ["Alert resolved, monitor in maintenance, member of a roll-up group, or dependency-suppressed (muted exactly like a reminder)", "Not sent"],
-            ["Alert acknowledged", "Sent: the hint helps whoever is working it"],
+            ["Alert acknowledged or snoozed", "Sent: the hint helps whoever is working it (reminders stay muted)"],
             ["Mesh-edge alert, or triage skipped (cooldown, resolved)", "Not sent: there is no ready triage"],
             ["`LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` on the alerter", "Not sent, including from triages that were already ready"],
             ["PagerDuty or Opsgenie / JSM channel", "Not sent (chat, email, SMS and webhook channels get it)"],

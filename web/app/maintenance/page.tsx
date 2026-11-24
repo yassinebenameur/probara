@@ -1,13 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CircleStop, Pencil, Plus, Trash2, Wrench } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { CircleStop, Pencil, Plus, Repeat, SkipForward, Trash2, Wrench } from 'lucide-react';
 import type { MaintenanceWindow, MaintenanceWindowStatus } from '@/lib/types';
-import { deleteMaintenanceWindow, getMaintenanceWindows, updateMaintenanceWindow } from '@/lib/api';
+import {
+  deleteMaintenanceWindow,
+  endMaintenanceOccurrence,
+  getMaintenanceWindows,
+  skipNextMaintenanceOccurrence,
+} from '@/lib/api';
 import { formatDateTime, formatDateTimeFull, formatDurationBetween } from '@/lib/format';
+import { describeRecurrence } from '@/lib/maintenance-schedule';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
+import RowMenu, { RowMenuItem } from '@/components/ui/RowMenu';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import EmptyState from '@/components/ui/EmptyState';
@@ -61,30 +68,40 @@ const TAB_ORDER_SORT: Record<Tab, SortState<MaintenanceSortKey>> = {
 };
 const DEFAULT_DIR = { monitors: 'desc' } as const;
 
+/**
+ * The span a row shows: a one-off's own times; for a repeating window the
+ * occurrence in progress or the next one (its stored times are only the
+ * first occurrence of its schedule).
+ */
+function shownSpan(w: MaintenanceWindow): { starts_at: string; ends_at: string } {
+  return w.recurrence && w.next_occurrence ? w.next_occurrence : w;
+}
+
 const SORT_VALUE: Record<Exclude<MaintenanceSortKey, 'auto'>, (w: MaintenanceWindow) => SortValue> = {
   title: (w) => w.title,
-  starts: (w) => Date.parse(w.starts_at),
-  ends: (w) => Date.parse(w.ends_at),
+  starts: (w) => Date.parse(shownSpan(w).starts_at),
+  ends: (w) => Date.parse(shownSpan(w).ends_at),
   monitors: (w) => (w.monitors ?? []).length,
 };
 
 /** When the window starts or ends, relative to now, as the row's lead fact. */
 function relativeTiming(window: MaintenanceWindow) {
+  const span = shownSpan(window);
   if (window.status === 'active') {
     return (
       <Pill tone="info" size="xs" dot>
-        <RelativeTime value={window.ends_at} prefix="Ends " />
+        <RelativeTime value={span.ends_at} prefix="Ends " />
       </Pill>
     );
   }
   if (window.status === 'upcoming') {
     return (
       <Pill tone="neutral" size="xs">
-        <RelativeTime value={window.starts_at} prefix="Starts " />
+        <RelativeTime value={span.starts_at} prefix={window.recurrence ? 'Next ' : 'Starts '} />
       </Pill>
     );
   }
-  return <RelativeTime value={window.ends_at} prefix="Ended " className="text-xs text-slate-500" />;
+  return <RelativeTime value={span.ends_at} prefix="Ended " className="text-xs text-slate-500" />;
 }
 
 async function fetchStatus(status: Tab): Promise<{ items: MaintenanceWindow[]; total: number }> {
@@ -165,13 +182,30 @@ export default function MaintenancePage() {
     }
   };
 
+  // Ends the occurrence in progress; a repeating window runs again at its
+  // next occurrence.
   const handleEndNow = async (window: MaintenanceWindow) => {
     try {
-      await updateMaintenanceWindow(window.id, { ends_at: new Date().toISOString() });
-      showToast('Maintenance window ended', 'success');
+      await endMaintenanceOccurrence(window.id);
+      showToast(window.recurrence ? 'This occurrence ended; the schedule carries on' : 'Maintenance window ended', 'success');
       loadWindows();
     } catch (err) {
       showToast(errorMessage(err, 'Failed to end maintenance window'), 'error');
+    }
+  };
+
+  const handleSkipNext = async (window: MaintenanceWindow) => {
+    try {
+      const updated = await skipNextMaintenanceOccurrence(window.id);
+      showToast(
+        updated.next_occurrence
+          ? `Next occurrence skipped; the one after starts ${formatDateTime(updated.next_occurrence.starts_at)}`
+          : 'Next occurrence skipped',
+        'success'
+      );
+      loadWindows();
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to skip the next occurrence'), 'error');
     }
   };
 
@@ -183,6 +217,26 @@ export default function MaintenancePage() {
   const openEdit = (window: MaintenanceWindow) => {
     setEditing(window);
     setModalOpen(true);
+  };
+
+  // Row actions, danger last: up to three as icon buttons, more in a menu.
+  const rowActions = (window: MaintenanceWindow) => {
+    const actions: { label: string; icon: ReactNode; run: () => void; danger?: boolean }[] = [];
+    if (window.status === 'active') {
+      actions.push({
+        label: window.recurrence ? 'End this occurrence now' : 'End now',
+        icon: <CircleStop strokeWidth={1.75} />,
+        run: () => handleEndNow(window),
+      });
+    }
+    if (window.recurrence && window.status !== 'past') {
+      actions.push({ label: 'Skip next occurrence', icon: <SkipForward strokeWidth={1.75} />, run: () => handleSkipNext(window) });
+    }
+    if (window.status !== 'past') {
+      actions.push({ label: 'Edit', icon: <Pencil strokeWidth={1.75} />, run: () => openEdit(window) });
+    }
+    actions.push({ label: 'Delete', icon: <Trash2 strokeWidth={1.75} />, run: () => setPendingDelete(window), danger: true });
+    return actions;
   };
 
   const loaded = windowsByTab[tab];
@@ -204,7 +258,7 @@ export default function MaintenancePage() {
     <Page width="data">
       <PageHeader
         title="Maintenance"
-        subtitle="Planned windows during which alerts are suppressed. Checks keep running and status pages show maintenance."
+        subtitle="Planned windows, once or weekly, during which alerts are suppressed. Checks keep running and status pages show maintenance."
         action={
           canWrite && !emptyWithCta ? (
             <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} onClick={openCreate}>
@@ -279,6 +333,8 @@ export default function MaintenancePage() {
               <tbody>
                 {windows.map((window) => {
                   const monitors = window.monitors ?? [];
+                  const span = shownSpan(window);
+                  const actions = rowActions(window);
                   return (
                     <tr key={window.id}>
                       <td className="max-w-0">
@@ -286,6 +342,13 @@ export default function MaintenancePage() {
                           <p className="min-w-0 break-words font-medium text-white">{window.title}</p>
                           {relativeTiming(window)}
                         </div>
+                        {window.recurrence && (
+                          <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-400">
+                            <Repeat className="h-3 w-3 flex-shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                            <span className="sr-only">Repeats: </span>
+                            {describeRecurrence(window.recurrence)}
+                          </p>
+                        )}
                         {monitors.length > 0 && (
                           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                             {monitors.slice(0, MAX_MONITOR_CHIPS).map((m) => (
@@ -311,13 +374,13 @@ export default function MaintenancePage() {
                           </div>
                         )}
                       </td>
-                      <td className="whitespace-nowrap text-ui tabular-nums text-slate-300" title={formatDateTimeFull(window.starts_at)}>
-                        {formatDateTime(window.starts_at)}
+                      <td className="whitespace-nowrap text-ui tabular-nums text-slate-300" title={formatDateTimeFull(span.starts_at)}>
+                        {formatDateTime(span.starts_at)}
                       </td>
-                      <td className="whitespace-nowrap text-ui tabular-nums" title={formatDateTimeFull(window.ends_at)}>
-                        <div className="text-slate-300">{formatDateTime(window.ends_at)}</div>
+                      <td className="whitespace-nowrap text-ui tabular-nums" title={formatDateTimeFull(span.ends_at)}>
+                        <div className="text-slate-300">{formatDateTime(span.ends_at)}</div>
                         <div className="mt-0.5 text-xs text-slate-500">
-                          {formatDurationBetween(window.starts_at, window.ends_at)} long
+                          {formatDurationBetween(span.starts_at, span.ends_at)} long
                         </div>
                       </td>
                       <td className="hidden text-right text-ui tabular-nums text-slate-300 md:table-cell">
@@ -326,26 +389,19 @@ export default function MaintenancePage() {
                       {canWrite && (
                         <td>
                           <div className="flex items-center justify-end gap-0.5">
-                            {window.status === 'active' && (
-                              <IconButton
-                                icon={<CircleStop strokeWidth={1.75} />}
-                                label="End now"
-                                onClick={() => handleEndNow(window)}
-                              />
+                            {actions.length > 3 ? (
+                              <RowMenu label="Actions">
+                                {actions.map((a) => (
+                                  <RowMenuItem key={a.label} icon={a.icon} onSelect={a.run} danger={a.danger}>
+                                    {a.label}
+                                  </RowMenuItem>
+                                ))}
+                              </RowMenu>
+                            ) : (
+                              actions.map((a) => (
+                                <IconButton key={a.label} icon={a.icon} label={a.label} onClick={a.run} danger={a.danger} />
+                              ))
                             )}
-                            {window.status !== 'past' && (
-                              <IconButton
-                                icon={<Pencil strokeWidth={1.75} />}
-                                label="Edit"
-                                onClick={() => openEdit(window)}
-                              />
-                            )}
-                            <IconButton
-                              icon={<Trash2 strokeWidth={1.75} />}
-                              label="Delete"
-                              onClick={() => setPendingDelete(window)}
-                              danger
-                            />
                           </div>
                         </td>
                       )}
@@ -384,7 +440,9 @@ export default function MaintenancePage() {
         title="Delete maintenance window"
         description={
           pendingDelete
-            ? `Delete “${pendingDelete.title}”? Alerts for the affected monitors resume immediately.`
+            ? pendingDelete.recurrence
+              ? `Delete “${pendingDelete.title}”? Its upcoming occurrences are removed and alerts resume immediately; time it already covered stays in uptime history.`
+              : `Delete “${pendingDelete.title}”? Alerts for the affected monitors resume immediately.`
             : ''
         }
         confirmLabel="Delete"

@@ -69,23 +69,45 @@ func (h *Handlers) bulkAction(
 	if !ok {
 		return
 	}
-	tenantID := tenantUUID.String()
-
 	var req BulkAlertsRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBulkBodyBytes)).Decode(&req); err != nil {
-		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
+	if !decodeBulkBody(w, r, &req) {
 		return
 	}
-	if len(req.IDs) == 0 {
+	h.runBulk(w, r, tenantUUID, verb, req.IDs, apply, broadcast)
+}
+
+// decodeBulkBody decodes a bulk request body into dst, capped at
+// maxBulkBodyBytes; false means a 400 was written.
+func decodeBulkBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBulkBodyBytes)).Decode(dst); err != nil {
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
+		return false
+	}
+	return true
+}
+
+// runBulk validates the requested IDs, applies the action and writes the
+// per-alert result, broadcasts and audit events (see bulkAction).
+func (h *Handlers) runBulk(
+	w http.ResponseWriter,
+	r *http.Request,
+	tenantUUID uuid.UUID,
+	verb string,
+	rawIDs []string,
+	apply func(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) (*alertservice.BulkResult, error),
+	broadcast func(tenantID uuid.UUID, alert *models.AlertWithDetails),
+) {
+	tenantID := tenantUUID.String()
+	if len(rawIDs) == 0 {
 		apierrors.WriteValidationError(w, "ids is required and cannot be empty")
 		return
 	}
-	if len(req.IDs) > alertservice.MaxBulkAlerts {
+	if len(rawIDs) > alertservice.MaxBulkAlerts {
 		apierrors.WriteValidationError(w, fmt.Sprintf("at most %d alerts per request", alertservice.MaxBulkAlerts))
 		return
 	}
-	ids := make([]uuid.UUID, len(req.IDs))
-	for i, raw := range req.IDs {
+	ids := make([]uuid.UUID, len(rawIDs))
+	for i, raw := range rawIDs {
 		id, err := uuid.Parse(raw)
 		if err != nil {
 			apierrors.WriteValidationError(w, "invalid alert ID: "+raw)

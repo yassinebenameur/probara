@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from compose_artifact import HEAD, load_manifest, verify_committed
 from upstream import LOCK
-from probara_ai.contract import STATE_FORMATS
+from probara_ai.contract import STATE_FORMATS, VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
@@ -113,11 +113,17 @@ def test_v1_stays_rejected():
 
 
 def test_shipped_artifact_is_approved():
-    """The Dockerfile default is what CI gates and every default-on install runs."""
+    """The Dockerfile default is what CI gates and every default-on install runs.
+
+    Approved AND current: an artifact approved under an older catalogue is
+    historical, and verify_artifact refuses to serve it.
+    """
     version = re.search(r"^ARG MODEL_VERSION=(\S+)$", (ROOT / "Dockerfile").read_text(), re.MULTILINE)[1]
     manifest = load_manifest(ROOT / "artifacts" / version)
     report = json.loads((ROOT / "artifacts" / version / "cpu-evaluation.json").read_text())
     assert manifest["release_approved"] is True and report["release_approved"] is True and report["device"] == "cpu"
+    assert manifest["catalogue"] == VERSION, (
+        f"the shipped {version} was trained under catalogue {manifest['catalogue']}, the service uses {VERSION}")
 
 
 V1_EVALUATED ="b8ca791b7e57671d01ee86f4cbc832493846557f43bba3a2aef0c4abab0ecb49"

@@ -184,3 +184,48 @@ func TestSend_BadRequestIsPermanentWithReason(t *testing.T) {
 		t.Fatalf("err = %v, want permanent carrying PagerDuty's reason", err)
 	}
 }
+
+// Each paging episode is its own incident: a relapse notice resolves the
+// channel's previous incident (still open, and maybe acknowledged, when the
+// channel never received that recovery), then triggers a new one, which
+// pages; acknowledge and resolve carry the episode of the channel's page, so
+// a late resolve of the earlier episode closes only the incident it was for.
+func TestSend_RelapseOpensItsOwnIncident(t *testing.T) {
+	rec := &recorder{}
+	p := New()
+	p.endpoint = rec.server(t).URL
+	sendEv := func(eventType string, set func(*notifications.AlertDetails)) {
+		t.Helper()
+		ev := sampleEvent()
+		set(&ev.Alert)
+		if err := p.Send(context.Background(), plugin.DispatchRequest{
+			Channel: plugin.ChannelRef{Config: map[string]any{"routing_key": testKey}},
+			Event:   ev, EventType: eventType,
+		}); err != nil {
+			t.Fatalf("Send(%s): %v", eventType, err)
+		}
+	}
+	zero := 0
+	sendEv("created", func(a *notifications.AlertDetails) {
+		a.RelapseCount, a.PagedRelapse, a.RelapseNotice, a.PreviousPagedRelapse = 2, 2, true, &zero
+	})
+	sendEv("resolved", func(a *notifications.AlertDetails) { a.RelapseCount, a.PagedRelapse = 2, 0 })
+	sendEv("acknowledged", func(a *notifications.AlertDetails) { a.RelapseCount, a.PagedRelapse = 2, 2 })
+	// A first page during a relapse (no earlier page on this channel) closes
+	// nothing.
+	sendEv("created", func(a *notifications.AlertDetails) { a.RelapseCount, a.PagedRelapse = 2, 2 })
+
+	var got []string
+	for _, ev := range rec.events {
+		got = append(got, ev.EventAction+" "+ev.DedupKey)
+	}
+	want := []string{
+		"resolve probara:a-1", "trigger probara:a-1:relapse-2",
+		"resolve probara:a-1",
+		"acknowledge probara:a-1:relapse-2",
+		"trigger probara:a-1:relapse-2",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+}

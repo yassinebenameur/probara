@@ -6,6 +6,7 @@ import { ArrowUpRight, Globe, Pencil, Plus, Trash2 } from 'lucide-react';
 import { StatusPage } from '@/lib/types';
 import { getStatusPages, deleteStatusPage } from '@/lib/api';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
+import { visibilityLabel } from '@/lib/status-page-access';
 import { pluralize } from '@/lib/format';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import Button from '@/components/ui/Button';
@@ -19,7 +20,7 @@ import EmptyState from '@/components/ui/EmptyState';
 import Callout from '@/components/ui/Callout';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
-import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+import { useCanWrite, useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import { errorMessage } from '@/lib/errors';
 import { useAsyncData } from '@/lib/useAsyncData';
 
@@ -53,6 +54,7 @@ async function fetchStatusPages(): Promise<StatusPage[]> {
 export default function StatusPagesPage() {
   const { showToast } = useToast();
   const canWrite = useCanWrite();
+  const statusPageBaseUrl = useStatusPageBaseUrl();
   const { data: statusPages, setData: setStatusPages, loading, error, reload: loadStatusPages } = useAsyncData<
     StatusPage[]
   >(fetchStatusPages, [], 'Failed to load status pages');
@@ -177,7 +179,8 @@ export default function StatusPagesPage() {
         <div className={`grid gap-4 ${GRID}`}>
           {sorted.map((page) => {
             const monitorCount = page.monitor_ids?.length || 0;
-            const publicUrl = resolveStatusPagePublicUrl(page);
+            const publicUrl = resolveStatusPagePublicUrl(page, statusPageBaseUrl);
+            const visibility = visibilityLabel(page.visibility);
             return (
               // The title link stretches over the card; the footer controls sit
               // above that overlay (relative) so each keeps its own target.
@@ -188,7 +191,14 @@ export default function StatusPagesPage() {
                 >
                   {page.title}
                 </Link>
-                <p className="mt-0.5 truncate font-mono text-xs text-slate-500">/{page.slug}</p>
+                <p className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-slate-500">
+                  <span className="truncate font-mono">/{page.slug}</span>
+                  {visibility && (
+                    <Pill tone="neutral" size="xs">
+                      {visibility}
+                    </Pill>
+                  )}
+                </p>
 
                 <div className="flex-1">
                   {page.description && (

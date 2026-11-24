@@ -17,6 +17,9 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
+	"github.com/yassinebenameur/probara/shared/securityheaders"
+	"github.com/yassinebenameur/probara/shared/statustemplate"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -59,6 +62,19 @@ type statusPageSettingsStored struct {
 	CustomCSS        *string `json:"custom_css,omitempty"`
 	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+
+	CSPMode string `json:"csp_mode,omitempty"`
+
+	SEOTitle            *string `json:"seo_title,omitempty"`
+	SEODescription      *string `json:"seo_description,omitempty"`
+	AllowSearchIndexing bool    `json:"allow_search_indexing"`
+
+	EnableEmailSubscriptions bool `json:"enable_email_subscriptions"`
+	AutoPublishIncidents     bool `json:"auto_publish_incidents"`
+
+	// Template is the built-in template name; "" (a row from before the
+	// setting) reads as the default.
+	Template string `json:"template,omitempty"`
 }
 
 type statusPageSectionInput struct {
@@ -94,6 +110,8 @@ func defaultStatusPageSettings() statusPageSettingsStored {
 		// Off by default: it makes the public page ask visitors for a browser
 		// permission, which is the operator's call to make.
 		EnablePushNotifications: false,
+		// A public page is meant to be found; the operator opts out.
+		AllowSearchIndexing: true,
 	}
 }
 
@@ -156,6 +174,31 @@ func (s statusPageSettingsStored) applyPatch(patch *models.StatusPageSettings) s
 	if patch.CustomFooterHTML != nil {
 		s.CustomFooterHTML = trimOptionalString(patch.CustomFooterHTML)
 	}
+	if patch.CSPMode != nil {
+		// Validation rejects unknown modes; one here (an old or hand-edited
+		// row) reads as automatic.
+		s.CSPMode, _ = securityheaders.ParseCSPMode(*patch.CSPMode)
+	}
+	if patch.SEOTitle != nil {
+		s.SEOTitle = trimOptionalString(patch.SEOTitle)
+	}
+	if patch.SEODescription != nil {
+		s.SEODescription = trimOptionalString(patch.SEODescription)
+	}
+	if patch.AllowSearchIndexing != nil {
+		s.AllowSearchIndexing = *patch.AllowSearchIndexing
+	}
+	if patch.EnableEmailSubscriptions != nil {
+		s.EnableEmailSubscriptions = *patch.EnableEmailSubscriptions
+	}
+	if patch.AutoPublishIncidents != nil {
+		s.AutoPublishIncidents = *patch.AutoPublishIncidents
+	}
+	if patch.Template != nil {
+		// Validation rejects unknown names; one here (a hand-edited row)
+		// reads as the default.
+		s.Template = statustemplate.NormalizeBuiltin(*patch.Template)
+	}
 	return s
 }
 
@@ -183,7 +226,11 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 	defaultTheme := s.DefaultTheme
 	allowThemeToggle := s.AllowThemeToggle
 	enablePushNotifications := s.EnablePushNotifications
-	return &models.StatusPageSettings{
+	cspMode := s.CSPMode
+	allowSearchIndexing := s.AllowSearchIndexing
+	enableEmailSubscriptions := s.EnableEmailSubscriptions
+	autoPublishIncidents := s.AutoPublishIncidents
+	out := &models.StatusPageSettings{
 		ShowMonitorTags:         &showMonitorTags,
 		ShowMonitorURL:          &showMonitorURL,
 		ShowMonitorUptime:       &showMonitorUptime,
@@ -199,7 +246,17 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 		CustomCSS:               s.CustomCSS,
 		CustomHeadHTML:          s.CustomHeadHTML,
 		CustomFooterHTML:        s.CustomFooterHTML,
+		CSPMode:                 &cspMode,
+		SEOTitle:                s.SEOTitle,
+		SEODescription:          s.SEODescription,
+		AllowSearchIndexing:     &allowSearchIndexing,
 	}
+	// Set apart from the literal above so its alignment stays put.
+	out.EnableEmailSubscriptions = &enableEmailSubscriptions
+	out.AutoPublishIncidents = &autoPublishIncidents
+	builtin := statustemplate.NormalizeBuiltin(s.Template)
+	out.Template = &builtin
+	return out
 }
 
 // statusPagePublisher publishes cache-invalidation events for the public
@@ -212,6 +269,37 @@ type statusPagePublisher interface {
 type Service struct {
 	db        *db.Client
 	publisher statusPagePublisher
+	// subscriberMailProblems says why this API cannot mail status-page
+	// subscribers (nil: never configured, which reads as "cannot").
+	subscriberMailProblems func() []string
+}
+
+// ErrSubscriptionsUnavailable: email subscriptions were turned on while the
+// API cannot mail subscribers. Returned wrapped with the reasons.
+var ErrSubscriptionsUnavailable = errors.New("email subscriptions cannot be enabled on this installation")
+
+// ConfigureSubscriberMail installs the check that refuses turning email
+// subscriptions on while subscriber mail cannot be sent
+// (pagesubscribers.Service.MailProblems).
+func (s *Service) ConfigureSubscriberMail(problems func() []string) {
+	s.subscriberMailProblems = problems
+}
+
+// checkSubscriptionsEnable refuses turning enable_email_subscriptions on
+// (from off) when subscriber mail cannot be sent. A page already on keeps
+// saving: the setting stays, and the runner says why nothing goes out.
+func (s *Service) checkSubscriptionsEnable(was bool, patch *models.StatusPageSettings) error {
+	if was || patch == nil || patch.EnableEmailSubscriptions == nil || !*patch.EnableEmailSubscriptions {
+		return nil
+	}
+	problems := []string{"subscriber mail is not configured on this API."}
+	if s.subscriberMailProblems != nil {
+		problems = s.subscriberMailProblems()
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w. %s", ErrSubscriptionsUnavailable, strings.Join(problems, " "))
 }
 
 // NewService creates a new status page service. publisher may be nil.
@@ -227,6 +315,11 @@ func NewService(db *db.Client, publisher *statusupdates.Publisher) *Service {
 func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req *models.CreateStatusPageRequest) (*models.StatusPage, error) {
 	pageID := uuid.New()
 
+	access, err := newPageAccess(req.Visibility, req.Password)
+	if err != nil {
+		return nil, err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -236,15 +329,20 @@ func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req 
 	query := `
 		INSERT INTO status_pages (
 			id, tenant_id, slug, title, description, logo_url,
-			primary_color, secondary_color, settings, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+			primary_color, secondary_color, settings, created_at, updated_at,
+			visibility, password_hash, password_version
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(), $10, $11, $12)
 	`
 
+	if err := s.checkSubscriptionsEnable(false, req.Settings); err != nil {
+		return nil, err
+	}
 	settingsStored := defaultStatusPageSettings().applyPatch(req.Settings)
 	settingsJSON, _ := json.Marshal(settingsStored)
 	if _, err := tx.ExecContext(ctx, query,
 		pageID, tenantID, req.Slug, req.Title, req.Description,
 		req.LogoURL, req.PrimaryColor, req.SecondaryColor, settingsJSON,
+		access.visibility, access.passwordHash, access.passwordVersion,
 	); err != nil {
 		if pgerr.IsUniqueViolation(err) {
 			return nil, ErrSlugExists
@@ -271,7 +369,9 @@ func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req 
 func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID) (*models.StatusPage, error) {
 	query := `
 		SELECT id, tenant_id, slug, title, description, logo_url,
-			primary_color, secondary_color, settings, created_at, updated_at
+			primary_color, secondary_color, settings, created_at, updated_at,
+			visibility, password_hash IS NOT NULL,
+			COALESCE(` + pagedomains.PrimaryHostSQL("status_pages.id") + `, '')
 		FROM status_pages
 		WHERE id = $1 AND tenant_id = $2
 	`
@@ -282,6 +382,7 @@ func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID)
 		&page.ID, &page.TenantID, &page.Slug, &page.Title,
 		&page.Description, &page.LogoURL, &page.PrimaryColor,
 		&page.SecondaryColor, &settingsJSON, &page.CreatedAt, &page.UpdatedAt,
+		&page.Visibility, &page.HasPassword, &page.PublicURL,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrStatusPageNotFound
@@ -289,6 +390,7 @@ func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID)
 		return nil, fmt.Errorf("failed to get status page: %w", err)
 	}
 
+	page.PublicURL = publicURL(page.PublicURL)
 	page.Settings = parseStatusPageSettings(settingsJSON).toAPI()
 	sections, err := s.loadStatusPageSections(ctx, pageID)
 	if err != nil {
@@ -313,7 +415,9 @@ func (s *Service) ListStatusPages(ctx context.Context, tenantID uuid.UUID, page,
 
 	query := `
 		SELECT id, tenant_id, slug, title, description, logo_url,
-			primary_color, secondary_color, settings, created_at, updated_at
+			primary_color, secondary_color, settings, created_at, updated_at,
+			visibility, password_hash IS NOT NULL,
+			COALESCE(` + pagedomains.PrimaryHostSQL("status_pages.id") + `, '')
 		FROM status_pages
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
@@ -334,9 +438,11 @@ func (s *Service) ListStatusPages(ctx context.Context, tenantID uuid.UUID, page,
 			&item.ID, &item.TenantID, &item.Slug, &item.Title,
 			&item.Description, &item.LogoURL, &item.PrimaryColor,
 			&item.SecondaryColor, &settingsJSON, &item.CreatedAt, &item.UpdatedAt,
+			&item.Visibility, &item.HasPassword, &item.PublicURL,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan status page: %w", err)
 		}
+		item.PublicURL = publicURL(item.PublicURL)
 		item.Settings = parseStatusPageSettings(settingsJSON).toAPI()
 
 		sections, err := s.loadStatusPageSections(ctx, item.ID)
@@ -409,10 +515,26 @@ func (s *Service) UpdateStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 			}
 			return nil, fmt.Errorf("failed to get existing settings: %w", err)
 		}
-		mergedJSON, _ := json.Marshal(parseStatusPageSettings(existingJSON).applyPatch(req.Settings))
+		existing := parseStatusPageSettings(existingJSON)
+		if err := s.checkSubscriptionsEnable(existing.EnableEmailSubscriptions, req.Settings); err != nil {
+			return nil, err
+		}
+		mergedJSON, _ := json.Marshal(existing.applyPatch(req.Settings))
 		setParts = append(setParts, fmt.Sprintf("settings = $%d", argIndex))
 		args = append(args, mergedJSON)
 		argIndex++
+	}
+
+	accessChanged := false
+	if req.Visibility != nil || req.Password != nil {
+		parts, accessArgs, changed, err := s.accessUpdate(ctx, tx, tenantID, pageID, req.Visibility, req.Password, argIndex)
+		if err != nil {
+			return nil, err
+		}
+		setParts = append(setParts, parts...)
+		args = append(args, accessArgs...)
+		argIndex += len(accessArgs)
+		accessChanged = changed
 	}
 
 	sectionsUpdated := false
@@ -463,8 +585,13 @@ func (s *Service) UpdateStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 	}
 
 	// Invalidate the public renderer's cached HTML so branding/settings edits
-	// show up immediately instead of after the render-cache TTL.
-	s.notifyStatusPage(tenantID, pageID, "status_page_updated")
+	// show up immediately instead of after the render-cache TTL. An access
+	// change also closes the page's open live streams (statusupdates).
+	if accessChanged {
+		s.notifyStatusPage(tenantID, pageID, statusupdates.EventStatusPageAccessChanged)
+	} else {
+		s.notifyStatusPage(tenantID, pageID, "status_page_updated")
+	}
 
 	return s.GetStatusPage(ctx, tenantID, pageID)
 }
@@ -482,7 +609,19 @@ func (s *Service) DeleteStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 	if rowsAffected == 0 {
 		return ErrStatusPageNotFound
 	}
+	// The page's custom domains went with it: the status-page service drops
+	// them from its host table at once instead of after its TTL.
+	s.notifyStatusPage(tenantID, pageID, pagedomains.EventDomainsChanged)
 	return nil
+}
+
+// publicURL is a page's public_url from its primary custom domain ("" for
+// none).
+func publicURL(primaryHost string) string {
+	if primaryHost == "" {
+		return ""
+	}
+	return pagedomains.PageURL(primaryHost)
 }
 
 func sectionsFromCreateRequest(sections []models.StatusPageSection) []statusPageSectionInput {

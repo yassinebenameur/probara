@@ -1,10 +1,14 @@
 package statuspage
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
 // Temporary helper: renders a rich sample page to /tmp for visual review.
@@ -146,11 +150,65 @@ func TestWritePreviewHTML(t *testing.T) {
 				Updates:            []StatusPageIncidentUpdate{{Message: "A fix has been deployed; latency is recovering."}},
 			},
 		},
-	}, true)
+	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	if err := os.WriteFile("/tmp/status-preview.html", []byte(html), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+}
+
+// TestWriteClassicPreviewHTML renders the classic built-in for each sample
+// state into $TMPDIR/sp-classic/ for visual review (screenshots against the
+// approved mock). Run with WRITE_PREVIEW=1.
+func TestWriteClassicPreviewHTML(t *testing.T) {
+	if os.Getenv("WRITE_PREVIEW") == "" {
+		t.Skip("preview generation disabled")
+	}
+	dir := filepath.Join(os.TempDir(), "sp-classic")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	write := func(name string, data *StatusPageData) {
+		html, err := renderPublicStatusPage(data)
+		if err != nil {
+			t.Fatalf("render %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".html"), []byte(html), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, s := range []classicScenario{scenarioOperational, scenarioDegraded, scenarioOutage, scenarioMaintenance, scenarioSingle, scenarioNoData, scenarioEmpty} {
+		write(string(s), classicSampleData(s, now))
+	}
+
+	noSub := classicSampleData(scenarioOperational, now)
+	noSub.SubscribeFormEnabled = false
+	write("nosubscribe", noSub)
+
+	brand := classicSampleData(scenarioOutage, now)
+	violet := "#6d28d9"
+	brand.PrimaryColor = &violet
+	write("primary", brand)
+
+	flat := classicSampleData(scenarioOperational, now)
+	flat.Sections = nil
+	write("nosections", flat)
+
+	// Kiosk previews: 1, 2, 4, 9, 24 and 60 services, with both built-ins.
+	for _, n := range []int{1, 2, 4, 9, 24, 60} {
+		kiosk := kioskSampleData(n, now)
+		write(fmt.Sprintf("kiosk-%d", n), kiosk)
+		kiosk = kioskSampleData(n, now)
+		kiosk.Template = statustemplate.BuiltinDefault
+		write(fmt.Sprintf("kiosk-%d-default", n), kiosk)
+	}
+
+	long := classicSampleData(scenarioOutage, now)
+	long.Title = "Example Cloud Platform Services and Regional Infrastructure status"
+	long.Sections[0].Monitors[0].Name = "Public REST API for partner integrations (eu-west-1, eu-central-1 and us-east-2 regions)"
+	long.Incidents[1].Title = "Elevated error rates for requests routed through the eu-west load balancer pool after a configuration push"
+	write("longnames", long)
 }

@@ -12,6 +12,7 @@ import (
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -114,6 +115,23 @@ type Subscriber struct {
 	// because push/agent/OTLP monitors publish "check_result" rather than
 	// "state_change" and never announce a recovery at all.
 	pushes *pushSender
+	// hosts is the custom-domain table (domains.go), reloaded on any change
+	// to a page's domains, slug or existence. Nil without custom domains.
+	hosts hostInvalidator
+}
+
+// hostInvalidator is the subset of hostTable the subscriber needs.
+type hostInvalidator interface {
+	Invalidate()
+}
+
+// hostTableEvents are the events after which the custom-domain table may
+// be stale: a page's domains changed, a page was renamed (its slug), or its
+// access changed.
+var hostTableEvents = map[string]bool{
+	pagedomains.EventDomainsChanged:            true,
+	"status_page_updated":                      true,
+	statusupdates.EventStatusPageAccessChanged: true,
 }
 
 // NewSubscriber creates a new status update subscriber. cache may be nil.
@@ -320,6 +338,11 @@ func (s *Subscriber) handleEvent(event statusupdates.Event) {
 	if s.pushes != nil {
 		s.pushes.Wake()
 	}
+	// Also above the guard: the custom-domain table serves requests whether
+	// or not anything is cached or streaming.
+	if s.hosts != nil && event.StatusPageID != "" && hostTableEvents[event.Type] {
+		s.hosts.Invalidate()
+	}
 
 	if s.hub == nil {
 		return
@@ -368,6 +391,11 @@ func (s *Subscriber) handleEvent(event statusupdates.Event) {
 		seen[slug] = struct{}{}
 		affected = append(affected, slug)
 		s.invalidateCache(slug)
+		if event.Type == statusupdates.EventStatusPageAccessChanged {
+			// Visibility, password or a kiosk token changed: streams opened
+			// under the old rules reconnect through the access gate.
+			s.hub.CloseSlug(slug)
+		}
 	}
 
 	if !s.hub.HasAnyClients() {

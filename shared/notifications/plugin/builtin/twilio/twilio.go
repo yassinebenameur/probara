@@ -183,7 +183,15 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 		"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+cfg.AuthToken)),
 	}
 	target := fmt.Sprintf("%s/2010-04-01/Accounts/%s/Messages.json", p.base, url.PathEscape(cfg.AccountSID))
-	body := plugin.Truncate(req.View().Short(), maxBody)
+	msg := req.View()
+	if msg.AckURL != "" {
+		// One link per text: the acknowledge link is what a person on
+		// their phone acts on, and a second URL costs segments.
+		msg.ActionURL = ""
+	}
+	// ShortWithin keeps the link whole and clips the text instead: a cut
+	// acknowledge link is worse than a shorter summary.
+	body := msg.ShortWithin(maxBody)
 
 	// A retry of a partially delivered event texts only the recipients the
 	// provider has not accepted yet; the ledger outlives this process, so the

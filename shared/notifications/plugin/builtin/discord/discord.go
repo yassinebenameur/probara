@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/notifications/present"
@@ -123,9 +124,10 @@ type discordEmbedFooter struct {
 
 // Discord embed limits.
 const (
-	maxTitle      = 256
-	maxFieldValue = 1024
-	maxFields     = 25
+	maxTitle       = 256
+	maxDescription = 4096
+	maxFieldValue  = 1024
+	maxFields      = 25
 )
 
 func buildEmbed(m present.Message) discordPayload {
@@ -140,10 +142,21 @@ func buildEmbed(m present.Message) discordPayload {
 		fields = append(fields, discordEmbedField{Name: "Last error", Value: plugin.Truncate(m.LastError, maxFieldValue)})
 	}
 
+	var ack string
+	if m.AckURL != "" {
+		// A masked link, not a button: a plain (not application-owned)
+		// webhook cannot post link buttons.
+		ack = "**[" + m.AckLabel + "](" + m.AckURL + ")**"
+	}
+	// The summary is cut to fit beside the link, never the link.
+	description := plugin.Truncate(m.Summary, maxDescription-utf8.RuneCountInString(ack)-2)
+	if ack != "" {
+		description = strings.TrimSpace(description + "\n\n" + ack)
+	}
 	return discordPayload{
 		Embeds: []discordEmbed{{
 			Title:       plugin.Truncate(m.Title, maxTitle),
-			Description: m.Summary,
+			Description: description,
 			URL:         m.ActionURL,
 			Color:       colorFor(m.Tone),
 			Timestamp:   m.Timestamp.UTC().Format(time.RFC3339),

@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 import augment
-from probara_ai.contract import STATE_FORMAT, from_label_export, state_text
+from probara_ai.contract import STATE_FORMAT, StaleLabelExport, from_label_export, state_text
+from probara_ai.guard import DIRECTIONAL, dependency_guard
 from train_head_cpu import read_extra_train, load_init_head
 
 LABEL_EXPORT = Path(__file__).resolve().parents[2] / "shared/ai/testdata/label-export-v1.jsonl"
@@ -24,7 +25,12 @@ def test_augment_rows_are_deterministic_and_train_only(tmp_path):
     rows = [json.loads(l) for l in (tmp_path / "a" / "dependency-train-augment.jsonl").read_text().splitlines()]
     assert all(r["group"].startswith("dependency-aug-") and r["task"] == "dependency" for r in rows)
     labels = {r["expected"]["dependency"] for r in rows}
-    assert {"a_depends_b", "b_depends_a"} <= labels
+    assert {"a_depends_b", "b_depends_a", "insufficient_evidence"} <= labels
+    # The generator's own scenarios: current format, labels the guard agrees with.
+    for r in rows:
+        assert r["state"] == state_text("dependency", r["evidence"], STATE_FORMAT)
+        supported = dependency_guard(r["evidence"])[1]
+        assert all((r["expected"]["dependency"] == d) == (supported == d) for d in DIRECTIONAL)
 
 
 def _eval_partitions(tmp_path):
@@ -53,13 +59,26 @@ def test_extra_train_rejects_evaluation_groups(tmp_path):
         read_extra_train(data, [leak])
 
 
-def test_extra_train_re_renders_label_exports(tmp_path):
+def _current(row):
+    try:
+        return from_label_export(row)
+    except StaleLabelExport:
+        return None
+
+
+def test_extra_train_re_renders_label_exports(tmp_path, capsys):
     # The Go export (shared/ai/labelexport.go) is frozen at state format 1;
-    # passing it straight to --extra-train must train on current-format text.
+    # passing it straight to --extra-train must train on current-format text,
+    # and skip, loudly, rows labelled under an older catalogue.
     data = _eval_partitions(tmp_path)
     exported = _label_export_rows()
-    rows = read_extra_train(data, [LABEL_EXPORT])
-    assert rows == [from_label_export(r) for r in exported]
+    skipped = {}
+    rows = read_extra_train(data, [LABEL_EXPORT], skipped)
+    current = [converted for converted in map(_current, exported) if converted is not None]
+    assert rows == current and current
+    assert skipped == {LABEL_EXPORT.name: len(exported) - len(current)}
+    if skipped[LABEL_EXPORT.name]:
+        assert f"skipped {skipped[LABEL_EXPORT.name]} of {len(exported)} rows" in capsys.readouterr().out
     assert all(r["state"] == state_text(r["task"], r["evidence"], STATE_FORMAT) for r in rows)
     # An already converted export passes through unchanged.
     converted = tmp_path / "converted.jsonl"

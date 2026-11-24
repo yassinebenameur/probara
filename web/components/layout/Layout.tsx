@@ -9,12 +9,13 @@ import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import AuthGuard from './AuthGuard';
 import { useFleetHealth } from './useFleetHealth';
+import { isPublicRoute } from '@/lib/public-routes';
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  // Don't show layout on auth pages
-  if (pathname === '/connect' || pathname === '/login' || pathname === '/oauth/consent') {
+  // Pages outside the shell: sign-in and the emailed-link pages (lib/public-routes.ts)
+  if (isPublicRoute(pathname)) {
     return <>{children}</>;
   }
 

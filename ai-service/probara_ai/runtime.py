@@ -10,7 +10,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 import torch
 from laya.train import load_checkpoint, items_from_rows, encode_item, _forward
 from laya.common import collate_items, TEMP_MIN, TEMP_MAX
-from probara_ai.contract import VERSION, artifact_state_format, options, state_text
+from probara_ai.contract import VERSION, artifact_state_format, historical, options, state_text
 from probara_ai.cpu import CPU_FORMAT, prepare_cpu
 from probara_ai.gate import TASKS, release_gate
 
@@ -21,6 +21,10 @@ REQUIRED_FILES = {HEAD, "rl_agent_config.json", "calibration.json", "evaluation.
                   "THIRD-PARTY-NOTICES"}
 # Files training/compose_artifact.py generates from the head and the pinned base ("composed").
 REQUIRED_COMPOSED = {"model.safetensors", "encoder/config.json", "tokenizer/tokenizer.json", "tokenizer/tokenizer_config.json"}
+
+
+class HistoricalArtifact(ValueError):
+    """A release-approved artifact trained under another catalogue: a record, never servable."""
 
 
 def _sha256(file):
@@ -38,11 +42,18 @@ def verify_artifact(path):
     version and evidence format must be the manifest's, and calibration.json
     must carry the validated settings. The returned manifest always carries "state_format", the evidence rendering
     the head was trained and validated on (absent in older manifests: 1).
+
+    An approved artifact whose manifest catalogue is not the current one is
+    historical (probara_ai.contract.historical): it raises HistoricalArtifact,
+    since its option texts are not the ones requests are validated against.
     """
     path = Path(path)
     manifest = json.loads((path / "manifest.json").read_text())
-    if manifest.get("release_approved") is not True or manifest.get("catalogue") != VERSION:
+    if manifest.get("release_approved") is not True:
         raise ValueError("Checkpoint has not passed Probara release gates")
+    if historical(manifest):
+        raise HistoricalArtifact(f"Historical checkpoint: trained under catalogue {manifest.get('catalogue')!r}, "
+                                 f"this service uses {VERSION}; it is a record and is never served")
     files, composed = manifest.get("files", {}), manifest.get("composed", {})
     if (not REQUIRED_FILES <= set(files) or not REQUIRED_COMPOSED <= set(composed) or set(files) & set(composed)
             or manifest.get("head_sha256") != files[HEAD]):

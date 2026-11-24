@@ -44,6 +44,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.migrations
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-migrations
     environment:
       POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
@@ -127,6 +129,11 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+      # Stamped into shared/buildinfo. A release number (e.g. 2.1.0) also makes
+      # the api default LOCATION_WORKER_IMAGE to the worker at that tag; unset
+      # builds report "dev" and default it to :alpha.
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-api
     environment:
       # Local AI client (api + worker only; same token as the local-ai service).
@@ -155,6 +162,12 @@ services:
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
       # Shared with the status-page service; see its definition below.
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"
+      # Subscriber mail links back to pages at STATUS_PAGE_BASE_URL (set with
+      # the custom-domain settings below) or their custom domain; subscriptions
+      # also need SMTP_* and APP_BASE_URL, which this file does not set.
+      # Presented by the status-page service on forwarded subscriptions; the
+      # same value on both. A development value; the release file overrides it.
+      STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:-dev-status-page-internal-token-change-me}"
       # OIDC SSO (off by default; `docker compose --profile sso up` starts a
       # dex test IdP matching these values — see infra/dex/config.yaml).
       OIDC_ENABLED: "${OIDC_ENABLED:-false}"
@@ -167,6 +180,39 @@ services:
       OIDC_SCOPES: "${OIDC_SCOPES:-openid profile email}"
       OIDC_GROUPS_CLAIM: "${OIDC_GROUPS_CLAIM:-groups}"
       AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-365}"
+      # Image the private-location deploy snippets reference. Empty = the
+      # worker at this api's release version (see the build args above).
+      LOCATION_WORKER_IMAGE: "${LOCATION_WORKER_IMAGE:-}"
+      # One-time code required to create the first administrator. Empty (the
+      # development default) leaves that form open until an admin exists.
+      BOOTSTRAP_SETUP_CODE: "${BOOTSTRAP_SETUP_CODE:-}"
+      # Edge security. TRUSTED_PROXY_CIDRS: the reverse proxies whose
+      # X-Forwarded-For / X-Real-IP are believed for audit, session IPs and
+      # rate limits (comma-separated CIDRs or IPs; empty = the TCP peer only;
+      # set the same value on status-page). HSTS max-age in seconds: 0 (off)
+      # for local HTTP, and it is only ever sent on HTTPS requests. The general
+      # rate limit is per credential, per api replica; 0 disables it. Per
+      # client address it covers anonymous calls and failed credentials only
+      # from a public peer or a trusted proxy's client, so in this stack (the
+      # UI's /api proxy and the Docker gateway are private peers) it limits
+      # credentials only.
+      # API_ALLOWED_ORIGINS lists the browser origins allowed credentialed
+      # CORS (empty = APP_BASE_URL's origin, else same-origin only).
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
+      SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
+      API_RATE_LIMIT_PER_MINUTE: "${API_RATE_LIMIT_PER_MINUTE:-600}"
+      API_RATE_LIMIT_BURST: "${API_RATE_LIMIT_BURST:-120}"
+      API_ALLOWED_ORIGINS: "${API_ALLOWED_ORIGINS:-}"
+      # Status page custom domains: the host operators CNAME their domains
+      # to (empty turns the feature off), and the status-page base URL,
+      # whose host is never accepted as a custom domain. TLS for custom
+      # domains terminates at your own reverse proxy in front of status-page.
+      STATUS_PAGE_CNAME_TARGET: "${STATUS_PAGE_CNAME_TARGET:-}"
+      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
+      # Same as on status-page. Custom domains stay off until this or
+      # STATUS_PAGE_BASE_URL names a public status host, since only then
+      # does status-page refuse hostnames that are not verified.
+      STATUS_PAGE_PLATFORM_HOSTS: "${STATUS_PAGE_PLATFORM_HOSTS:-}"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -193,6 +239,8 @@ services:
     build:
       context: .
       dockerfile: scheduler/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-scheduler
     environment:
       HTTP_PORT: "8081"
@@ -232,6 +280,8 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-worker
     environment:
       # Local AI client (api + worker only; same token as the local-ai service).
@@ -314,6 +364,8 @@ services:
     build:
       context: .
       dockerfile: status-page/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-status-page
     environment:
       HTTP_PORT: "8082"
@@ -321,8 +373,12 @@ services:
       LOG_LEVEL: "info"
       POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
       NATS_URL: "nats://nats:4222"
-      STATUS_PAGE_BASE_URL: "http://localhost:8082"
-      STATUS_PAGE_API_BASE_URL: "http://api:8080"
+      # Same value as on api, which refuses its host as a custom domain.
+      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
+      # Where visitors' email subscription requests are forwarded (the API
+      # stores subscribers; this service stays read-only).
+      STATUS_PAGE_INTERNAL_API_URL: "http://api:8080"
+      STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:-dev-status-page-internal-token-change-me}"
       # Shared with the api service; gates draft-template previews with a
       # token minted by the API. Leave unset to allow open previews (dev).
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"
@@ -340,6 +396,32 @@ services:
       STATUS_PAGE_VAPID_PUBLIC_KEY: "${STATUS_PAGE_VAPID_PUBLIC_KEY:-}"
       STATUS_PAGE_VAPID_PRIVATE_KEY: "${STATUS_PAGE_VAPID_PRIVATE_KEY:-}"
       STATUS_PAGE_VAPID_SUBJECT: "${STATUS_PAGE_VAPID_SUBJECT:-}"
+      # Signs visitor sessions on password and private status pages (at
+      # least 32 characters; `openssl rand -hex 32`). Unset leaves those pages
+      # closed while public and unlisted pages serve as usual;
+      # scripts/install.sh generates one for release installs.
+      STATUS_PAGE_SESSION_SECRET: "${STATUS_PAGE_SESSION_SECRET:-}"
+      # Secure flag of that session cookie: empty is on when
+      # STATUS_PAGE_BASE_URL is https://, else per request over HTTPS (behind
+      # a TLS proxy that needs TRUSTED_PROXY_CIDRS). "true"/"false" force it.
+      STATUS_PAGE_COOKIE_SECURE: "${STATUS_PAGE_COOKIE_SECURE:-}"
+      # Same TRUSTED_PROXY_CIDRS and HSTS max-age as on api (the push rate
+      # limit keys on the resolved client address). APP_BASE_URL, the
+      # operator UI origin, joins every page's CSP frame-ancestors; empty
+      # (the default) lets any site frame the draft preview route, so the
+      # template editor works from whatever host serves the UI.
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
+      SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
+      APP_BASE_URL: "${APP_BASE_URL:-}"
+      # Custom domains are matched on Host; "true" matches X-Forwarded-Host
+      # instead, believed only from TRUSTED_PROXY_CIDRS peers (for a proxy
+      # that rewrites Host).
+      STATUS_PAGE_TRUST_FORWARDED_HOST: "${STATUS_PAGE_TRUST_FORWARDED_HOST:-false}"
+      # Hosts besides STATUS_PAGE_BASE_URL's that serve every page under
+      # /public/status/ (comma-separated). Once a public platform host is
+      # configured, any other public hostname is served only as a verified
+      # custom domain; with the localhost default, every host still is.
+      STATUS_PAGE_PLATFORM_HOSTS: "${STATUS_PAGE_PLATFORM_HOSTS:-}"
     ports:
       - "8082:8082"
       - "9093:9093"
@@ -362,6 +444,8 @@ services:
     build:
       context: .
       dockerfile: alerter/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-alerter
     environment:
       HTTP_PORT: "8084"

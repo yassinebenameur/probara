@@ -96,13 +96,50 @@ spec:
         {{- end }}
         # The API signs draft-preview tokens with this; the status page
         # verifies them, so both workloads read the same key.
+        {{- /* Optional only in the chart-wide Secret (one that predates the
+        key keeps working, previews stay open); a Secret named for it alone
+        must hold it, or a typo in its name or key would quietly switch
+        preview-token enforcement off. Same rule on the status page. */}}
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPagePreviewSecret "secret" .Values.secrets.statusPagePreviewSecretExistingSecret) }}
-        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" true) | nindent 8 }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" (not .Values.secrets.statusPagePreviewSecretExistingSecret)) | nindent 8 }}
         {{- end }}
-        {{- with .Values.api.publicNatsURL }}
+        {{- /* First-admin setup code. Optional only in the chart-wide or
+        chart-managed Secret, so installs whose Secret predates it keep
+        starting (form stays open); a Secret named for it alone must exist,
+        or a typo would start the API with no code and an open form. */}}
+        {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.bootstrapSetupCode "secret" .Values.secrets.bootstrapSetupCodeExistingSecret) }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "BOOTSTRAP_SETUP_CODE" "key" "bootstrap_setup_code" "secret" .Values.secrets.bootstrapSetupCodeExistingSecret "secretKey" .Values.secrets.bootstrapSetupCodeExistingSecretKey "optional" (not .Values.secrets.bootstrapSetupCodeExistingSecret)) | nindent 8 }}
+        {{- end }}
+        {{- with (include "monitoring-platform.publicNatsUrl" .) }}
         - name: PUBLIC_NATS_URL
           value: {{ . | quote }}
         {{- end }}
+        # Status page custom domains: the CNAME target operators point their
+        # hostnames at (empty turns the feature off), and the status-page
+        # base URL, whose host is refused as a custom domain and which
+        # subscriber mail links pages without a custom domain to. The API also
+        # hands the base URL to the operator UI (GET /auth-context) for its
+        # status-page links and preview: the UI image is prebuilt, so its own
+        # build-time setting cannot carry a per-install value.
+        {{- with (include "monitoring-platform.statusPageCnameTarget" .) }}
+        - name: STATUS_PAGE_CNAME_TARGET
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.statusPage.baseUrl }}
+        - name: STATUS_PAGE_BASE_URL
+          value: {{ . | quote }}
+        {{- end }}
+        # The status-page's other platform hosts: refused as custom domains,
+        # and with the base URL what tells the API the status-page refuses
+        # unverified hostnames (custom domains stay off otherwise).
+        {{- with (include "monitoring-platform.statusPagePlatformHosts" .) }}
+        - name: STATUS_PAGE_PLATFORM_HOSTS
+          value: {{ . | quote }}
+        {{- end }}
+        # Deploy snippets for private locations reference the worker this
+        # release ships, never a floating tag (see api.locationWorkerImage).
+        - name: LOCATION_WORKER_IMAGE
+          value: {{ .Values.api.locationWorkerImage | default (printf "%s-worker:%s" .Values.image.repository (include "monitoring-platform.imageTag" .)) | quote }}
         - name: AUDIT_RETENTION_DAYS
           value: {{ .Values.auth.auditRetentionDays | quote }}
         {{- if .Values.auth.oidc.enabled }}
@@ -132,6 +169,10 @@ spec:
         {{- with (include "monitoring-platform.smtpEnv" .) }}
         {{- . | nindent 8 }}
         {{- end }}
+        {{- with (include "monitoring-platform.statusPageInternalTokenEnv" .) }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        {{- include "monitoring-platform.edgeEnv" (dict "ctx" . "component" "api") | nindent 8 }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

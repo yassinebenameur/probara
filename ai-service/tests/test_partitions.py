@@ -47,5 +47,5 @@ def test_trainers_refuse_a_used_compose_directory_before_deleting(tmp_path, scri
 def test_score_cache_identity_covers_the_scoring_code():
     pytest.importorskip("laya")
     import validate_cpu
-    assert {p.name for p in validate_cpu.SCORE_CODE} == {"validate_cpu.py", "train.py", "contract.py", "cpu.py"}
+    assert {p.name for p in validate_cpu.SCORE_CODE} == {"validate_cpu.py", "train.py", "contract.py", "cpu.py", "guard.py"}
     assert all(p.is_file() for p in validate_cpu.SCORE_CODE)

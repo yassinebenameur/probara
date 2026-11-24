@@ -12,13 +12,19 @@ import type {
 import { getMonitor, getMonitors } from '@/lib/api';
 import { componentStatus, type ComponentStatus } from '@/lib/status-page-status';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
+import { useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import { pluralize } from '@/lib/format';
 import { isApplePlatform, modalOpen, shortcutLabel } from '@/lib/shortcuts';
 import FormField from '@/components/ui/FormField';
 import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
+import Radio from '@/components/ui/Radio';
+import { PAGE_TEMPLATE_OPTIONS } from '@/lib/status-page-templates';
 import SectionList from './SectionList';
 import PagePreview from './PagePreview';
+import PageAccessFields from './PageAccessFields';
+import { pageAccessError, pageAccessPayload } from '@/lib/status-page-access';
+import { SeoSection, ShareSection } from './SearchAndShare';
 import {
   DEFAULT_PRIMARY,
   DEFAULT_SECONDARY,
@@ -60,6 +66,15 @@ function snapshot(state: FormState): string {
       secondary_color: state.basics.secondary_color.trim(),
     },
     enablePushNotifications: state.enablePushNotifications,
+    template: state.template,
+    visibility: state.visibility,
+    password: state.password !== '',
+    clearPassword: state.clearPassword,
+    seo: {
+      title: state.seo.title.trim(),
+      description: state.seo.description.trim(),
+      allowIndexing: state.seo.allowIndexing,
+    },
     sections: state.sections.map((section) => ({
       title: section.title.trim(),
       monitors: section.monitors.map((m) => ({
@@ -77,6 +92,7 @@ export default function StatusPageForm({
   loading = false,
 }: StatusPageFormProps) {
   const { state, dispatch } = useStatusPageFormState(statusPage);
+  const statusPageBaseUrl = useStatusPageBaseUrl();
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [monitorsLoading, setMonitorsLoading] = useState(true);
   // Direct members per group. The monitor list omits member_ids, so groups
@@ -85,6 +101,7 @@ export default function StatusPageForm({
   const requestedGroupsRef = useRef(new Set<string>());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const formRef = useRef<HTMLFormElement>(null);
+  const accessRef = useRef<HTMLElement>(null);
   // Once the user edits the slug by hand, stop deriving it from the title.
   const slugTouchedRef = useRef(!!statusPage);
 
@@ -241,12 +258,18 @@ export default function StatusPageForm({
         nextErrors[`section-${section.id}`] = `Section ${index + 1} needs a title`;
       }
     });
+    const accessError = pageAccessError(state, statusPage?.has_password === true);
+    if (accessError) {
+      nextErrors.access = accessError;
+    }
 
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       if (nextErrors.slug || nextErrors.title) {
-        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         formRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+      } else if (nextErrors.access) {
+        accessRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
       }
       return;
     }
@@ -290,7 +313,15 @@ export default function StatusPageForm({
       monitor_ids: orderedMonitorIds,
       monitor_display_names: monitorDisplayNames,
       sections: normalizedSections,
-      settings: { enable_push_notifications: state.enablePushNotifications },
+      // '' clears an SEO override; the API trims and stores nothing.
+      settings: {
+        enable_push_notifications: state.enablePushNotifications,
+        seo_title: state.seo.title.trim(),
+        seo_description: state.seo.description.trim(),
+        allow_search_indexing: state.seo.allowIndexing,
+        template: state.template,
+      },
+      ...pageAccessPayload(state),
     };
 
     await onSubmit(requestData);
@@ -299,7 +330,7 @@ export default function StatusPageForm({
   const publicUrl = resolveStatusPagePublicUrl({
     slug: state.basics.slug.trim() || 'your-page',
     public_url: statusPage?.public_url,
-  });
+  }, statusPageBaseUrl);
 
   const sectionCount = state.sections.length;
   const monitorCount = derived.membershipCount;
@@ -398,6 +429,34 @@ export default function StatusPageForm({
             />
           </div>
 
+          <fieldset>
+            <legend className="mb-2 text-ui font-medium text-white">Page design</legend>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {PAGE_TEMPLATE_OPTIONS.map((option) => (
+                // The whole card is the radio's label; selected reads as a
+                // neutral raised card, never orange.
+                <Radio
+                  key={option.value}
+                  name="status-page-template"
+                  value={option.value}
+                  checked={state.template === option.value}
+                  onChange={() => dispatch({ type: 'set_template', value: option.value })}
+                  label={<span className="font-medium text-white">{option.label}</span>}
+                  description={option.description}
+                  stretch
+                  className={`w-full rounded-xl border !p-3 transition-colors ${
+                    state.template === option.value
+                      ? 'border-[var(--input-edge)] bg-control-hover'
+                      : 'border-edge-control bg-control hover:bg-control-hover'
+                  }`}
+                />
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              A published custom template (Template editor) takes precedence over this choice.
+            </p>
+          </fieldset>
+
           <div className="glass-well p-4">
             <Checkbox
               checked={state.enablePushNotifications}
@@ -436,6 +495,42 @@ export default function StatusPageForm({
           dispatch={dispatch}
           onAddSection={handleAddSection}
         />
+      </div>
+
+      <div className="min-w-0 space-y-6 xl:col-start-1 xl:row-start-3">
+        {/* Who may see the page comes first: it decides what SEO and Share
+            below can do (only public pages are indexed; a gated page's
+            feed and badges work only for visitors who unlocked it). */}
+        <section ref={accessRef} className="glass p-6" aria-labelledby="sp-access-heading">
+          <h3 id="sp-access-heading" className="mb-1 text-title font-semibold text-white">Access</h3>
+          <p className="mb-5 text-xs text-slate-400">
+            Who can open the page. Kiosk tokens for wall displays are managed below the form once the page is saved.
+          </p>
+          <PageAccessFields
+            visibility={state.visibility}
+            hasStoredPassword={statusPage?.has_password === true}
+            password={state.password}
+            clearPassword={state.clearPassword}
+            error={errors.access}
+            onVisibilityChange={(value) => dispatch({ type: 'set_visibility', value })}
+            onPasswordChange={(value) => dispatch({ type: 'set_password', value })}
+            onClearPasswordChange={(value) => dispatch({ type: 'set_clear_password', value })}
+          />
+        </section>
+        <SeoSection
+          pageTitle={state.basics.title}
+          value={state.seo}
+          visibility={state.visibility}
+          onChange={(value) => dispatch({ type: 'set_seo', value })}
+        />
+        {/* From the saved page: its links and badges exist only once saved. */}
+        {statusPage && (
+          <ShareSection
+            statusPage={statusPage}
+            publicUrl={resolveStatusPagePublicUrl(statusPage, statusPageBaseUrl)}
+            monitorsById={monitorsById}
+          />
+        )}
       </div>
 
       {/* Pinned to the viewport only while there is something to save: a clean

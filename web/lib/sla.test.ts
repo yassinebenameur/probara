@@ -101,3 +101,52 @@ test('cause share and caveat', () => {
   assert.match(caveat, /only at medium or high confidence/);
   assert.match(caveat, /3 of 4 monitor outages had a triaged alert\.$/);
 });
+
+test('burn: window labels, exhaustion copy in the SLA timezone', async () => {
+  const { burnWindowLabel, exhaustionCopy } = await import('./sla');
+  assert.equal(burnWindowLabel('period', false), 'Period to date');
+  assert.equal(burnWindowLabel('period', true), 'Whole period');
+  assert.equal(burnWindowLabel('24h', false), 'Last 24 hours');
+  assert.equal(exhaustionCopy({ exhaustion: 'exhausted' }, false, 'UTC'), "Exhausted: the period's error budget is spent");
+  assert.equal(
+    exhaustionCopy({ exhaustion: 'projected', projected_exhaustion_at: '2026-09-20T08:00:00Z' }, false, 'Europe/Paris'),
+    "Runs out 20 Sep 2026, 10:00 at the last 24 hours' pace",
+  );
+  assert.equal(exhaustionCopy({ exhaustion: 'not_projected' }, false, 'UTC'), 'Not projected to run out this period');
+  assert.equal(exhaustionCopy({ exhaustion: 'not_projected' }, true, 'UTC'), 'Lasted the period');
+  assert.equal(exhaustionCopy({ exhaustion: 'no_data' }, false, 'UTC'), 'No data to project');
+});
+
+test('burn-down rows span the whole period with the even spend from 100% to 0%', async () => {
+  const { burnDownRows } = await import('./sla');
+  const period = { start: '2026-09-01T00:00:00Z', end: '2026-10-01T00:00:00Z' } as SlaReport['period'];
+  assert.deepEqual(burnDownRows({ period, burn: undefined }), [], 'a legacy report draws nothing');
+  const rows = burnDownRows({
+    period,
+    burn: {
+      windows: [], exhaustion: 'not_projected',
+      burn_down: [
+        { date: '2026-09-01', end: '2026-09-02T00:00:00Z', consumed_seconds: 0, remaining_pct: 100 },
+        { date: '2026-09-02', end: '2026-09-02T12:00:00Z', consumed_seconds: 1296, remaining_pct: 50 },
+      ],
+    },
+  });
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows[0], { ts: Date.parse(period.start), remaining: 100, even: 100 });
+  assert.equal(rows[2].remaining, 50);
+  assert.ok(Math.abs(rows[2].even - (100 - (100 * 1.5) / 30)) < 1e-9);
+  assert.deepEqual(rows[3], { ts: Date.parse(period.end), remaining: null, even: 0 });
+});
+
+test('recipients: split on commas and lines, lower-cased, de-duplicated, plain addresses only', async () => {
+  const { parseRecipients, recipientsError } = await import('./sla');
+  const parsed = parseRecipients(' Ops@Example.com, cfo@example.com\nops@example.com;b+tag@x.example.org ');
+  assert.deepEqual(parsed, { recipients: ['ops@example.com', 'cfo@example.com', 'b+tag@x.example.org'], invalid: [] });
+  assert.equal(recipientsError(parsed), null);
+  const bad = parseRecipients('Ops <ops@example.com>\n"x"@example.com a..b@example.com nope');
+  assert.deepEqual(bad.recipients, []);
+  assert.match(recipientsError(bad) ?? '', /Not a plain email address/);
+  assert.equal(recipientsError(parseRecipients('  ')), 'Add at least one recipient.');
+  const many = Array.from({ length: 51 }, (_, i) => `r${i}@example.com`).join(',');
+  assert.match(recipientsError(parseRecipients(many)) ?? '', /At most 50/);
+});

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/yassinebenameur/probara/shared/buildinfo"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
@@ -22,7 +23,7 @@ func main() {
 		migrationsPath = path
 	}
 
-	fmt.Printf("Running database migrations from %s...\n", migrationsPath)
+	fmt.Printf("Probara %s: running database migrations from %s...\n", buildinfo.Version, migrationsPath)
 	fmt.Printf("Connecting to database...\n")
 
 	// Retry connection for up to 30 seconds (in case DB is starting up)

@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	metricsqueryservice "github.com/yassinebenameur/probara/api/internal/services/metricsquery"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -31,18 +32,18 @@ func NewHandler(service *metricsqueryservice.Service, log *logger.Logger) *Handl
 func (h *Handler) scope(w http.ResponseWriter, r *http.Request) (monitorID, tenantID uuid.UUID, ok bool) {
 	tenantIDStr, found := ctxpkg.GetTenantID(r.Context())
 	if !found {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		apierrors.WriteUnauthorizedError(w, "unauthorized")
 		return uuid.Nil, uuid.Nil, false
 	}
 	tenantID, err := uuid.Parse(tenantIDStr)
 	if err != nil {
 		h.log.WithError(err).Error("invalid tenant_id in context")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "internal server error")
 		return uuid.Nil, uuid.Nil, false
 	}
 	monitorID, err = uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		http.Error(w, "invalid monitor ID", http.StatusBadRequest)
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return uuid.Nil, uuid.Nil, false
 	}
 	return monitorID, tenantID, true
@@ -57,18 +58,18 @@ func (h *Handler) HandleListSeries(w http.ResponseWriter, r *http.Request) {
 	items, err := h.service.ListSeries(r.Context(), monitorID, tenantID)
 	if err != nil {
 		if errors.Is(err, metricsqueryservice.ErrMonitorNotFound) {
-			http.Error(w, "monitor not found", http.StatusNotFound)
+			apierrors.WriteNotFoundError(w, "monitor not found")
 			return
 		}
 		h.log.WithError(err).Error("list metric series failed")
-		http.Error(w, "failed to list metric series", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "failed to list metric series")
 		return
 	}
 	if items == nil {
 		items = []metricsqueryservice.SeriesItem{}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"items": items})
+	_ = json.NewEncoder(w).Encode(metricsqueryservice.SeriesListResponse{Items: items})
 }
 
 // HandleQuery handles POST /api/v1/monitors/{id}/metrics/query.
@@ -79,19 +80,19 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	var req metricsqueryservice.QueryRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		apierrors.WriteValidationError(w, "invalid request body")
 		return
 	}
 	resp, err := h.service.Query(r.Context(), monitorID, tenantID, req)
 	if err != nil {
 		switch {
 		case errors.Is(err, metricsqueryservice.ErrMonitorNotFound):
-			http.Error(w, "monitor not found", http.StatusNotFound)
+			apierrors.WriteNotFoundError(w, "monitor not found")
 		case metricsqueryservice.IsValidationError(err):
-			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			apierrors.WriteError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		default:
 			h.log.WithError(err).Error("metric query failed")
-			http.Error(w, "metric query failed", http.StatusInternalServerError)
+			apierrors.WriteInternalError(w, "metric query failed")
 		}
 		return
 	}

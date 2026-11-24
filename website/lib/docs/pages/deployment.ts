@@ -43,6 +43,11 @@ export const DEPLOYMENT_PAGE: DocPage = {
               'Compose services only. There is no frontend service in the current root Compose file.',
             ],
             [
+              '`scripts/install.sh` ([release Compose](#release-compose))',
+              'A single host from published images',
+              'Every service, the operator UI and an `edge` proxy from the release images on GHCR, with generated secrets; nothing is built.',
+            ],
+            [
               'Helm chart',
               'Kubernetes staging and production',
               'Frontend, services, local AI inference, migration hook, and optionally embedded PostgreSQL/NATS in the cluster.',
@@ -109,7 +114,7 @@ openssl rand -base64 32    # PROBARA_SECRETS_KEY`,
           tone: 'warning',
           title: 'Compose ships an insecure hardcoded secret',
           text:
-            'The Compose model hardcodes an insecure `ADMIN_JWT_SECRET` default and never references `PUBLIC_BASE_URL`; the interpolated Compose variables (`STATUS_PAGE_PREVIEW_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `LOCAL_AI_*`) are optional, and `LOCAL_AI_TOKEN` falls back to a public development token. Populate `.env` anyway so the platform runs on real values instead of placeholders.',
+            'The Compose model hardcodes an insecure `ADMIN_JWT_SECRET` default and never references `PUBLIC_BASE_URL`; the interpolated Compose variables (`STATUS_PAGE_PREVIEW_SECRET`, `STATUS_PAGE_SESSION_SECRET`, `STATUS_PAGE_INTERNAL_TOKEN`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `LOCAL_AI_*`) are optional, and `LOCAL_AI_TOKEN` falls back to a public development token. Populate `.env` anyway so the platform runs on real values instead of placeholders. The [release override](#release-compose) has none of these defaults: it requires every platform credential.',
         },
       ],
     },
@@ -236,7 +241,7 @@ docker compose down`,
           items: [
             'API, scheduler, and worker all use stream `check-jobs` and subject `check.job`, so scheduled and on-demand jobs share one subject contract. If you change these values, change them on all three services together.',
             'The root `.env` file is not passed as a service `env_file`; only variables explicitly declared in Compose reach containers. `PROBARA_SECRETS_KEY` is forwarded from the shell environment to the api, scheduler, worker, and alerter services.',
-            'SMTP, asynchronous notifications, public NATS authorization, scheduler mesh/purge, and many result-ingest settings are not wired.',
+            'SMTP, asynchronous notifications, public NATS authorization, scheduler mesh/purge, and many result-ingest settings are not wired. The [release override](#release-compose) adds SMTP and NATS authorization.',
             'Without an exported `LOCAL_AI_TOKEN` (shell or `.env`), `local-ai`, API and worker share a fixed development token that is public in the repository. That is tolerable only because port 8090 is bound to loopback; set your own (`openssl rand -hex 32`) on any shared host. `make start-all-local` generates a per-checkout token instead.',
             'The commented private-location worker example omits required `LOCATION_CREDENTIAL` and should not be enabled as written.',
             'The API and worker correctly share the `synthetic_artifacts` volume used for failure screenshots. Trace and HAR capture are configured by the schema but are not implemented by the current worker.',
@@ -248,6 +253,67 @@ docker compose down`,
           title: 'Do not hide these gaps with documentation-only values',
           text:
             'Adding an entry to `.env` does not repair the Compose wiring for variables that are not forwarded. Customize the service environment explicitly for anything beyond the declared variables, and keep queue stream/subject values identical across the API, scheduler, and workers.',
+        },
+      ],
+    },
+    {
+      id: 'release-compose',
+      title: 'Release Compose install',
+      intro:
+        'For a single host without building anything: `docker-compose.release.yml` is an override of `docker-compose.yml` that swaps every build for the release image on GHCR (`ghcr.io/yassinebenameur/probara-<service>:${PROBARA_VERSION}`), adds the operator UI behind an `edge` reverse proxy, turns NATS authentication and the websocket listener on, and makes every platform credential a required variable. `scripts/install.sh` downloads both files at a release tag and writes `.env`.',
+      blocks: [
+        {
+          type: 'code',
+          language: 'bash',
+          title: 'Install, upgrade, operate',
+          code: `# Newest release (prereleases included) into ./probara, then start it
+curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/main/scripts/install.sh | bash
+
+# A pinned release into another directory
+bash install.sh --version 2.1.0 --dir /opt/probara
+
+# Upgrade: rewrites PROBARA_VERSION in .env, keeps every secret
+bash install.sh --version 2.2.0 --dir /opt/probara
+
+cd /opt/probara && docker compose ps     # .env names both Compose files`,
+        },
+        {
+          type: 'list',
+          items: [
+            'The script is idempotent and never overwrites a value already in `.env`; it generates only missing or empty secrets: `ADMIN_JWT_SECRET`, `PROBARA_SECRETS_KEY`, `POSTGRES_PASSWORD`, `NATS_PLATFORM_PASSWORD`, `LOCAL_AI_TOKEN`, `STATUS_PAGE_PREVIEW_SECRET`, `STATUS_PAGE_SESSION_SECRET`, `STATUS_PAGE_INTERNAL_TOKEN`, `BOOTSTRAP_SETUP_CODE`, and the auth-callout issuer pair `NATS_LOCATION_AUTH_ISSUER_SEED` / `_PUBLIC_KEY` (made with `nk` in the pinned `natsio/nats-box` image). Every form Compose accepts counts as set, including `export KEY=v`, `KEY = v`, `KEY: v`, quoted values and inline comments. `--version` is the one value it replaces. Options: `--dir`, `--version`, `--source <checkout>` (copy the Compose files instead of downloading), `--no-start`.',
+            'Back up `.env`. `PROBARA_SECRETS_KEY` decrypts every stored credential, and `POSTGRES_PASSWORD` is fixed when the database volume is first created.',
+            'First administrator: the UI is published, so the first-administrator form asks for a one-time setup code (`BOOTSTRAP_SETUP_CODE`, five groups of four characters). The script generates it once, prints it with the UI address when it finishes, and keeps it in `.env`; anyone who reaches the UI without it cannot claim the install. It has no effect once the first administrator exists.',
+            'Generated values are hex or base64 because Compose embeds the database and NATS passwords in connection URLs; if you write your own, keep them URL-safe and free of `$`.',
+            'Credentials of optional features stay optional and never fall back to a development value: `SMTP_PASSWORD`, `OIDC_CLIENT_SECRET` (empty instead of the Dex development secret) and `STATUS_PAGE_VAPID_PRIVATE_KEY`.',
+            'Published ports: the UI on `3000` (`PROBARA_UI_PORT`), served by the `edge` proxy (Caddy), and status pages on `8082` (`PROBARA_STATUS_PAGE_PORT`). The API is reached through the UI\'s `/api` proxy; the frontend itself, PostgreSQL, NATS client and monitoring ports, and every metrics port stay on the Compose networks. Put HTTPS in front, then set `PUBLIC_BASE_URL` (the UI origin) and `ADMIN_COOKIE_SECURE=true` in `.env` and run `docker compose up -d`.',
+            'Client IPs: every browser request reaches the API through the frontend, so without help the API would see one client for everyone. `edge` replaces any `X-Forwarded-For` with the client it resolves and drops every other client-address header (`X-Real-IP`, `True-Client-IP`, `Forwarded`, `X-Client-IP`, `CF-Connecting-IP`, `X-Cluster-Client-IP` and similar); the frontend, reachable only through `edge`, forwards that value, and the API trusts exactly the frontend\'s address (`TRUSTED_PROXY_CIDRS` = `PROBARA_FRONTEND_IP/32`, default `172.31.213.10`). `edge`, the frontend and the API share a separate `probara-front` network that the worker is not on, because the worker sends tenant-defined HTTP requests with arbitrary headers and must not be able to speak to a trusted proxy. If `probara-front`\'s subnet (`PROBARA_FRONT_SUBNET`, default `172.31.213.0/24`) collides with a host network, change it together with `PROBARA_FRONTEND_IP` (inside the subnet) and `PROBARA_FRONT_IP_RANGE` (default `172.31.213.128/25`, the range dynamic addresses come from, which must exclude the frontend\'s). A client cannot choose its address by sending its own header.',
+            'Behind your own TLS proxy or load balancer, set `PROBARA_TRUSTED_PROXIES` (space-separated CIDRs) to its address as the `edge` container sees it, or every client looks like that proxy; `edge` then takes the rightmost untrusted address of the incoming chain, so that proxy must append to `X-Forwarded-For`. Where Docker\'s userland proxy handles published ports (Docker Desktop, rootless), every connection arrives from the network gateway and real client addresses are lost before `edge`; on Linux with the default iptables publishing they are preserved.',
+            'Private locations: the broker\'s [websocket listener](#nats-websocket) is published on `127.0.0.1:8443` (`NATS_WEBSOCKET_PUBLISH`) for a TLS reverse proxy on the host to front on 443. Set `PUBLIC_NATS_URL=wss://<that host>` in `.env` to enable the deploy snippets.',
+            'Status page [custom domains](/docs/status-pages/#custom-domains): set `STATUS_PAGE_BASE_URL` (the installer writes it empty) to your public status URL and `STATUS_PAGE_CNAME_TARGET` in `.env` to the host your status pages are published on — the API keeps custom domains off until the base URL (or `STATUS_PAGE_PLATFORM_HOSTS`) is a public name — and terminate TLS for each custom domain in your own reverse proxy in front of the status-page port, passing the original `Host` header (see the example below). The bundled `edge` proxy serves only the UI.',
+            'Local AI runs through the `local-ai` Compose profile, which the script puts in `COMPOSE_PROFILES`. To run without it, set `COMPOSE_PROFILES=` and `LOCAL_AI_DISABLED=true` in `.env`.',
+            'SMTP: fill `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` and `APP_BASE_URL` in `.env`; the release override passes them to the API, worker and alerter.',
+            'Public origins: the script leaves `APP_BASE_URL` (the UI) and `STATUS_PAGE_BASE_URL` (the status pages, e.g. `https://status.example.com`) empty in `.env` and says so when it finishes; nothing defaults to `localhost`. `STATUS_PAGE_BASE_URL` reaches the status service (canonical links, `og:url`, feed links, push deep links), the API (which hands it to the operator UI for its status-page links and template preview) and the frontend (that preview\'s CSP). Empty, the status service leaves those links out or root-relative, and the UI links to status pages on its own origin, which on this stack is not where they are served: set it once the host is reachable.',
+            'Migrations: the `migrations` service runs to completion before the API, scheduler, worker, status service and alerter start (`depends_on` with `service_completed_successfully`), on the first start and after every upgrade.',
+            'Container names are fixed (`probara-*`), so one host runs either this stack or the development stack, not both. Needs Docker Compose 2.24.4 or newer.',
+          ],
+        },
+        {
+          type: 'code',
+          language: 'text',
+          title: 'Caddyfile on the host: status pages and their custom domains over HTTPS',
+          code: `# The platform's status host; also the CNAME target
+# (STATUS_PAGE_BASE_URL=https://status.example.com and
+# STATUS_PAGE_CNAME_TARGET=status.example.com in .env).
+status.example.com, status.customer.example {
+	# Caddy obtains a certificate per name and forwards the original Host,
+	# which is what selects a page on its custom domain.
+	reverse_proxy 127.0.0.1:8082
+}`,
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Set `STATUS_PAGE_BASE_URL` to the platform\'s public status URL: with it, the status service serves its pages only on that host (and `STATUS_PAGE_PLATFORM_HOSTS`), so adding a custom domain to the site list before it is verified is harmless — it answers not found until then, and again if the domain fails or is removed in the UI. Left empty (the installer\'s default), the service cannot tell its own hosts from others and serves every page on any host but a verified domain: never route a custom domain to it like that. Caddy\'s certificate request for a domain succeeds only once its CNAME resolves to this host. Session cookies on custom domains are always `Secure`.',
         },
       ],
     },
@@ -366,6 +432,21 @@ kubectl -n probara get jobs`,
               'Auth-callout account seed for the API. The matching public key stays a plain ConfigMap value.',
             ],
             ['`nats.image`', '`nats:2.10-alpine`', 'Embedded broker image.'],
+            [
+              '`nats.websocket.enabled`, `.port`',
+              '`false`, `8443`',
+              'Serves the embedded broker\'s [websocket listener](#nats-websocket) (plaintext inside the cluster) and adds a `websocket` port to the NATS Service. The broker then reads a `nats.conf` even without auth, and a config change rolls the NATS pod.',
+            ],
+            [
+              '`nats.websocket.ingress.enabled`, `.host`, `.path`, `.className`, `.annotations`, `.tls`',
+              '`false`, empty, `/`, `ingress.className`, nginx proxy timeouts of 3600 s, `[]`',
+              'A separate Ingress for the listener, where TLS terminates. Requires `nats.websocket.enabled`, `nats.auth.enabled` and a `tls` entry (the render fails otherwise: location credentials would cross the network in clear while the API advertises `wss://`). On a host that is also in `ingress.hosts`, give it its own path such as `/nats`: the render refuses `/` there.',
+            ],
+            [
+              '`nats.websocket.ingress.tlsTerminatedUpstream`',
+              '`false`',
+              'Set `true` only when a load balancer in front of the ingress (for example an AWS ALB holding the certificate) terminates TLS, so `tls` may stay empty.',
+            ],
             ['`nats.persistence.enabled`', '`true`', 'Persist JetStream state.'],
             ['`nats.persistence.size`', '`1Gi`', 'NATS PVC request.'],
             ['`nats.persistence.storageClass`', 'Empty', 'Cluster default storage class.'],
@@ -430,7 +511,22 @@ kubectl -n probara get jobs`,
             [
               '`secrets.statusPagePreviewSecret`',
               'Empty',
-              'Shared key for status page draft-preview tokens (`STATUS_PAGE_PREVIEW_SECRET`), rendered into both the API and the status service. Empty leaves preview-token enforcement off.',
+              'Shared key for status page draft-preview tokens (`STATUS_PAGE_PREVIEW_SECRET`), rendered into both the API and the status service. Empty leaves preview-token enforcement off. From `secrets.statusPagePreviewSecretExistingSecret` (key `status_page_preview_secret`) the key must exist, so a misspelt Secret or key stops the pods instead of quietly turning enforcement off; in the chart-wide `secrets.existingSecret` it stays optional.',
+            ],
+            [
+              '`secrets.statusPageSessionSecret`',
+              'Empty',
+              'Signs visitor sessions on [password and private status pages](/docs/status-pages/#visibility) (`STATUS_PAGE_SESSION_SECRET`, status service only, at least 32 characters). Empty with a chart-managed `adminJwtSecret`: derived from it (a domain-separated SHA-256), stable across upgrades and GitOps renders; rotating the JWT secret rotates it and signs visitors out, and with the shipped placeholder JWT secret it is a well-known value like that secret. When `adminJwtSecret` comes from an existing Secret the chart cannot derive it: set this value or `secrets.statusPageSessionSecretExistingSecret` (key `status_page_session_secret`, which must exist), or those pages stay closed and the install notes say so. With the chart-wide `secrets.existingSecret`, add `status_page_session_secret` to that Secret (optional there).',
+            ],
+            [
+              '`secrets.statusPageInternalToken`',
+              'Empty',
+              'Presented by the status service when it forwards a visitor\'s [email subscription](/docs/status-pages/#email-subscribers) to the API (`STATUS_PAGE_INTERNAL_TOKEN`, rendered into both, at least 32 characters); the API answers those routes for nothing else. Empty with a chart-managed `adminJwtSecret`: derived from it like the session secret. With an external JWT secret set it or `secrets.statusPageInternalTokenExistingSecret` (key `status_page_internal_token`), or no page can take email subscribers. With the chart-wide `secrets.existingSecret`, add `status_page_internal_token` to that Secret (optional there).',
+            ],
+            [
+              '`statusPage.cookieSecure`',
+              'Empty (derived)',
+              'Secure attribute of the visitor session cookie (`STATUS_PAGE_COOKIE_SECURE`). Empty: on when `statusPage.baseUrl` is `https://`, else per request over HTTPS, which behind the ingress needs `trustedProxyCIDRs`. Set `"true"` behind TLS without a base URL.',
             ],
             [
               '`api.cookieSecure`',
@@ -445,7 +541,7 @@ kubectl -n probara get jobs`,
             [
               '`migrations.enabled`',
               '`true`',
-              'Creates a post-install/post-upgrade migration hook Job.',
+              'Creates the migration hook Job: `post-install` on a first install (after the embedded PostgreSQL exists), `pre-upgrade` on every upgrade, so new pods never start against an old schema. See [Migrations, upgrades, and rollback](#migrations-upgrades).',
             ],
             [
               '`migrations.image.repository`, `.tag`, `.resources`',
@@ -455,12 +551,17 @@ kubectl -n probara get jobs`,
             [
               '`api.enabled`, `.replicas`, `.httpPort`, `.metricsPort`, `.logLevel`',
               '`true`, `2`, `8080`, `9090`, `info`',
-              'API workload. `publicBaseURL` is required when enabled.',
+              'API workload. `publicBaseURL` is optional: set it to the external origin (agent installers, push webhook URLs, the default OIDC callback, and a Secure session cookie when it is `https://`).',
             ],
             [
               '`api.publicBaseURL`, `.publicNatsURL`',
               'Empty',
-              'External API origin and optional external TLS/WSS NATS endpoint.',
+              'External API origin and optional external TLS/WSS NATS endpoint. With `.publicNatsURL` empty and the NATS websocket ingress on, the API advertises `wss://<nats.websocket.ingress.host><path>`.',
+            ],
+            [
+              '`api.locationWorkerImage`',
+              'Empty: `{image.repository}-worker:{image tag}`',
+              'Image the generated [location-worker snippets](/docs/locations/#create-and-deploy) reference (`LOCATION_WORKER_IMAGE`). The default is the worker this release deploys; override it when remote sites pull from a mirror.',
             ],
             [
               '`scheduler.enabled`, `.replicas`, `.metricsPort`, `.logLevel`',
@@ -493,6 +594,11 @@ kubectl -n probara get jobs`,
               'Creates an HPA for the default worker deployment.',
             ],
             [
+              '`worker.pingGroupRange`',
+              '`"0 2147483647"`',
+              'The `net.ipv4.ping_group_range` pod sysctl on the default workers and every `worker.locations` entry (an entry may set its own), which [ping monitors](#ping-sockets) need. `""` leaves the node runtime\'s value, for clusters whose policy forbids pod sysctls.',
+            ],
+            [
               '`alerter.enabled`, `.replicas`, `.metricsPort`, `.logLevel`',
               '`true`, `2`, `9090`, `info`',
               'Alert evaluation workload. SMTP comes from the top-level `smtp` block; other advanced alert settings are not chart values.',
@@ -522,7 +628,32 @@ kubectl -n probara get jobs`,
             [
               '`statusPage.baseUrl`',
               'Empty',
-              'Passed as `STATUS_PAGE_BASE_URL`, which currently has no runtime use.',
+              'Passed as `STATUS_PAGE_BASE_URL`: the public origin used for status pages\' canonical links, `og:url`, feed and summary links, and push deep links (a page with a verified [custom domain](/docs/status-pages/#custom-domains) uses that domain instead). Empty omits the canonical link and `og:url` and keeps the other links root-relative. Also rendered into the API, which refuses its host as a custom domain and hands it to the operator UI for its status-page links and template preview, and into the frontend, for that preview\'s CSP.',
+            ],
+            [
+              '`statusPage.cnameTarget`',
+              'Empty (host of `baseUrl`)',
+              'Host every status page [custom domain](/docs/status-pages/#custom-domains) must CNAME to (`STATUS_PAGE_CNAME_TARGET` on the API). Empty uses the host of `statusPage.baseUrl`; with both empty, custom domains are off.',
+            ],
+            [
+              '`statusPage.customDomains`',
+              '`[]`',
+              'One `{host, tlsSecretName}` per custom domain. With `ingress.enabled` the chart renders an Ingress per domain (`<release>-sp-<host>`) routing `/` to the status-page service, with the domain\'s TLS Secret and `ingress.className`/`ingress.annotations`. The render fails for an entry without `host` or `tlsSecretName`, a host also in `ingress.hosts`, a host listed twice, or custom domains without any platform host (`baseUrl`, `ingress.hosts` or `platformHosts`). Each host must also be added and verified on its page in the UI; until then, and after it fails or is removed there, its Ingress answers only not-found.',
+            ],
+            [
+              '`statusPage.customDomainsClusterIssuer`',
+              'Empty',
+              'cert-manager ClusterIssuer set as `cert-manager.io/cluster-issuer` on the custom-domain Ingresses, so cert-manager issues each domain\'s certificate into its `tlsSecretName`; it replaces an issuer named in `ingress.annotations` there. Empty: no annotation of its own (provide the Secrets yourself, or put the issuer in `ingress.annotations`).',
+            ],
+            [
+              '`statusPage.platformHosts`',
+              '`[]`',
+              'Hosts that serve every page under `/public/status/`, besides `statusPage.baseUrl`\'s host and `ingress.hosts` (all three rendered as `STATUS_PAGE_PLATFORM_HOSTS`). Any other public hostname routed to the status service gets a verified custom domain\'s page or not found. Add the name of any proxy of your own that serves status pages.',
+            ],
+            [
+              '`statusPage.trustForwardedHost`',
+              '`false`',
+              '`STATUS_PAGE_TRUST_FORWARDED_HOST`: match custom domains on `X-Forwarded-Host` instead of `Host`, believed only from `trustedProxyCIDRs` peers. Only for a proxy in front of the Ingress that rewrites `Host`.',
             ],
             [
               '`statusPage.service.*`',
@@ -537,7 +668,7 @@ kubectl -n probara get jobs`,
             [
               '`frontend.apiUrl`, `.statusPageUrl`, `.apiProxyTarget`',
               '`/api`, empty, auto in-cluster API',
-              'Public variables are build-time in Next.js; proxy target is runtime server-side.',
+              '`apiUrl` is a build-time public variable in Next.js, so a runtime value cannot change the published image. `statusPageUrl` is deprecated and ignored: the UI takes the status-page origin from `statusPage.baseUrl` at runtime (through `GET /api/v1/auth-context`). The proxy target is runtime server-side.',
             ],
             [
               '`frontend.image.*`',
@@ -552,7 +683,17 @@ kubectl -n probara get jobs`,
             [
               '`ingress.enabled`, `.className`, `.annotations`, `.hosts`, `.tls`',
               'Disabled; nginx; example frontend and status hosts',
-              'The current routing template gives `/` to frontend and `/api` to API; see warning below.',
+              'The current routing template gives `/` to frontend and `/api` to API; see warning below. One Ingress per host, each its own YAML document.',
+            ],
+            [
+              '`trustedProxyCIDRs`',
+              '`[]`',
+              'CIDRs or IPs of your ingress controller or load balancer, rendered as `TRUSTED_PROXY_CIDRS` into the API and status-page. Only these peers’ forwarding headers resolve [client IPs](/docs/security/#audit-proxy-trust) for audit records, sessions and rate limits. The bundled ingress routes `/api` straight to the API, so with an ingress set this to the ingress controller’s pod CIDR: empty makes every request come from the ingress pod, a private peer, so the API rate limit applies per credential only and sign-in, anonymous calls and failed credentials are not limited per address ([what is limited where](/docs/security/#edge-controls)). The install notes warn when the ingress is on and this is empty.',
+            ],
+            [
+              '`security.hstsMaxAge`, `.apiRateLimitPerMinute`, `.apiRateLimitBurst`, `.apiAllowedOrigins`',
+              'automatic (one year with `ingress.tls`, else off), `600`, `120`, `[]`',
+              '[Security headers and the API rate limit](/docs/security/#edge-controls), rendered into the API (all four) and status-page (HSTS). `appBaseURL` also reaches the status-page, whose CSP lets the operator UI frame the template preview.',
             ],
             [
               '`serviceAccount.create`, `.annotations`, `.name`',
@@ -704,7 +845,7 @@ worker:
             'Per-field `<field>ExistingSecretKey` values default to the canonical key names above, so a Secret laid out with those names needs no key overrides.',
             'A key the chart asks for but the Secret does not carry leaves the pod in `CreateContainerConfigError`. That is deliberate: a missing encryption key should stop a rollout, not quietly disable encryption.',
             'Helm cannot read Secrets, so it cannot assemble a URL around a value it does not have: `postgresql.auth.existingSecret` needs the DSN externalized too, and `nats.auth.platformPasswordExistingSecret` needs the broker URL externalized. Either the matching per-field reference or the chart-wide `secrets.existingSecret` satisfies that; setting neither fails the render with that explanation.',
-            'The Secret must exist before the pods start. With External Secrets Operator, that means the ExternalSecret must have synced — the migrations Job runs as a `post-install`/`post-upgrade` hook and needs `postgres_url` at that moment.',
+            'The Secret must exist before the pods start. With External Secrets Operator, that means the ExternalSecret must have synced — the migrations Job runs as a `post-install`/`pre-upgrade` hook and needs `postgres_url` at that moment, which on an upgrade is before any other manifest changes. When the chart composes `postgres_url` itself, the Job reads it from its own hook Secret rendered from the upgrade\'s values, so a DSN changed in the same upgrade is the one migrated.',
             'Rotating a value in the Secret does not restart the workloads; the chart sets no checksum annotation. Restart the affected Deployments yourself after a rotation.',
             'Rotation keys (`PROBARA_SECRETS_KEY_V2` and higher) have no dedicated value and go through the top-level `extraEnv`, which accepts a `valueFrom.secretKeyRef` entry like any Kubernetes EnvVar.',
           ],
@@ -783,7 +924,65 @@ api:
             'The chart does not expose HTTP egress policy; provide `HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` through extra environment configuration, and keep any allowlist limited to networks that location is explicitly trusted to monitor.',
             'Expose the mesh echo endpoint only on private inter-location networks.',
             'For locations outside the Kubernetes cluster, use the generated container/deployment snippet rather than granting database access.',
-            'The embedded NATS Service is ClusterIP-only; an external location needs a separate TLS/WSS exposure path.',
+            'The embedded NATS Service is ClusterIP-only. For locations outside the cluster, enable the [websocket listener and its Ingress](#nats-websocket), or expose the broker over TLS yourself.',
+          ],
+        },
+      ],
+    },
+    {
+      id: 'ping-sockets',
+      title: 'Ping sockets',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Ping monitors send ICMP echoes over unprivileged ("ping") datagram sockets, never raw sockets: the worker needs no `NET_RAW` capability, no root and no setuid binary. Linux opens such a socket only to a process whose group is inside the `net.ipv4.ping_group_range` sysctl. A worker outside it reports every ping check as an `error` that names the sysctl (`ping: this worker may not open unprivileged ICMP sockets; its group must be inside the net.ipv4.ping_group_range sysctl …`); its other checks run as usual.',
+        },
+        {
+          type: 'list',
+          items: [
+            'Docker and Compose (the base and release files, and the generated private-location `docker run` and Compose snippets): nothing to set. Docker Engine 20.10 and later open the range to every group in each container. Neither file sets the sysctl explicitly, because a container in a user namespace refuses to start with it.',
+            'Rootless Docker or Podman, and `userns-remap`: the container cannot set the sysctl, and ping works only if the host\'s own `net.ipv4.ping_group_range` covers the group the worker runs as on the host (for rootless engines, the user\'s subordinate group range). Otherwise ping checks report the error above; widen the host sysctl (`sysctl -w net.ipv4.ping_group_range="0 2147483647"`, persisted in `/etc/sysctl.d`) or run ping monitors from another location.',
+            'Helm: `worker.pingGroupRange` (default `"0 2147483647"`, every group) becomes a pod `securityContext.sysctls` entry on the default workers and every `worker.locations` entry; an entry may set its own `pingGroupRange`. It is a namespaced sysctl on the Kubernetes safe list, allowed by the kubelet without flags and by the baseline and restricted Pod Security Standards. If a cluster policy (Gatekeeper, Kyverno, a PodSecurityPolicy) forbids every pod sysctl, the pods would not be admitted: set `worker.pingGroupRange: ""`, and ping then works only where the node runtime already opens the range (containerd 2.x does). An entry in `podSecurityContext.sysctls` wins.',
+            'The target goes through the worker\'s [network policy](/docs/security/#ssrf-network-policy): with `HTTP_BLOCK_PRIVATE_IPS=true`, a ping monitor can no longer reach private or loopback addresses outside `HTTP_ALLOWED_CIDRS`.',
+          ],
+        },
+      ],
+    },
+    {
+      id: 'nats-websocket',
+      title: 'NATS over websocket for restricted networks',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Many networks allow only outbound HTTPS. The broker can serve a websocket listener (port 8443, plaintext) behind an HTTPS ingress or reverse proxy, so a location worker dials `wss://` on 443 instead of the broker\'s TCP port. Websocket clients go through the same [auth callout](/docs/security/#private-locations-nats) as TCP clients: the listener has no authorization of its own, and a wrong or missing location credential is refused on both.',
+        },
+        {
+          type: 'code',
+          language: 'yaml',
+          title: 'Helm: websocket listener on its own host',
+          code: `nats:
+  auth:
+    enabled: true          # required before the ingress renders
+  websocket:
+    enabled: true
+    ingress:
+      enabled: true
+      host: nats.example.com
+      tls:
+        - secretName: nats-tls
+          hosts: [nats.example.com]
+# api.publicNatsURL left empty: snippets get wss://nats.example.com`,
+        },
+        {
+          type: 'list',
+          items: [
+            'To share the UI host, set `nats.websocket.ingress.host` to it and `path: /nats`; the snippets then carry `wss://probara.example.com/nats` and the worker sends that path in its upgrade request.',
+            'The default annotations raise ingress-nginx\'s proxy read and send timeouts to an hour: NATS keeps idle connections open between pings, longer than the controller\'s 60 s default. Other controllers need their equivalent.',
+            'Release Compose publishes the listener on `127.0.0.1:8443`; front it with a TLS reverse proxy on 443 (it must pass websocket upgrades) and set `PUBLIC_NATS_URL=wss://<host>` in `.env`.',
+            'Workers refuse a plain `ws://` URL that carries credentials unless it points at a loopback address; use `wss://`.',
+            'Worker image and broker contract move together: the snippets pin the worker to the platform\'s release, so upgrade remote workers when you upgrade the platform.',
           ],
         },
       ],
@@ -843,10 +1042,38 @@ api:
             '[Back up PostgreSQL](/docs/operations/#backup-restore) and record the running application/chart/image versions.',
             'Render or lint the target chart with production values and inspect Secrets, Services, queue variables, and image tags.',
             'Run the [target migrations](/docs/operations/#database-migrations) against a disposable copy or staging database.',
-            'Deploy the migration-compatible application version. The chart migration Job is a post-install/post-upgrade hook; API startup also runs shared migrations.',
+            'Deploy the migration-compatible application version. The chart migration Job runs first (a `pre-upgrade` hook, below); API startup also runs the shared migrations under the same lock, as a safety net only.',
             'Verify `/readyz`, result ingestion, scheduled and on-demand checks, alert delivery, status invalidation, and private locations.',
             'Roll back application images only when the schema remains backward-compatible. Database migrations are not automatically reversed by `helm rollback`.',
           ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'What `helm upgrade` does, in order (a fresh `helm upgrade --install` is an install: the Job then runs after the manifests, once the embedded PostgreSQL exists):',
+        },
+        {
+          type: 'list',
+          ordered: true,
+          items: [
+            'Helm renders the new release and runs its `pre-upgrade` hooks before changing anything. When the chart composes `postgres_url` (no `postgresql.existingSecret` or `secrets.existingSecret`), it first creates a hook Secret holding the DSN built from this upgrade\'s values, because the release\'s own Secret is not updated yet; then it creates the migrations Job and waits for it, within `--timeout` (default 5 minutes; raise it for a large database).',
+            'The Job waits for the embedded PostgreSQL Service when there is one (it already exists on an upgrade) and applies every pending migration, under the same advisory lock the API takes when it migrates at startup. Meanwhile the previous release keeps serving, now against the new schema.',
+            'If the Job fails or times out, the upgrade stops there: no Deployment, ConfigMap or Secret has changed, the release is marked failed, and the Job is kept for its logs (`kubectl logs -l app.kubernetes.io/component=migrations`). Fix the cause and run `helm upgrade` again; the old Job is replaced.',
+            'On success Helm deletes the Job and its Secret, applies the new manifests and the Deployments roll. New pods only ever start against the migrated schema, so nothing is lost or fails for want of a column.',
+            'Until the rollout completes, pods of the previous release run against the new schema. Migrations are additive, so they keep working, with the exceptions each release\'s notes name below and in [operations](/docs/operations/#database-migrations): for example an API pod from before recurring maintenance creates a window without an occurrence (repair below), and an API pod from before session families ignores session revocation.',
+          ],
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'When the pre-upgrade migration cannot run',
+          text:
+            'The Job runs before the upgrade creates anything, so it needs what the previous release already has. An upgrade that switches from an external database to the embedded PostgreSQL (`postgresql.enabled`) or renames the release\'s objects (`fullnameOverride`) leaves it waiting for a database that does not exist yet, until the upgrade times out with nothing changed: apply that change with `migrations.enabled=false` (the API still migrates at startup), or run `migrate` against the database first, then upgrade again with the Job on. Turning on or renaming the ServiceAccount (`serviceAccount.create`, `.name`) in the same upgrade is safe: the Job runs under none of the release\'s and mounts no API token. An existing Secret must carry the new `postgres_url` before the upgrade starts (let External Secrets sync first). Changing the embedded PostgreSQL password in values does not change the running database\'s, so the Job is refused and the upgrade stops before any change. `helm template | kubectl apply` ignores hook annotations and applies the Job together with everything else: run the migrations first. Flux runs Helm itself, hooks included.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Argo CD (not tested here): it maps the Job\'s combined `post-install,pre-upgrade` hook to both PreSync and PostSync, so it would run before the embedded PostgreSQL exists on a first sync and twice on every later one. Set `migrations.enabled=false` and run the migrations as your own Job in an earlier sync wave than the workloads; the API\'s startup migration remains the safety net.',
         },
         {
           type: 'callout',
@@ -854,6 +1081,48 @@ api:
           title: 'A Helm rollback is not a database rollback',
           text:
             'The migration hook changes shared PostgreSQL state. Keep backups and review migration compatibility before upgrading; never assume an application rollback will undo schema or data changes.',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Rolling back below status page visibility publishes gated pages',
+          text:
+            'A status-page image older than the release that added [page visibility](/docs/status-pages/#visibility) ignores it and serves every unlisted, password and private page publicly, even while the schema still holds the setting. Do not roll the status service back below that release while such pages exist. The schema migration (`000114`) refuses to roll back while any page is not public; to roll it back, set those pages to public first, deliberately. A refused rollback leaves the migration version marked dirty: run `migrate force 114` and retry after making the pages public.',
+        },
+        {
+          type: 'callout',
+          tone: 'info',
+          title: 'Upgrading to a release with the NATS websocket listener and pinned worker snippets',
+          text:
+            'Two chart changes show up on the first upgrade. The embedded NATS pod template now carries a checksum of its `nats.conf`, so installs with `nats.auth.enabled` (or the websocket listener) see the NATS pod restart once; with persistence on, JetStream state survives, and services reconnect on their own after a short broker outage. From then on a broker config change rolls the pod, which is what makes enabling the websocket listener take effect. The generated private-location worker snippets now reference `{image.repository}-worker:{image tag}` instead of the public `:latest` worker, so an install with a mirrored `image.repository` hands remote sites an image from that mirror: make sure they can pull from it, or set `api.locationWorkerImage`.',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to recurring maintenance windows: migrate first, avoid mixed versions',
+          text:
+            'Maintenance coverage moves to materialized occurrences (migrations 000109 and 000110). Until they have run, new alerter, API and status-page pods fail every query that checks maintenance (alert evaluation, monitor lists, status pages); API pods of the previous release still running after they have run create windows without an occurrence, which cover nothing. The chart\'s migration Job runs them before the rollout, and the release Compose `migrations` service before any service starts; with any other deployment run the migrations first. Keep the rollout short so the old and new API serve side by side as briefly as possible. A window created by an old API pod during the rollout can be repaired once: `INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT id, tenant_id, starts_at, ends_at FROM maintenance_windows w WHERE recurrence_weekdays IS NULL AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM maintenance_window_occurrences o WHERE o.window_id = w.id);`',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to workspace management: migrate first',
+          text:
+            'Workspace delete (migration 000115 adds `tenants.deleted_at`) is checked by API-key validation, workspace lists and every scheduler, alerter, worker and status-page loop, which read that column directly so the database can plan them well. New pods fail those queries until the migration has run (API keys are refused, checks stop being dispatched), which is why the chart\'s migration Job runs it before the rollout and the release Compose `migrations` service before any service starts; with any other deployment run the migrations first. Pods of the previous release do not read the column and keep working meanwhile. Session sign-in tolerates the old schema and never grants more access because of it.',
+        },
+        {
+          type: 'callout',
+          tone: 'info',
+          title: 'Upgrading to a release with chain expiry, multi-echo ping and failure capture',
+          text:
+            'Three check changes apply to existing monitors without a save. Certificate expiry now counts the whole presented chain: every HTTPS, SIP-over-TLS and TLS-wrapped TCP monitor with `tls_min_days_valid` alerts on the earliest expiry among the leaf and the intermediates the server sends (never a trust-store root), so a monitor whose leaf is fine may open a `tls_expiry` alert for an expiring intermediate on its first check; the alert names that certificate and its date. Every ping monitor now sends three echoes 250 ms apart and still fails only when all are lost, so one dropped packet no longer fails it; a monitor with a short timeout gets its echoes squeezed to fit rather than failing, and ping targets now go through the worker\'s network policy, so with `HTTP_BLOCK_PRIVATE_IPS=true` a ping of a private address outside `HTTP_ALLOWED_CIDRS` turns into an `error`. Capacity: a healthy ping holds a worker slot for about half a second and a lost echo for about 1.5 seconds (the gaps plus a 1-second wait for the last reply, never the monitor\'s timeout), where a single echo used to return at once; a fleet running many ping monitors may need more `WORKER_CONCURRENCY` or replicas. Workers need the [ping sysctl](#ping-sockets): the chart sets it, Docker 20.10+ has it, rootless hosts must allow it on the host. Failed HTTP checks now store their redacted response with the result, which grows those rows by up to 16 KiB for the 30 days raw results are kept; list and history reads leave it out.',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to status page custom domains: migrate first, and new Ingress objects',
+          text:
+            'Migration 000119 adds `status_page_domains`, which the new API reads in every status page response (`public_url`) and the new status service reads at start. Run it before the services roll (the `migrate` command or Job against the database, before upgrading the chart, whose own migration Job is a post-upgrade hook); until it has run, new API pods fail status page reads. The chart\'s Ingress template now emits each `ingress.hosts` entry as its own YAML document: earlier charts ran the hosts together, so only the **last** host\'s Ingress existed. An upgrade therefore creates `<release fullname>-<host with dots as dashes>` for every other host — with the default values `<release fullname>-probara-example-com` — which an admission webhook rejects if you created an Ingress for that host by hand, and which makes cert-manager request a certificate if `ingress.annotations` names an issuer. Delete hand-made duplicates first, or remove those hosts from `ingress.hosts`. The status service now also serves its pages only on its platform hosts (`statusPage.baseUrl`, `ingress.hosts`, `statusPage.platformHosts`): add any other hostname you route to it to `statusPage.platformHosts` (`STATUS_PAGE_PLATFORM_HOSTS`).',
         },
         {
           type: 'callout',
@@ -897,8 +1166,8 @@ api:
               'Changing them does not alter workload behavior.',
             ],
             [
-              'Embedded NATS is ClusterIP-only',
-              'Private locations outside the cluster cannot connect without an additional secure exposure.',
+              'Embedded NATS is ClusterIP-only by default',
+              'Private locations outside the cluster need the [websocket Ingress](#nats-websocket) (`nats.websocket.*`) or a TLS exposure you add yourself.',
             ],
             [
               'Local AI accuracy is measured on a controlled corpus only',
@@ -932,7 +1201,7 @@ api:
           items: [
             'Pin immutable backend, frontend, local AI, collector, migration, PostgreSQL, and NATS versions.',
             'Use managed/HA PostgreSQL and NATS or define tested backup and restore objectives for embedded state.',
-            'Configure HTTPS, a correct `PUBLIC_BASE_URL` (`api.publicBaseURL`; an `https://` value also turns on `ADMIN_COOKIE_SECURE` in the chart), and trusted reverse-proxy headers.',
+            'Configure HTTPS, a correct `PUBLIC_BASE_URL` (`api.publicBaseURL`; an `https://` value also turns on `ADMIN_COOKIE_SECURE` in the chart), and [trusted proxies](/docs/security/#audit-proxy-trust) (`trustedProxyCIDRs`) so client IPs, rate limits and HSTS see the real client.',
             'Use stable random JWT, encryption, local AI token, OIDC, preview, SMTP, webhook, database, and NATS secrets, sourced [from your secret manager](#external-secrets) rather than written into the values file.',
             'Confirm the cluster CNI enforces the [local AI NetworkPolicy](#helm-values-local-ai), or isolate the service another way.',
             'Align every NATS stream, subject, consumer, and status-update subject across services.',

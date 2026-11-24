@@ -34,6 +34,8 @@ type MockMonitorService struct {
 	monitors            map[uuid.UUID]*models.Monitor
 	deleteHistoryErr    error
 	deletedHistoryCalls []uuid.UUID
+	bulkAlertingErr     error
+	bulkAlertingUpdated int
 }
 
 func NewMockMonitorService() *MockMonitorService {
@@ -135,9 +137,13 @@ func (m *MockMonitorService) BulkUpdateAlerting(
 	tenantID uuid.UUID,
 	monitorIDs []uuid.UUID,
 	threshold *int,
+	recoveryThreshold *int,
 	mode *string,
 	channels []models.MonitorChannelAssignment,
 ) (int, error) {
+	if m.bulkAlertingErr != nil {
+		return m.bulkAlertingUpdated, m.bulkAlertingErr
+	}
 	return len(monitorIDs), nil
 }
 
@@ -169,6 +175,7 @@ type MockResultsService struct {
 	batchIDs   []uuid.UUID
 	batchLimit int
 	batchCalls int
+	result     *models.CheckResult
 }
 
 func (m *MockResultsService) GetMonitorResultsBatch(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, limit int) (*resultservice.MonitorResultsBatchResponse, error) {
@@ -190,6 +197,13 @@ func (m *MockResultsService) GetMonitorResults(ctx context.Context, tenantID, mo
 		MonitorID: monitorID,
 		Results:   []models.CheckResult{},
 	}, nil
+}
+
+func (m *MockResultsService) GetMonitorResult(ctx context.Context, tenantID, monitorID, resultID uuid.UUID) (*models.CheckResult, error) {
+	if m.result == nil || m.result.ID != resultID {
+		return nil, resultservice.ErrResultNotFound
+	}
+	return m.result, nil
 }
 
 func (m *MockResultsService) GetMonitorAnalytics(ctx context.Context, tenantID, monitorID uuid.UUID, rangeValue models.MonitorAnalyticsRange) (*models.MonitorAnalyticsResponse, error) {
@@ -837,6 +851,44 @@ func TestHandlers_BulkDeleteMonitors_RejectsEmpty(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+}
+
+// A bulk alerting edit a selected monitor's type refuses (the domain
+// threshold floor) is the client's mistake: 400 with the rule in the text,
+// saying honestly whether earlier batches were already applied.
+func TestHandlers_BulkUpdateAlerting_RefusedIsBadRequest(t *testing.T) {
+	for _, tc := range []struct {
+		updated int
+		want    string
+	}{
+		{0, "no monitor was changed"},
+		{100, "100 of 2 monitors were already updated"},
+	} {
+		log := logger.New("test", "debug")
+		monitorSvc := NewMockMonitorService()
+		monitorSvc.bulkAlertingErr = fmt.Errorf("%w: monitor %q: consecutive_failures_threshold must be at least 2 for domain monitors",
+			monitorservice.ErrBulkAlertingRefused, "registration")
+		monitorSvc.bulkAlertingUpdated = tc.updated
+		handlers := NewHandlers(monitorSvc, &MockGroupService{}, &MockResultsService{}, log, t.TempDir())
+
+		r := chi.NewRouter()
+		r.Post("/bulk/alerting", handlers.BulkUpdateAlerting)
+		body := `{"monitor_ids":["` + uuid.NewString() + `","` + uuid.NewString() + `"],"consecutive_failures_threshold":1}`
+		req := httptest.NewRequest(http.MethodPost, "/bulk/alerting", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.NewString()))
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("updated %d: status = %d, want 400; body = %s", tc.updated, w.Code, w.Body.String())
+		}
+		got := w.Body.String()
+		if !strings.Contains(got, "registration") || !strings.Contains(got, "domain monitors") || !strings.Contains(got, tc.want) {
+			t.Fatalf("updated %d: body = %s, want the monitor, the rule and %q", tc.updated, got, tc.want)
+		}
 	}
 }
 

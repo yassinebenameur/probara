@@ -189,11 +189,13 @@ func TestPairDecisionForMatchesCandidatePairs(t *testing.T) {
 	}
 	in.ExistingDependencies = []DependencyEdgeRef{{Monitor: "m7", DependsOn: "up"}, {Monitor: "m8", DependsOn: "up"}}
 
-	capped := CandidatePairs(in)
-	all := allCandidatePairs(in)
-	if len(capped) != 50 || !reflect.DeepEqual(capped, all[:50]) {
-		t.Fatalf("CandidatePairs must be the budgeted prefix: %d", len(capped))
+	// Same type, same tag set: every pair is same-role peers, so the guard
+	// sends none of them, yet each stays a labelable candidate.
+	if sent := CandidatePairs(in); len(sent) != 0 {
+		t.Fatalf("peer pairs sent to the model: %+v", sent)
 	}
+	all := allCandidatePairs(in)
+	capped := all[:50]
 	// Regression: orientation is a < b by ref string ("m10" < "m2"), so a
 	// co-firing pair whose earlier monitor sorts second gets a negative lead.
 	if capped[0].a != "m10" || capped[0].b != "m2" || capped[0].e.CoFires != 3 || capped[0].e.ALeadsSeconds != -40 || capped[0].e.ReverseCoFires != 1 || !capped[0].e.SharedService {

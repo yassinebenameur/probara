@@ -8,6 +8,7 @@ import type {
   MonitorListResponse,
   NotificationMode,
   PrometheusMetrics,
+  DomainInfo,
   PushInfo,
   RemoveMonitorsFromGroupRequest,
   RunMonitorNowResponse,
@@ -80,7 +81,7 @@ export interface TestMonitorConfigResponse {
   error_message?: string;
   // Structured extras from the checker, same envelope as check results
   // (e.g. metrics_data.mongodb.unavailable for skipped cluster checks).
-  metrics_data?: DBMetricsEnvelope & SIPMetricsEnvelope & { prometheus?: PrometheusMetrics };
+  metrics_data?: DBMetricsEnvelope & SIPMetricsEnvelope & { prometheus?: PrometheusMetrics; domain?: DomainInfo };
 }
 
 // Runs one ephemeral check on a worker so a config can be validated before
@@ -166,14 +167,16 @@ export async function getPushInfo(
 export async function bulkUpdateAlerting(data: {
   monitor_ids: string[];
   consecutive_failures_threshold?: number;
+  recovery_threshold?: number;
   notification_mode?: NotificationMode;
   notification_channels?: ChannelAssignment[];
 }): Promise<{ updated: number }> {
   return apiRequest<{ updated: number }>('POST', '/v1/monitors/bulk/alerting', data);
 }
 
-export async function exportMonitors(): Promise<{ blob: Blob; filename: string }> {
-  return apiDownload('/v1/monitors/export', 'monitors-export.yaml');
+/** Portable export (version 2); `keyed` keeps only monitors with a key, the document apply manages. */
+export async function exportMonitors(options: { keyed?: boolean } = {}): Promise<{ blob: Blob; filename: string }> {
+  return apiDownload(options.keyed ? '/v1/monitors/export?keyed=true' : '/v1/monitors/export', 'monitors-export.yaml');
 }
 
 // The screenshot a synthetic browser check stored. The tenant rides in the

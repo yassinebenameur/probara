@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // Push notification timing. These are the knobs that decide what a visitor
@@ -113,6 +115,11 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 		JOIN page_monitor pm ON pm.monitor_id = n.monitor_id
 		JOIN status_pages sp ON sp.id = pm.status_page_id
 		WHERE COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
+		  -- A deleted workspace's pages notify no visitor.
+		  AND ` + tenancy.LiveTenantSQL("sp.tenant_id") + `
+		  -- Password and private pages notify nobody (see PageIDForSlug),
+		  -- including browsers that subscribed while the page was public.
+		  AND ` + pushVisiblePages + `
 		  -- No subscribers, no work. This also bounds the blast radius when
 		  -- an operator first enables the setting on a busy page.
 		  AND EXISTS (
@@ -129,6 +136,52 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 	)
 	if err != nil {
 		return 0, fmt.Errorf("reconcile push notifications: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// reconcileOutboxNotifications turns recent incident events of the
+// status-page notification outbox (migration 000121) into pending delivery
+// rows: an incident published on a page, a public update posted on it, its
+// resolution. The API writes each outbox row in the same transaction as the
+// change, one row per page the incident is on, so fan-out is to exactly the
+// pages that publish it; the row's ID is the delivery's interval_id, which
+// the existing (status_page_id, interval_id) index keeps exactly once per
+// replica race, like a state transition. Monitor transitions keep their
+// own rule (reconcileNotifications and its classify twin); this adds
+// nothing to it. Same horizon and the same page conditions: push on,
+// public or unlisted, at least one subscriber, and the incident still on the
+// page.
+func (s *pushStore) reconcileOutboxNotifications(ctx context.Context) (int64, error) {
+	query := `
+		INSERT INTO status_page_push_deliveries
+			(status_page_id, incident_id, interval_id, kind, monitor_name)
+		SELECT o.status_page_id, o.incident_id, o.id, o.event_kind, LEFT(btrim(` + publicIncidentTitleSQL + `), 200)
+		FROM status_page_notification_outbox o
+		JOIN incidents i ON i.id = o.incident_id AND i.tenant_id = o.tenant_id
+		-- The page's live publication: its public title, never the
+		-- incident's own when it has one.
+		JOIN incident_status_page_publications isp
+			ON isp.incident_id = o.incident_id AND isp.status_page_id = o.status_page_id AND isp.unpublished_at IS NULL
+		JOIN status_pages sp ON sp.id = o.status_page_id
+		WHERE o.event_kind IN ('incident_published', 'incident_updated', 'incident_resolved')
+		  AND o.created_at > NOW() - make_interval(secs => $1)
+		  AND COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
+		  AND ` + pushVisiblePages + `
+		  AND EXISTS (
+			  SELECT 1 FROM status_page_push_subscriptions subs
+			  WHERE subs.status_page_id = o.status_page_id
+		  )
+		ON CONFLICT (status_page_id, interval_id) DO NOTHING
+	`
+	res, err := s.db.ExecContext(ctx, query, pushNotificationHorizon.Seconds())
+	if err != nil && pgerr.IsMissingSchema(err) {
+		// The outbox (000121/000122) is not there yet: nothing to announce.
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("reconcile incident push notifications: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return n, nil

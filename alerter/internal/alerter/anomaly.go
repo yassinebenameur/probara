@@ -12,6 +12,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/anomaly"
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // anomalyConfig is the effective latency-anomaly config for one monitor,
@@ -84,7 +85,15 @@ func (a *Alerter) evaluateLatencyAnomalies(ctx context.Context) error {
 				a.logger.WithError(err).WithFields(map[string]interface{}{"monitor_id": c.monitorID}).Error("Failed to open latency anomaly alert")
 			}
 		} else {
-			if err := a.resolveLatencyAnomalyAlert(ctx, c.monitorID, c.tenantID, c.monitorName, now); err != nil {
+			// Detect also says "not anomalous" when there is too little to
+			// judge (fewer than anomaly.DefaultMinSamples successful checks:
+			// a service that went from slow to hard down has none). That
+			// closes the alert, but it is no recovery a relapse may reopen.
+			reason := resolvedOutOfScope
+			if count >= anomaly.DefaultMinSamples {
+				reason = resolvedRecovered
+			}
+			if err := a.resolveLatencyAnomalyAlert(ctx, c.monitorID, c.tenantID, c.monitorName, reason); err != nil {
 				a.logger.WithError(err).WithFields(map[string]interface{}{"monitor_id": c.monitorID}).Error("Failed to resolve latency anomaly alert")
 			}
 		}
@@ -113,6 +122,7 @@ func (a *Alerter) loadAnomalyConfigs(ctx context.Context) ([]anomalyConfig, erro
 		JOIN tenants t ON t.id = m.tenant_id
 		WHERE t.latency_anomaly_enabled = TRUE
 		  AND m.enabled = TRUE AND m.deleted_at IS NULL
+		  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 		  AND m.type <> 'group'
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`)
@@ -237,8 +247,9 @@ func meanWithin(points []latencyPoint, seconds int, now time.Time) (float64, int
 }
 
 // openLatencyAnomalyAlert opens a latency_anomaly alert for the monitor if one
-// is not already open. Idempotent via the (monitor_id, kind) partial unique
-// index, so it is safe across alerter replicas.
+// is not already open, or reopens a recent one (relapse.go). Idempotent via
+// the (monitor_id, kind) partial unique index, so it is safe across alerter
+// replicas.
 func (a *Alerter) openLatencyAnomalyAlert(ctx context.Context, c anomalyConfig, v anomaly.Verdict) error {
 	baseline := v.BaselineMs
 	observed := v.ObservedMs
@@ -250,20 +261,32 @@ func (a *Alerter) openLatencyAnomalyAlert(ctx context.Context, c anomalyConfig, 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var alertID uuid.UUID
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
-			triggered_at, failure_count, baseline_latency_ms, observed_latency_ms, anomaly_score,
-			created_at, updated_at)
-		VALUES ($1, $2, $3, 'latency_anomaly', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
-		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
-		RETURNING id
-	`, uuid.New(), c.tenantID, c.monitorID, baseline, observed, score).Scan(&alertID)
-	if err == sql.ErrNoRows {
-		return nil // already open
+	reopened, err := reopenRecentAlertTx(ctx, tx, alertIdentity{tenantID: c.tenantID, kind: notifications.KindLatencyAnomaly, monitorID: c.monitorID},
+		[]alertColumn{{"baseline_latency_ms", baseline}, {"observed_latency_ms", observed}, {"anomaly_score", score}})
+	if reopenSkipped(err) {
+		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("insert latency alert: %w", err)
+		return err
+	}
+	var alertID uuid.UUID
+	if reopened != nil {
+		alertID = reopened.id
+	} else {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
+				triggered_at, failure_count, baseline_latency_ms, observed_latency_ms, anomaly_score,
+				created_at, updated_at)
+			VALUES ($1, $2, $3, 'latency_anomaly', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
+			ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
+			RETURNING id
+		`, uuid.New(), c.tenantID, c.monitorID, baseline, observed, score).Scan(&alertID)
+		if err == sql.ErrNoRows {
+			return nil // already open
+		}
+		if err != nil {
+			return fmt.Errorf("insert latency alert: %w", err)
+		}
 	}
 
 	var autoIncident bool
@@ -278,6 +301,11 @@ func (a *Alerter) openLatencyAnomalyAlert(ctx context.Context, c anomalyConfig, 
 			return err
 		}
 	}
+	if reopened != nil {
+		if err := a.noteRelapseTx(ctx, tx, c.tenantID, reopened); err != nil {
+			return err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit latency alert transaction: %w", err)
@@ -288,14 +316,19 @@ func (a *Alerter) openLatencyAnomalyAlert(ctx context.Context, c anomalyConfig, 
 		Kind: notifications.KindLatencyAnomaly, TriggeredAt: time.Now(),
 		BaselineLatencyMs: &baseline, ObservedLatencyMs: &observed, AnomalyScore: &score,
 	}
+	if reopened != nil {
+		reopened.apply(&record)
+	}
 	binding := alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName}
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)
 	return nil
 }
 
 // resolveLatencyAnomalyAlert resolves the open latency_anomaly alert for a
-// monitor whose latency has returned to baseline, notifying channels that fired.
-func (a *Alerter) resolveLatencyAnomalyAlert(ctx context.Context, monitorID, tenantID uuid.UUID, monitorName string, now time.Time) error {
+// monitor whose latency is no longer judged degraded, notifying channels
+// that fired. reason says whether fresh readings showed it back at baseline
+// (a recovery) or there were too few to judge.
+func (a *Alerter) resolveLatencyAnomalyAlert(ctx context.Context, monitorID, tenantID uuid.UUID, monitorName string, reason resolveReason) error {
 	var alertID uuid.UUID
 	var triggeredAt time.Time
 	err := a.db.QueryRowContext(ctx, `
@@ -309,7 +342,7 @@ func (a *Alerter) resolveLatencyAnomalyAlert(ctx context.Context, monitorID, ten
 		return fmt.Errorf("query open latency alert: %w", err)
 	}
 
-	resolvedAt, err := a.resolveAlert(ctx, alertID, now)
+	resolvedAt, err := a.resolveAlert(ctx, alertID, reason)
 	if err != nil {
 		return err
 	}
@@ -331,6 +364,7 @@ func (a *Alerter) resolveOrphanLatencyAlerts(ctx context.Context, keep []uuid.UU
 		JOIN monitors m ON m.id = al.monitor_id
 		WHERE al.kind = 'latency_anomaly'
 		  AND al.status IN ('active', 'acknowledged')
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 		  AND NOT (al.monitor_id = ANY($1))
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`, pq.Array(keep))
@@ -358,9 +392,9 @@ func (a *Alerter) resolveOrphanLatencyAlerts(ctx context.Context, keep []uuid.UU
 		return err
 	}
 
-	now := time.Now()
 	for _, o := range orphans {
-		resolvedAt, err := a.resolveAlert(ctx, o.id, now)
+		// Detection off or the monitor gone: not a recovery.
+		resolvedAt, err := a.resolveAlert(ctx, o.id, resolvedOutOfScope)
 		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": o.id}).Error("Failed to resolve orphan latency alert")
 			continue

@@ -87,15 +87,28 @@ func (h *Handlers) GetTemplateState(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetDefaultTemplate handles GET /api/v1/status-pages/{id}/template/default.
-// It exports the built-in template source as the starting point for
-// customization.
+// It exports a built-in template source as the starting point for
+// customization: ?name= picks one (statustemplate.Builtins; absent is the
+// default template), an unknown name is a 400.
 func (h *Handlers) GetDefaultTemplate(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := h.templateRequestScope(w, r); !ok {
 		return
 	}
+	builtin, ok := statustemplate.LookupBuiltin(statustemplate.BuiltinDefault)
+	if name := r.URL.Query().Get("name"); name != "" {
+		builtin, ok = statustemplate.LookupBuiltin(name)
+	}
+	if !ok {
+		apierrors.WriteValidationError(w, "name must be one of: "+strings.Join(statustemplate.BuiltinNames(), ", "))
+		return
+	}
+	filename := "status-page-template.gohtml"
+	if builtin.Name != statustemplate.BuiltinDefault {
+		filename = "status-page-template-" + builtin.Name + ".gohtml"
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="status-page-template.gohtml"`)
-	w.Write([]byte(statustemplate.DefaultSource))
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.Write([]byte(builtin.Source))
 }
 
 // GetTemplateVersionSource handles GET /api/v1/status-pages/{id}/template/versions/{version}/source

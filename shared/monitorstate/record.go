@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // CheckResultsRawRetentionDays caps raw check_results for every tenant,
@@ -91,23 +93,26 @@ func Record(ctx context.Context, db *sql.DB, r Result) (Transition, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	var snap Snapshot
-	var threshold int
+	var threshold, recoveryThreshold int
 	var lastStarted sql.NullTime
 	err = tx.QueryRowContext(ctx, `
-		SELECT current_state, consecutive_failures, consecutive_failures_threshold, last_result_started_at
+		SELECT current_state, consecutive_failures, consecutive_successes, recovery_pending,
+			consecutive_failures_threshold, recovery_threshold, last_result_started_at
 		FROM monitors
 		WHERE id = $1
 		FOR UPDATE
-	`, r.MonitorID).Scan(&snap.State, &snap.ConsecutiveFailures, &threshold, &lastStarted)
+	`, r.MonitorID).Scan(&snap.State, &snap.ConsecutiveFailures, &snap.ConsecutiveSuccesses, &snap.RecoveryPending,
+		&threshold, &recoveryThreshold, &lastStarted)
 	if err != nil {
 		return Transition{}, fmt.Errorf("lock monitor state: %w", err)
 	}
 
 	historyOnly := Transition{
-		From:                snap.State,
-		To:                  snap.State,
-		ConsecutiveFailures: snap.ConsecutiveFailures,
-		HistoryOnly:         true,
+		From:                 snap.State,
+		To:                   snap.State,
+		ConsecutiveFailures:  snap.ConsecutiveFailures,
+		ConsecutiveSuccesses: snap.ConsecutiveSuccesses,
+		HistoryOnly:          true,
 	}
 
 	// S-E5: the monitor lock serializes this check against SetLocations, so
@@ -137,10 +142,11 @@ func Record(ctx context.Context, db *sql.DB, r Result) (Transition, error) {
 			return Transition{}, fmt.Errorf("commit result transaction: %w", err)
 		}
 		return Transition{
-			From:                snap.State,
-			To:                  snap.State,
-			ConsecutiveFailures: snap.ConsecutiveFailures,
-			Duplicate:           true,
+			From:                 snap.State,
+			To:                   snap.State,
+			ConsecutiveFailures:  snap.ConsecutiveFailures,
+			ConsecutiveSuccesses: snap.ConsecutiveSuccesses,
+			Duplicate:            true,
 		}, nil
 	}
 
@@ -153,17 +159,20 @@ func Record(ctx context.Context, db *sql.DB, r Result) (Transition, error) {
 		return historyOnly, nil
 	}
 
-	transition := Apply(snap, IsFailureStatus(r.Status), threshold)
+	transition := Apply(snap, IsFailureStatus(r.Status), threshold, recoveryThreshold)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE monitors
 		SET current_state = $1,
 			consecutive_failures = $2,
+			consecutive_successes = $7,
+			recovery_pending = $8,
 			last_state_change_at = CASE WHEN $3 THEN NOW() ELSE last_state_change_at END,
 			last_result_at = NOW(),
 			last_result_started_at = CASE WHEN $6 THEN last_result_started_at ELSE $5::timestamptz END,
 			updated_at = NOW()
 		WHERE id = $4
-	`, string(transition.To), transition.ConsecutiveFailures, transition.Changed, r.MonitorID, r.StartedAt, r.SyntheticAbsence); err != nil {
+	`, string(transition.To), transition.ConsecutiveFailures, transition.Changed, r.MonitorID, r.StartedAt, r.SyntheticAbsence,
+		transition.ConsecutiveSuccesses, transition.RecoveryPending); err != nil {
 		return Transition{}, fmt.Errorf("update monitor state: %w", err)
 	}
 	if transition.Changed {
@@ -200,15 +209,22 @@ type execer interface {
 func insertResult(ctx context.Context, db execer, r Result) (bool, error) {
 	var metricsData interface{}
 	if len(r.MetricsData) > 0 {
-		metricsData = []byte(r.MetricsData)
+		metricsData = pgSafeJSON(r.MetricsData)
 	}
+	r.ErrorMessage = pgSafeText(r.ErrorMessage) // pgsafe.go
 
+	// Every result writer (ingest, push, OTLP, the absence watchdog) inserts
+	// here, so this is where a deleted workspace stops gaining history: a
+	// result of a job dispatched just before the delete inserts nothing and
+	// reads as a duplicate, which also keeps it away from the state machine.
 	res, err := db.ExecContext(ctx, `
 		INSERT INTO check_results (
 			id, monitor_id, tenant_id, job_id, location_id, status, result_source,
 			http_status, latency_ms, error_message, matched_body_substring,
 			metrics_data, created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		)
+		SELECT $1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+		WHERE `+tenancy.LiveTenantSQL("$3::uuid")+`
 		ON CONFLICT (job_id, result_source) DO NOTHING
 	`, uuid.New(), r.MonitorID, r.TenantID, r.JobID, r.LocationID, r.Status, r.ResultSource,
 		r.HTTPStatus, r.LatencyMs, r.ErrorMessage, r.MatchedBodySubstring, metricsData,

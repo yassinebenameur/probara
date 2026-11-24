@@ -1,7 +1,34 @@
 import { CreateMonitorRequest, GRPCMonitorConfig, Monitor, TCPMonitorConfig } from '../types';
 import { buildScheduledMonitorRequest, initialScheduledFormFields } from './common';
+import { isSensitiveHeaderName } from './http';
+import { SecretKV, plainRowsFromMap, secretRowsError, secretRowsFromMap, splitSecretRows } from './secret-map';
 
 // GrpcForm's and TcpForm's state and requests.
+
+// gRPC metadata: plain `metadata` beside the secret map `secret_metadata`
+// (shared/secrets MonitorSecretMapFields). Reads mask secret values as "***";
+// a submitted secret map is edited per key, an absent one keeps them all, so
+// a form that loaded stored secret metadata always submits the map.
+// Credential-named keys (authorization, x-api-key, …: the header rule) are
+// always secret, as in the HTTP form.
+
+/** The metadata rows of a loaded gRPC config (stored values only on edit). */
+export function grpcMetadataRows(config: GRPCMonitorConfig | undefined, isEditMode: boolean): SecretKV[] {
+  return [...plainRowsFromMap(config?.metadata), ...secretRowsFromMap(config?.secret_metadata, isEditMode)];
+}
+
+const GRPC_METADATA_KEY = /^[0-9A-Za-z_.-]+$/;
+
+/** The first problem with the metadata rows, or undefined. */
+export function grpcMetadataError(rows: SecretKV[]): string | undefined {
+  const error = secretRowsError(rows, 'Metadata entries', isSensitiveHeaderName);
+  if (error) return error;
+  const badKey = rows.find((row) => row.key.trim() && !GRPC_METADATA_KEY.test(row.key.trim()));
+  if (badKey) return `"${badKey.key.trim()}" may only contain letters, digits, '-', '_' and '.'`;
+  const reserved = rows.find((row) => row.key.trim().toLowerCase().startsWith('grpc-'));
+  if (reserved) return `"${reserved.key.trim()}" is reserved: grpc- metadata keys belong to the protocol`;
+  return undefined;
+}
 
 /** GrpcForm's initial state: the stored monitor on edit, else the clone source. */
 export function initialGrpcFormState(monitor?: Monitor, initialData?: CreateMonitorRequest) {
@@ -23,6 +50,14 @@ export function initialGrpcFormState(monitor?: Monitor, initialData?: CreateMoni
     use_tls: monitor && monitor.type === 'grpc'
       ? (monitor.config as GRPCMonitorConfig)?.use_tls ?? true
       : initialGrpcConfig?.use_tls ?? true,
+    metadata: grpcMetadataRows(
+      monitor && monitor.type === 'grpc' ? (monitor.config as GRPCMonitorConfig) : initialGrpcConfig,
+      isEditMode
+    ),
+    secret_metadata_stored:
+      isEditMode && monitor?.type === 'grpc'
+        ? Object.keys((monitor.config as GRPCMonitorConfig)?.secret_metadata || {}).length > 0
+        : false,
   };
 }
 
@@ -40,6 +75,10 @@ export function buildGrpcRequest(form: GrpcFormState): CreateMonitorRequest {
     config.service = form.service.trim();
   }
 
+  const { plain, secret } = splitSecretRows(form.metadata, isSensitiveHeaderName);
+  if (Object.keys(plain).length > 0) config.metadata = plain;
+  if (Object.keys(secret).length > 0 || form.secret_metadata_stored) config.secret_metadata = secret;
+
   return buildScheduledMonitorRequest('grpc', config, form);
 }
 
@@ -56,12 +95,35 @@ export function initialTcpFormState(monitor?: Monitor, initialData?: CreateMonit
     port: existingConfig?.port ?? initialTcpConfig?.port ?? 0,
     use_tls: existingConfig?.use_tls ?? initialTcpConfig?.use_tls ?? false,
     tls_skip_verify: existingConfig?.tls_skip_verify ?? initialTcpConfig?.tls_skip_verify ?? false,
+    tls_min_days_valid: String(existingConfig?.tls_min_days_valid ?? initialTcpConfig?.tls_min_days_valid ?? ''),
+    tls_server_name: existingConfig?.tls_server_name ?? initialTcpConfig?.tls_server_name ?? '',
+    tls_ca_pem: existingConfig?.tls_ca_pem ?? initialTcpConfig?.tls_ca_pem ?? '',
   };
 }
 
 export type TcpFormState = ReturnType<typeof initialTcpFormState>;
 
-/** The request TcpForm submits. Skip-verify only applies over TLS. */
+/** TcpForm's certificate field errors (the API refuses the same). */
+export function tcpTlsErrors(form: TcpFormState): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!form.use_tls) return errors;
+  if (form.tls_min_days_valid.trim() && !/^\d+$/.test(form.tls_min_days_valid.trim())) {
+    errors.tls_min_days_valid = 'Must be a whole number of days, 0 or more';
+  }
+  if (/\s/.test(form.tls_server_name.trim())) {
+    errors.tls_server_name = 'Must be a hostname or IP address';
+  }
+  const pem = form.tls_ca_pem.trim();
+  if (pem && !/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(pem)) {
+    errors.tls_ca_pem = 'Must be PEM certificates (-----BEGIN CERTIFICATE----- …)';
+  }
+  return errors;
+}
+
+/**
+ * The request TcpForm submits. Skip-verify and the certificate fields only
+ * apply over TLS (the API refuses them on a plain connect).
+ */
 export function buildTcpRequest(form: TcpFormState): CreateMonitorRequest {
   const config: TCPMonitorConfig = {
     host: form.host.trim(),
@@ -71,6 +133,15 @@ export function buildTcpRequest(form: TcpFormState): CreateMonitorRequest {
 
   if (form.use_tls && form.tls_skip_verify) {
     config.tls_skip_verify = true;
+  }
+  if (form.use_tls && form.tls_min_days_valid.trim()) {
+    config.tls_min_days_valid = Number(form.tls_min_days_valid.trim());
+  }
+  if (form.use_tls && form.tls_server_name.trim()) {
+    config.tls_server_name = form.tls_server_name.trim();
+  }
+  if (form.use_tls && form.tls_ca_pem.trim()) {
+    config.tls_ca_pem = form.tls_ca_pem.trim();
   }
 
   return buildScheduledMonitorRequest('tcp', config, form);

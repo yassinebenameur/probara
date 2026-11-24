@@ -1,6 +1,7 @@
-import { formatDate, formatJitter, formatLatency, formatLossPct, formatMOS, pluralize } from './format';
+import { formatJitter, formatLatency, formatLossPct, formatMOS, pluralize } from './format';
 import type { TimedSnapshot } from './metric-snapshots';
 import { lossTone, mosTone, thresholdTone } from './status-tones';
+import { certificateExpiryLabel, certificateExpiryWarns } from './tls-cert';
 import type {
   CheckResult,
   SIPCallMetrics,
@@ -8,7 +9,6 @@ import type {
   SIPMediaMetrics,
   SIPMetrics,
   SIPMetricsEnvelope,
-  TLSCertInfo,
 } from './types';
 
 // Facts the monitor detail page's Server panel shows for a SIP monitor, read
@@ -46,18 +46,9 @@ export function sipResponseLabel(m: SIPMetrics): string {
   return label;
 }
 
-/**
- * `expires in 12 days (Nov 1, 2026)`; empty without an expiry. Days come
- * from the worker's snapshot (whole days, truncated), the same number the
- * status page shows.
- */
-export function certificateExpiryLabel(tls: TLSCertInfo): string {
-  const days = tls.days_until_expiry;
-  if (days === undefined) return '';
-  const when = tls.not_after ? ` (${formatDate(tls.not_after)})` : '';
-  if (days < 0) return `expired ${pluralize(-days, 'day')} ago${when}`;
-  return `expires in ${pluralize(days, 'day')}${when}`;
-}
+// The certificate label is lib/tls-cert.ts's (shared with the HTTP and TCP
+// facts); re-exported for existing importers.
+export { certificateExpiryLabel };
 
 /**
  * The facts for one envelope. minDaysValid is the monitor's
@@ -90,9 +81,8 @@ export function sipFacts(m: SIPMetrics, minDaysValid?: number, media?: SIPMediaC
     });
   }
   const expiry = m.tls ? certificateExpiryLabel(m.tls) : '';
-  if (expiry) {
-    const days = m.tls?.days_until_expiry ?? 0;
-    const warn = days < 0 || (minDaysValid !== undefined && days < minDaysValid);
+  if (expiry && m.tls) {
+    const warn = certificateExpiryWarns(m.tls, minDaysValid);
     facts.push({ key: 'certificate', label: 'Certificate', value: expiry, tone: warn ? 'warning' : undefined });
   }
 

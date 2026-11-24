@@ -177,7 +177,7 @@ func (s *Service) Approve(ctx context.Context, tenant, service uuid.UUID, req Ap
 		return uuid.Nil, false, invalid(err.Error())
 	}
 	now := time.Now()
-	m := &models.Monitor{ID: uuid.New(), TenantID: tenant, Name: req.Name, Type: models.MonitorType(suggestion.Type), Config: raw, IntervalSeconds: req.IntervalSeconds, TimeoutSeconds: 10, Enabled: true, Tags: []string{"discovered"}, NextRunAt: &now, CreatedAt: now, UpdatedAt: now, ConsecutiveFailuresThreshold: 2, NotificationMode: req.NotificationMode, MemberAlertRollup: "per_monitor", DependencySuppression: "inherit", LocationQuorum: 1}
+	m := &models.Monitor{ID: uuid.New(), TenantID: tenant, Name: req.Name, Type: models.MonitorType(suggestion.Type), Config: raw, IntervalSeconds: req.IntervalSeconds, TimeoutSeconds: 10, Enabled: true, Tags: []string{"discovered"}, NextRunAt: &now, CreatedAt: now, UpdatedAt: now, ConsecutiveFailuresThreshold: 2, RecoveryThreshold: 1, NotificationMode: req.NotificationMode, MemberAlertRollup: "per_monitor", DependencySuppression: "inherit", LocationQuorum: 1}
 	if err = monitors.NewPostgresRepository(s.db).CreateInTx(ctx, tx, m); err != nil {
 		return uuid.Nil, false, err
 	}
@@ -190,6 +190,12 @@ func (s *Service) Approve(ctx context.Context, tenant, service uuid.UUID, req Ap
 		if _, err = tx.ExecContext(ctx, `INSERT INTO monitor_channels(monitor_id,channel_id) VALUES($1,$2)`, m.ID, channel); err != nil {
 			return uuid.Nil, false, err
 		}
+	}
+	// The monitor is created through the repository, not the monitors
+	// service, so its first configuration version is recorded here, in the
+	// same transaction, once its locations and channels exist.
+	if err = monitors.RecordVersionTx(ctx, tx, tenant, m.ID, monitors.VersionSourceDiscovery); err != nil {
+		return uuid.Nil, false, err
 	}
 	// Remove soft-deleted bindings, keeping all actual monitor history untouched.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM discovery_monitor_links l USING monitors m WHERE l.monitor_id=m.id AND m.deleted_at IS NOT NULL AND l.service_id=$1 AND l.suggestion_key=$2`, service, req.Key); err != nil {

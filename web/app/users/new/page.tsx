@@ -14,6 +14,7 @@ import MembershipsEditor from '@/components/users/MembershipsEditor';
 import { createUser, getTenants } from '@/lib/api';
 import type { MembershipInput, PlatformRole, Tenant } from '@/lib/types';
 import { errorMessage } from '@/lib/errors';
+import { PASSWORD_HINT } from '@/lib/password';
 
 type SignInMethod = 'password' | 'oidc';
 
@@ -127,7 +128,7 @@ export default function NewUserPage() {
           </FormField>
 
           {signInMethod === 'password' && (
-            <FormField label="Password" required description="Minimum 12 characters">
+            <FormField label="Password" required description={PASSWORD_HINT}>
               <input
                 type="password"
                 className="input"

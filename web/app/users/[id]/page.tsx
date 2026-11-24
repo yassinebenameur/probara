@@ -1,7 +1,8 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { LockOpen } from 'lucide-react';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
@@ -11,8 +12,21 @@ import FormActions from '@/components/ui/FormActions';
 import Select from '@/components/ui/Select';
 import Panel from '@/components/ui/Panel';
 import Callout from '@/components/ui/Callout';
+import Button from '@/components/ui/Button';
 import MembershipsEditor from '@/components/users/MembershipsEditor';
-import { getTenants, getUser, listOidcGroupMappings, updateUser } from '@/lib/api';
+import SessionsPanel from '@/components/account/SessionsPanel';
+import UserAccountActions from '@/components/users/UserAccountActions';
+import {
+  getTenants,
+  getUser,
+  getUserSessions,
+  listOidcGroupMappings,
+  revokeUserSession,
+  revokeUserSessions,
+  unlockUser,
+  updateUser,
+} from '@/lib/api';
+import { isLocked } from '@/lib/account';
 import { formatDateTime } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
 import type { AdminUser, MembershipInput, PlatformRole, Tenant } from '@/lib/types';
@@ -37,7 +51,26 @@ export default function EditUserPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [unlocking, setUnlocking] = useState(false);
   const { showToast } = useToast();
+
+  // Stable per user, so the sessions panel loads once per user id.
+  const loadSessions = useCallback(() => getUserSessions(id), [id]);
+  const revokeSession = useCallback((sessionId: string) => revokeUserSession(id, sessionId), [id]);
+  const revokeSessions = useCallback(() => revokeUserSessions(id), [id]);
+
+  const handleUnlock = async () => {
+    try {
+      setUnlocking(true);
+      await unlockUser(id);
+      setUser(await getUser(id));
+      showToast('Sign-in unlocked', 'success');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to unlock the user'), 'error');
+    } finally {
+      setUnlocking(false);
+    }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -110,6 +143,7 @@ export default function EditUserPage() {
   }
 
   const isOidcUser = user.auth_method === 'oidc';
+  const locked = isLocked(user);
 
   return (
     <Page width="reading">
@@ -221,9 +255,52 @@ export default function EditUserPage() {
               <dt className="text-xs text-slate-500">Last login</dt>
               <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.last_login_at, "-")}</dd>
             </div>
+            <div>
+              <dt className="text-xs text-slate-500">Password sign-in</dt>
+              <dd className="mt-0.5 text-ui text-slate-300">
+                {locked && user.lockout_held
+                  ? 'Locked until unlocked here or the user resets the password'
+                  : locked
+                    ? `Locked until ${formatDateTime(user.locked_until)}`
+                    : user.failed_login_count
+                      ? `${user.failed_login_count} failed in a row`
+                      : 'Not locked'}
+              </dd>
+            </div>
           </dl>
+          {(user.second_factor_lockouts ?? 0) > 0 && (
+            <Callout tone="danger" className="mt-4" title="Failed two-factor codes">
+              Someone signed in with this user&apos;s correct password and then failed the two-factor code until the
+              account locked: {user.second_factor_lockouts} time{user.second_factor_lockouts === 1 ? '' : 's'} in the
+              last 24 hours, last {formatDateTime(user.last_second_factor_lockout_at)}. The password is likely known
+              to someone else; ask the user to change it. Three such locks in 24 hours keep the account locked until
+              you unlock it or the user completes a password reset.
+            </Callout>
+          )}
+          {locked && (
+            <div className="mt-4 space-y-3">
+              <Callout tone="warning">
+                {user.lockout_held
+                  ? 'Repeated failed two-factor codes hold this lock: it does not lift on its own. Unlock only once the user has a new password or you know the attempts were theirs.'
+                  : 'Ten failed sign-ins in a row lock password sign-in for 15 minutes. The lock lifts on its own; unlock it sooner if the user is waiting. SSO sign-in is not affected.'}
+              </Callout>
+              <Button icon={<LockOpen />} onClick={handleUnlock} loading={unlocking} disabled={unlocking}>
+                Unlock sign-in
+              </Button>
+            </div>
+          )}
         </Panel>
       </div>
+
+      <UserAccountActions user={user} onChanged={() => void getUser(id).then(setUser).catch(() => undefined)} />
+
+      <SessionsPanel
+        scope="user"
+        username={user.username}
+        load={loadSessions}
+        revoke={revokeSession}
+        revokeAll={revokeSessions}
+      />
     </Page>
   );
 }

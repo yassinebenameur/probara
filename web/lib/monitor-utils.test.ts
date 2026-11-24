@@ -8,6 +8,7 @@ import {
   isFailingStatus,
   getHTTPDisplayValues,
   monitorTarget,
+  recoveryProgress,
   shortFailureReason,
   sortBySeverity,
   STATUS_RANK,
@@ -67,6 +68,29 @@ test('without maintenance flag the latest result decides', () => {
     getEffectiveMonitorStatus({ enabled: true }, failureResults()),
     'down'
   );
+});
+
+test('a monitor confirming its recovery stays down despite a passing latest check', () => {
+  const recovering = { enabled: true, current_state: 'down' as const, consecutive_successes: 2, recovery_threshold: 3 };
+  assert.equal(getEffectiveMonitorStatus(recovering, [successResult()]), 'down');
+  assert.equal(getEffectiveMonitorStatus({ ...recovering, in_maintenance: true }, [successResult()]), 'maintenance');
+  assert.equal(getEffectiveMonitorStatus({ ...recovering, enabled: false }, [successResult()]), 'paused');
+  // Without passes counted the latest result keeps deciding, as before.
+  assert.equal(getEffectiveMonitorStatus({ ...recovering, consecutive_successes: 0 }, [successResult()]), 'up');
+});
+
+test('recoveryProgress reports passes toward confirming a recovery', () => {
+  assert.deepEqual(recoveryProgress({ current_state: 'down', consecutive_successes: 2, recovery_threshold: 3 }), {
+    passes: 2,
+    needed: 3,
+  });
+  assert.equal(recoveryProgress({ current_state: 'down', consecutive_successes: 0, recovery_threshold: 3 }), null);
+  assert.equal(recoveryProgress({ current_state: 'up', consecutive_successes: 0, recovery_threshold: 3 }), null);
+  // Threshold lowered mid-confirmation: the next pass confirms.
+  assert.deepEqual(recoveryProgress({ current_state: 'down', consecutive_successes: 2, recovery_threshold: 1 }), {
+    passes: 2,
+    needed: 3,
+  });
 });
 
 test('display values come from the latest non-platform result', () => {

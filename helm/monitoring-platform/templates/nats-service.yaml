@@ -21,6 +21,12 @@ spec:
       targetPort: cluster
       protocol: TCP
       name: cluster
+    {{- if .Values.nats.websocket.enabled }}
+    - port: {{ .Values.nats.websocket.port }}
+      targetPort: websocket
+      protocol: TCP
+      name: websocket
+    {{- end }}
   selector:
     {{- include "monitoring-platform.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: nats

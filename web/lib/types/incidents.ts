@@ -53,6 +53,13 @@ export interface IncidentStatusPagePublication {
   published_at: string;
   unpublished_at?: string;
   monitor_ids: string[];
+  /**
+   * What the page shows instead of the incident's own title. Always set for
+   * an automatically created incident (its own title names the monitor).
+   */
+  public_title?: string;
+  /** Put on the page by automatic outage publishing. */
+  auto_published?: boolean;
 }
 
 export interface IncidentListItem {
@@ -151,4 +158,6 @@ export interface CreateIncidentTimelineEntryRequest {
 
 export interface PublishIncidentToStatusPageRequest {
   monitor_ids: string[];
+  /** Absent keeps the current public title; '' goes back to the default. */
+  public_title?: string;
 }

@@ -79,6 +79,49 @@ type statusPageRenderView struct {
 	Monitors           []statusPageMonitorView
 	Incidents          []statusPageIncidentView
 	MaintenanceWindows []statusPageMaintenanceView
+	// Head metadata (seo.go), added later: SEOTitle is the <title> and
+	// og:title, MetaDescription the description tags, SiteName og:site_name,
+	// CanonicalURL the canonical link and og:url ("" when the public origin
+	// is unknown), OGImageURL the logo when it is an absolute URL, Robots
+	// the robots meta content, FeedURL and SummaryURL the Atom feed and
+	// summary.json.
+	SEOTitle        string
+	MetaDescription string
+	SiteName        string
+	CanonicalURL    string
+	OGImageURL      string
+	Robots          string
+	FeedURL         string
+	SummaryURL      string
+	// SubscribeEnabled shows the email subscribe form (subscribe.go);
+	// SubscribeAction is its target, a plain form POST that works without
+	// script. Custom templates may render the same form with these fields.
+	SubscribeEnabled bool
+	SubscribeAction  string
+	// Added with the classic built-in (render_classic.go); every template
+	// receives them. BannerTitle is one concise overall state ("All systems
+	// operational", "Degraded performance", "Partial outage", "Major
+	// outage", "Maintenance in progress", "Some services are not
+	// reporting"), BannerTone its tone (ok, warn, down, maint, unknown) and
+	// BannerSummary one line on what is affected ("" when all is well).
+	// RenderedAtISO is when this HTML was rendered (RFC 3339 UTC), so a
+	// script can say how old a cached render is.
+	BannerTitle   string
+	BannerTone    string
+	BannerSummary string
+	RenderedAtISO string
+	// ActiveIncidents are the unresolved incidents, PastIncidents the
+	// resolved ones, newest first; IncidentHistory is the last seven UTC
+	// days, newest first, each with the resolved incidents that started that
+	// day (or were resolved that day after starting earlier) and an empty
+	// list for a quiet day.
+	ActiveIncidents []statusPageIncidentView
+	PastIncidents   []statusPageIncidentView
+	IncidentHistory []statusPageIncidentDayView
+	// AccentColor is the page's primary colour when one is set, else
+	// Probara's orange; AccentInk is the text colour readable on it.
+	AccentColor string
+	AccentInk   string
 }
 
 const (
@@ -96,6 +139,36 @@ type statusPageIncidentView struct {
 	AffectedComponentsText string
 	LatestUpdate           string
 	ResolvedAtLabel        string
+	// Added with the classic built-in: IsActive is "not resolved",
+	// AffectsText "Affects A, B" (or "Affects all services"),
+	// PublishedAtISO the publication time (RFC 3339 UTC), and Updates every
+	// public update, newest first, ending with the summary as the original
+	// post when it has one.
+	IsActive       bool
+	AffectsText    string
+	PublishedAtISO string
+	Updates        []statusPageIncidentUpdateView
+}
+
+// statusPageIncidentUpdateView is one public update of an incident.
+// StateLabel is the incident's current state on the newest entry and
+// "Update" on the older ones (an update does not record the state it was
+// posted in). TimeText is "15:04 UTC", prefixed with "Jan 2, " when the
+// update falls on another UTC day than DayISO, the day the template shows
+// it under; AtISO is the instant in RFC 3339 UTC for local-time scripts.
+type statusPageIncidentUpdateView struct {
+	AtISO      string
+	DayISO     string
+	TimeText   string
+	StateLabel string
+	Message    string
+}
+
+// statusPageIncidentDayView is one UTC day of incident history.
+type statusPageIncidentDayView struct {
+	DateISO   string
+	DateText  string
+	Incidents []statusPageIncidentView
 }
 
 type statusPageMaintenanceView struct {
@@ -105,6 +178,19 @@ type statusPageMaintenanceView struct {
 	IsActive               bool
 	TimeRangeText          string
 	AffectedComponentsText string
+	// RepeatText is set for a repeating window: "Repeats" plus the next
+	// starts that fall within the look-ahead.
+	RepeatText string
+	// StartsAtISO/EndsAtISO and NextStartsISO (space-separated) are the
+	// same instants in RFC 3339 UTC. The default template carries them as
+	// data attributes so its script can show the visitor's local time with
+	// the server-rendered UTC text alongside; without scripts the UTC text
+	// stays as it is.
+	StartsAtISO   string
+	EndsAtISO     string
+	NextStartsISO string
+	// AffectsText is "Affects A, B" (classic built-in wording).
+	AffectsText string
 }
 
 type statusPageSectionView struct {
@@ -160,6 +246,20 @@ type statusPageMonitorView struct {
 	ExpandedHistory30dJSON string
 	ExpandedHistory90dJSON string
 	History1yJSON          string
+	// Added with the classic built-in: StatusWord is the visitor wording
+	// (Operational, Degraded, Outage, Maintenance, Unknown). Bars is the
+	// 24-hour strip ready to draw: one entry per cell with its tone (ok,
+	// warn, down, none) and tooltip, each hourly slot repeated so the strip
+	// has about 90 cells. Bars<range>JSON are the 24h/7d/30d/90d strips at
+	// their native resolution, [{label, uptime}] with one point per hour or
+	// day (uptime -1 = no data). All are empty when the page hides monitor
+	// uptime.
+	StatusWord  string
+	Bars        []statusPageBarView
+	Bars24hJSON string
+	Bars7dJSON  string
+	Bars30dJSON string
+	Bars90dJSON string
 }
 
 // The template function contract (typeIcon, strip cell counts, join) lives in
@@ -171,10 +271,22 @@ var (
 	expandedStripCellCount = statustemplate.ExpandedStripCells
 )
 
-// publicStatusPageTmpl is parsed once at package init; the template source is
-// large (~200KB), so re-parsing per request is wasteful. Execute is safe for
-// concurrent use.
-var publicStatusPageTmpl = template.Must(statustemplate.New("public_status_page", statustemplate.DefaultSource))
+// builtinTemplates holds every built-in template (statustemplate.Builtins),
+// parsed once at package init; the sources are large, so re-parsing per
+// request is wasteful. Execute is safe for concurrent use.
+var builtinTemplates = func() map[string]*template.Template {
+	parsed := make(map[string]*template.Template)
+	for _, b := range statustemplate.Builtins() {
+		parsed[b.Name] = template.Must(statustemplate.New("public_status_page_"+b.Name, b.Source))
+	}
+	return parsed
+}()
+
+// builtinTemplateFor returns the built-in a page's template setting names;
+// an unknown or empty name renders the default.
+func builtinTemplateFor(name string) *template.Template {
+	return builtinTemplates[statustemplate.NormalizeBuiltin(name)]
+}
 
 // customTemplateCache caches parsed customer templates keyed by
 // pageID:version so steady-state renders skip re-parsing ~100KB of source per
@@ -210,18 +322,23 @@ func customTemplateFor(pageID string, version int, source string) (*template.Tem
 	return tmpl, nil
 }
 
-func renderPublicStatusPage(data *StatusPageData, apiEnabled bool) (string, error) {
-	html, _, err := renderStatusPageHTML(data, apiEnabled)
+func renderPublicStatusPage(data *StatusPageData) (string, error) {
+	html, _, err := renderStatusPageHTML(data)
 	return html, err
 }
 
 // renderStatusPageHTML renders data with the page's published custom template
-// when one exists, falling back to the built-in template if the custom one
-// fails to parse or execute. customErr reports that failure so callers can
-// log it; a page must keep serving on a broken template, never 500.
-func renderStatusPageHTML(data *StatusPageData, apiEnabled bool) (html string, customErr error, err error) {
-	view := buildStatusPageRenderView(data, apiEnabled)
+// when one exists, falling back to the built-in template its template setting
+// selects if the custom one fails to parse or execute. customErr reports that
+// failure so callers can log it; a page must keep serving on a broken
+// template, never 500.
+func renderStatusPageHTML(data *StatusPageData) (html string, customErr error, err error) {
+	return renderStatusPageView(data, buildStatusPageRenderView(data))
+}
 
+// renderStatusPageView is renderStatusPageHTML for an already built view, so
+// a build that also derives summary.json from the view builds it once.
+func renderStatusPageView(data *StatusPageData, view statusPageRenderView) (html string, customErr error, err error) {
 	if strings.TrimSpace(data.CustomTemplateSource) != "" {
 		tmpl, cerr := customTemplateFor(data.ID, data.CustomTemplateVersion, data.CustomTemplateSource)
 		if cerr == nil {
@@ -234,7 +351,7 @@ func renderStatusPageHTML(data *StatusPageData, apiEnabled bool) (html string, c
 	}
 
 	var buf bytes.Buffer
-	if err := publicStatusPageTmpl.Execute(&buf, view); err != nil {
+	if err := builtinTemplateFor(data.Template).Execute(&buf, view); err != nil {
 		return "", customErr, err
 	}
 	return buf.String(), customErr, nil
@@ -243,12 +360,12 @@ func renderStatusPageHTML(data *StatusPageData, apiEnabled bool) (html string, c
 // renderStatusPageWithSource renders data with an explicit template source
 // (draft previews). No fallback: a broken draft must surface its error to the
 // author instead of silently rendering the default page.
-func renderStatusPageWithSource(data *StatusPageData, apiEnabled bool, source string) (string, error) {
+func renderStatusPageWithSource(data *StatusPageData, source string) (string, error) {
 	tmpl, err := statustemplate.New("draft_status_page", source)
 	if err != nil {
 		return "", err
 	}
-	view := buildStatusPageRenderView(data, apiEnabled)
+	view := buildStatusPageRenderView(data)
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, view); err != nil {
 		return "", err
@@ -256,7 +373,7 @@ func renderStatusPageWithSource(data *StatusPageData, apiEnabled bool, source st
 	return buf.String(), nil
 }
 
-func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPageRenderView {
+func buildStatusPageRenderView(data *StatusPageData) statusPageRenderView {
 	primary := "#06b6d4"
 	if data.PrimaryColor != nil && strings.TrimSpace(*data.PrimaryColor) != "" {
 		primary = strings.TrimSpace(*data.PrimaryColor)
@@ -291,12 +408,23 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		MonitorStripCells: monitorUptimeStripCells,
 		MonitorCount:      len(data.Monitors),
 		CustomCSS:         template.CSS(strings.TrimSpace(data.CustomCSS)),
-		CustomHeadHTML:    template.HTML(strings.TrimSpace(data.CustomHeadHTML)),
-		CustomFooterHTML:  template.HTML(strings.TrimSpace(data.CustomFooterHTML)),
+		CustomHeadHTML:    template.HTML(withNoncePlaceholder(data.CustomHeadHTML)),
+		CustomFooterHTML:  template.HTML(withNoncePlaceholder(data.CustomFooterHTML)),
 	}
 
 	if view.FooterText == "" {
 		view.FooterText = fmt.Sprintf("© %d %s", time.Now().UTC().Year(), data.Title)
+	}
+	if data.SubscribeFormEnabled {
+		// Host-independent like the feed link (the render is cached per
+		// slug and served on every host): the page's canonical origin, its
+		// custom domain when it has one, else the platform path.
+		view.SubscribeEnabled = true
+		base := strings.TrimRight(strings.TrimSpace(data.CanonicalURL), "/")
+		if base == "" {
+			base = "/public/status/" + data.Slug
+		}
+		view.SubscribeAction = base + subscribeSuffix
 	}
 
 	sections := data.Sections
@@ -318,7 +446,7 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		}
 
 		for _, monitor := range section.Monitors {
-			renderMonitor := buildStatusPageMonitorView(monitor)
+			renderMonitor := buildStatusPageMonitorView(monitor, monitorViewOptionsFor(data))
 			renderSection.Monitors = append(renderSection.Monitors, renderMonitor)
 			view.Monitors = append(view.Monitors, renderMonitor)
 			renderSection.MonitorCount++
@@ -350,8 +478,9 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		view.Sections = append(view.Sections, renderSection)
 	}
 
+	now := time.Now().UTC()
 	for _, incident := range data.Incidents {
-		view.Incidents = append(view.Incidents, buildStatusPageIncidentView(incident))
+		view.Incidents = append(view.Incidents, classicIncidentView(incident, now.Format("2006-01-02")))
 	}
 
 	for _, window := range data.MaintenanceWindows {
@@ -406,6 +535,18 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	sort.Slice(view.Incidents, func(i, j int) bool {
 		return incidentStateRank(view.Incidents[i].State) < incidentStateRank(view.Incidents[j].State)
 	})
+
+	seo := resolvePageSEO(data)
+	view.SEOTitle = seo.Title
+	view.MetaDescription = seo.Description
+	view.SiteName = seo.SiteName
+	view.CanonicalURL = seo.CanonicalURL
+	view.OGImageURL = seo.OGImageURL
+	view.Robots = seo.Robots
+	view.FeedURL = seo.FeedURL
+	view.SummaryURL = seo.SummaryURL
+
+	applyClassicView(&view, data, now)
 
 	return view
 }
@@ -483,7 +624,17 @@ func buildStatusPageIncidentView(incident StatusPageIncident) statusPageIncident
 		AffectedComponentsText: affectedComponentsText,
 		LatestUpdate:           latestUpdate,
 		ResolvedAtLabel:        resolvedAtLabel,
+		IsActive:               state != "resolved",
+		AffectsText:            affectsText(components),
+		PublishedAtISO:         publishedAtISO(incident.PublishedAt),
 	}
+}
+
+func publishedAtISO(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // buildStatusPageMaintenanceView formats a maintenance window for the public
@@ -514,7 +665,36 @@ func buildStatusPageMaintenanceView(window StatusPageMaintenanceWindow) statusPa
 		IsActive:               window.IsActive,
 		TimeRangeText:          timeRangeText,
 		AffectedComponentsText: affectedComponentsText,
+		RepeatText:             maintenanceRepeatText(window),
+		StartsAtISO:            start.Format(time.RFC3339),
+		EndsAtISO:              end.Format(time.RFC3339),
+		NextStartsISO:          isoList(window.NextStartsAt),
+		AffectsText:            affectsText(window.AffectedMonitors),
 	}
+}
+
+func isoList(times []time.Time) string {
+	out := make([]string, len(times))
+	for i, t := range times {
+		out[i] = t.UTC().Format(time.RFC3339)
+	}
+	return strings.Join(out, " ")
+}
+
+// maintenanceRepeatText labels a repeating window and lists its next starts
+// (UTC, like the time range above it).
+func maintenanceRepeatText(window StatusPageMaintenanceWindow) string {
+	if !window.Repeating {
+		return ""
+	}
+	if len(window.NextStartsAt) == 0 {
+		return "Repeats"
+	}
+	next := make([]string, 0, len(window.NextStartsAt))
+	for _, t := range window.NextStartsAt {
+		next = append(next, t.UTC().Format("Jan 2, 15:04"))
+	}
+	return "Repeats · next: " + strings.Join(next, ", ") + " UTC"
 }
 
 func incidentStateRank(state string) int {
@@ -530,7 +710,23 @@ func incidentStateRank(state string) int {
 	}
 }
 
-func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
+// monitorViewOptions are the page settings that decide what a monitor row
+// may disclose. The view leaves out what they hide, so nothing hidden can
+// reach the HTML through an attribute (data-search) or an unguarded field;
+// /data applies the same settings (publicPageData).
+type monitorViewOptions struct {
+	showURL    bool
+	showUptime bool
+}
+
+func monitorViewOptionsFor(data *StatusPageData) monitorViewOptions {
+	return monitorViewOptions{showURL: data.ShowMonitorURL, showUptime: data.ShowMonitorUptime}
+}
+
+func buildStatusPageMonitorView(monitor MonitorStatus, opts monitorViewOptions) statusPageMonitorView {
+	if !opts.showURL {
+		monitor.URL = ""
+	}
 	lastCheckUnix := int64(0)
 	lastCheckAgo := "No recent check"
 	if monitor.LastCheckTime != nil {
@@ -571,7 +767,11 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 	}
 
 	searchParts := []string{monitor.Name, monitor.URL, monitor.MonitorType, strings.Join(monitor.Tags, " ")}
-	for _, metric := range []string{latencyText, uptimeText} {
+	metrics := []string{latencyText}
+	if opts.showUptime {
+		metrics = append(metrics, uptimeText)
+	}
+	for _, metric := range metrics {
 		if metric != "" {
 			searchParts = append(searchParts, metric)
 		}
@@ -595,8 +795,14 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 	uptime7Value := uptimeValue(averageBarPoints(history7Raw))
 	uptime30Value := uptimeValue(averageBarPoints(history30Raw))
 	uptime90Value := uptimeValue(averageBarPoints(history90Raw))
+	if !opts.showUptime {
+		// The template prints the summary metric and the range values in a
+		// row's metric column and kiosk tile whatever the setting.
+		uptime1hValue, uptime24Value, uptime7Value, uptime30Value, uptime90Value = "—", "—", "—", "—", "—"
+		uptimeSort = -1
+	}
 
-	return statusPageMonitorView{
+	view := statusPageMonitorView{
 		ID:                     monitor.ID,
 		Name:                   monitor.Name,
 		URL:                    monitor.URL,
@@ -635,7 +841,12 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 		ExpandedHistory30dJSON: mustJSON(history30Expanded),
 		ExpandedHistory90dJSON: mustJSON(history90Expanded),
 		History1yJSON:          mustJSON(sliceToBarPoints(monitor.UptimeHistory365d)),
+		StatusWord:             monitorStatusWord(monitor.Status),
 	}
+	if opts.showUptime {
+		applyClassicBars(&view, history24Raw, history7Raw, history30Raw, history90Raw)
+	}
+	return view
 }
 
 func relativeTime(t time.Time) string {
@@ -762,6 +973,7 @@ var typeLabels = map[models.MonitorType]string{
 	models.MonitorTypeTCP:              "TCP",
 	models.MonitorTypeWebSocket:        "WebSocket",
 	models.MonitorTypePrometheus:       "Prometheus",
+	models.MonitorTypeDomain:           "Domain expiry",
 }
 
 var typeBadges = map[models.MonitorType]string{
@@ -783,6 +995,7 @@ var typeBadges = map[models.MonitorType]string{
 	models.MonitorTypeTCP:              "TCP",
 	models.MonitorTypeWebSocket:        "WS",
 	models.MonitorTypePrometheus:       "PROM",
+	models.MonitorTypeDomain:           "DOMN",
 }
 
 func typeLabel(kind string) string {
@@ -926,4 +1139,12 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// withNoncePlaceholder trims operator-authored head/footer HTML and turns its
+// literal {{cspNonce}} tokens into the nonce placeholder. That HTML is data,
+// not template source, so the template function cannot expand inside it;
+// the placeholder is then swapped per response like the template's own.
+func withNoncePlaceholder(raw string) string {
+	return strings.ReplaceAll(strings.TrimSpace(raw), statustemplate.NonceToken, statustemplate.NoncePlaceholder)
 }

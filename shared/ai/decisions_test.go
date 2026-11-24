@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,9 +94,11 @@ func TestDependencyDirectionsAndCycles(t *testing.T) {
 	srv := decisionServer(t, "b_depends_a", nil)
 	defer srv.Close()
 	advisor, _ := NewDependencyAdvisor(Config{BaseURL: srv.URL, APIKey: "test-internal-token"})
-	in := DependencyInput{Monitors: []DependencyMonitorRef{{Ref: "a", Name: "billing-db", Tags: []string{"billing"}}, {Ref: "b", Name: "billing-api", Tags: []string{"billing"}}}, CoFiringAlerts: []CoFiringPair{{Earlier: "a", Later: "b", TimesCoFired: 5, MedianLeadSeconds: 20}}}
+	// Two services (no backing resource, so no structural basis) sharing a
+	// rare tag; differing tag sets keep them from being same-role peers.
+	in := DependencyInput{Monitors: []DependencyMonitorRef{{Ref: "a", Name: "billing-gateway", Type: "http", Tags: []string{"billing", "edge"}}, {Ref: "b", Name: "billing-api", Type: "http", Tags: []string{"billing"}}}, CoFiringAlerts: []CoFiringPair{{Earlier: "a", Later: "b", TimesCoFired: 5, MedianLeadSeconds: 20, WindowMonitors: 2}}}
 	out, err := advisor.SuggestDependencies(context.Background(), in)
-	if err != nil || len(out.Suggestions) != 1 || out.Suggestions[0].Monitor != "b" {
+	if err != nil || len(out.Suggestions) != 1 || out.Suggestions[0].Monitor != "b" || out.Suggestions[0].Basis != DependencyBasisTiming {
 		t.Fatalf("%+v %v", out, err)
 	}
 	in.ExistingDependencies = []DependencyEdgeRef{{Monitor: "a", DependsOn: "outside"}, {Monitor: "outside", DependsOn: "b"}}
@@ -117,11 +120,20 @@ func TestDependencyDirectionsAndCycles(t *testing.T) {
 }
 func TestCandidateBudget(t *testing.T) {
 	in := DependencyInput{}
-	for i := 0; i < 100; i++ {
-		in.Monitors = append(in.Monitors, DependencyMonitorRef{Ref: string(rune(1000 + i)), Tags: []string{"billing"}})
+	for i := 0; i < 60; i++ {
+		tag := fmt.Sprintf("svc-%d", i)
+		in.Monitors = append(in.Monitors,
+			DependencyMonitorRef{Ref: fmt.Sprintf("s%03d", i), Name: fmt.Sprintf("service %d", i), Type: "http", Tags: []string{tag}},
+			DependencyMonitorRef{Ref: fmt.Sprintf("r%03d", i), Name: fmt.Sprintf("store %d", i), Type: "postgres", Tags: []string{tag}})
 	}
-	if n := len(CandidatePairs(in)); n != 50 {
-		t.Fatalf("%d", n)
+	pairs := CandidatePairs(in)
+	if len(pairs) != 50 {
+		t.Fatalf("%d", len(pairs))
+	}
+	for _, p := range pairs {
+		if p.basis != DependencyBasisStructural {
+			t.Fatalf("%+v", p)
+		}
 	}
 }
 func TestFullWindowSummaryAndAllowlist(t *testing.T) {
@@ -159,6 +171,12 @@ func TestSummarizeChecksCertificateFromAnyEnvelope(t *testing.T) {
 	e = SummarizeChecks([]CheckContext{{Status: "success", CheckedAt: now, Metrics: json.RawMessage(`{"http":{"tls":{"not_after":"` + expired + `"}}}`)}})
 	if !e.CertificateExpired {
 		t.Fatalf("http certificate evidence = %+v, want expired", e)
+	}
+	// An expired intermediate counts although the leaf is valid: the chain's
+	// earliest expiry is the one the tls_expiry alert reports.
+	chain := json.RawMessage(`{"tcp":{"tls":{"not_after":"` + valid + `","chain_not_after":"` + expired + `"}}}`)
+	if e = SummarizeChecks([]CheckContext{{Status: "success", CheckedAt: now, Metrics: chain}}); !e.CertificateExpired {
+		t.Fatalf("chain certificate evidence = %+v, want expired", e)
 	}
 }
 func TestDisabledAndCancellation(t *testing.T) {

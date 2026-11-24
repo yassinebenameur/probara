@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/pagination"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
@@ -158,7 +159,7 @@ func (r *Recorder) Record(event Event) {
 func FromRequest(r *http.Request) Event {
 	ctx := r.Context()
 	event := Event{
-		IP:        ClientIP(r),
+		IP:        clientip.FromRequest(r),
 		UserAgent: r.UserAgent(),
 		ActorType: ActorAnonymous,
 	}
@@ -201,15 +202,6 @@ func (e *Event) MergeDetails(details map[string]any) {
 	for k, v := range details {
 		e.Details[k] = v
 	}
-}
-
-// ClientIP extracts the originating client IP, honoring X-Forwarded-For.
-func ClientIP(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		parts := strings.Split(forwarded, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	return r.RemoteAddr
 }
 
 func (r *Recorder) run() {
@@ -285,7 +277,9 @@ func (r *Recorder) insertBatch(batch []Event) {
 
 	if err := r.insertEvents(ctx, batch); err != nil {
 		if pgerr.IsMissingSchema(err) {
-			// Pre-migration window (post-upgrade migrations job): drop quietly.
+			// Pre-migration window (only when a deployment starts the binary
+			// before migrating; the chart and Compose migrate first): drop
+			// quietly.
 			return
 		}
 		r.log.WithError(err).Error("Failed to persist audit events")

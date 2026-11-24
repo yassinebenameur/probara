@@ -6,7 +6,8 @@ import (
 	"sort"
 )
 
-const CatalogueVersion = "probara-evidence-v1"
+// CatalogueVersion must equal catalogue.json's "version" (TestCatalogueVersionMatchesJSON).
+const CatalogueVersion = "probara-evidence-v2"
 
 // RCAInsufficientEvidence is the rca key the model answers when it abstains.
 // It is a catalogue entry like any other, but never a named cause.

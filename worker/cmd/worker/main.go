@@ -9,6 +9,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/bootstrap"
+	"github.com/yassinebenameur/probara/shared/buildinfo"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/locationauth"
@@ -33,7 +34,7 @@ func main() {
 
 	// Initialize logger
 	log := logger.New(cfg.ServiceName, cfg.LogLevel)
-	log.Info("Starting worker service")
+	log.WithField("version", buildinfo.Version).Info("Starting worker service")
 
 	// Initialize metrics
 	metricsRegistry := metrics.NewRegistry(cfg.ServiceName)

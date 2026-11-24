@@ -3,19 +3,24 @@ package monitors
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/logger"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
@@ -28,6 +33,10 @@ type Service struct {
 	groupResolver  GroupResolver
 	statusNotifier StatusNotifier
 	encryptor      secrets.Encryptor
+	// versions records configuration history (versions.go); nil on
+	// repositories that are not Postgres-backed.
+	versions   *VersionStore
+	versionLog *logger.Logger
 }
 
 type GroupResolver interface {
@@ -40,10 +49,17 @@ type StatusNotifier interface {
 
 // NewService creates a new monitor service
 func NewService(database Repository) *Service {
-	return &Service{
+	svc := &Service{
 		repo:      database,
 		encryptor: secrets.NoOpEncryptor{},
 	}
+	// History lives in the same database as the monitors, so every
+	// Postgres-backed service records it without extra wiring and no write
+	// path can be built without it.
+	if pg, ok := database.(*PostgresRepository); ok {
+		svc.versions = NewVersionStore(pg.db)
+	}
+	return svc
 }
 
 // ConfigureEncryption wires the encryptor used for secret config fields.
@@ -61,21 +77,50 @@ func (s *Service) ConfigureHistoryDependencies(groupResolver GroupResolver, stat
 }
 
 // prepareConfigForWrite merges write-only secret placeholders ("***"/empty =
-// keep the stored value; pass nil existing on create) and encrypts secret
-// fields. Configs for types without secret fields pass through unchanged.
+// keep the stored value; pass nil existing on create), moves credential-named
+// headers into the secret maps (secrets.NormalizeSensitiveHeaders, after the
+// merge so an absent secret map is restored before a moved header edits it),
+// refuses a merged config whose kept secrets conflict with the request, and
+// encrypts secret fields. Every monitor write (handlers, import, MCP, bulk)
+// goes through here. Configs for types without secret fields pass through
+// unchanged.
 func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming, existing json.RawMessage) (json.RawMessage, error) {
 	if !secrets.HasMonitorSecrets(string(monitorType)) {
 		return incoming, nil
 	}
-	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), incoming, existing)
+	merged, err := mergeConfigForWrite(monitorType, incoming, existing)
 	if err != nil {
-		return nil, fmt.Errorf("merge config secrets: %w", err)
+		return nil, err
 	}
 	encrypted, err := secrets.EncryptMonitorConfig(s.encryptor, string(monitorType), merged)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt config secrets: %w", err)
 	}
 	return encrypted, nil
+}
+
+// mergeConfigForWrite is the part of prepareConfigForWrite before
+// encryption: the write-only merge, the move of credential-named entries and
+// the conflict check. Planning an apply (apply_config.go) runs the same steps,
+// so what it reports is what a save would store.
+func mergeConfigForWrite(monitorType models.MonitorType, incoming, existing json.RawMessage) (json.RawMessage, error) {
+	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), incoming, existing)
+	if err != nil {
+		return nil, fmt.Errorf("merge config secrets: %w", err)
+	}
+	merged, _, err = secrets.NormalizeSensitiveHeaders(string(monitorType), merged)
+	if err != nil {
+		return nil, fmt.Errorf("normalize sensitive headers: %w", err)
+	}
+	if err := validation.ValidateMergedSecretPairs(monitorType, merged); err != nil {
+		if len(existing) == 0 {
+			// Nothing was kept on a create, so the conflict comes from
+			// moving credential-named entries into their secret map.
+			return nil, fmt.Errorf("%w: %v (after moving credential-named headers, metadata or variables into their secret map; rename or remove one of them)", ErrSecretConflict, err)
+		}
+		return nil, fmt.Errorf("%w: %v (a stored secret was kept because the request omitted it; send \"\" to clear it, or leave it out of a submitted secret map)", ErrSecretConflict, err)
+	}
+	return merged, nil
 }
 
 // maskSecrets replaces secret config fields with the "***" placeholder before
@@ -91,6 +136,38 @@ func (s *Service) maskSecrets(monitor *models.Monitor) {
 }
 
 var ErrMonitorTypeMismatch = errors.New("test type must match the saved monitor type")
+
+// ErrSecretConflict reports a config that is only invalid once the write-only
+// merge restored a stored secret the request left out (basic auth beside a
+// kept Authorization secret header, a plain header beside a kept secret one).
+// Handlers map it to 400.
+var ErrSecretConflict = errors.New("config conflicts with stored secrets")
+
+// ErrMonitorKeyTaken reports a key another live monitor of the workspace
+// already has (idx_monitors_tenant_key). Handlers map it to 409.
+var ErrMonitorKeyTaken = errors.New("another monitor in this workspace already has this key")
+
+// monitorKeyIndex is the unique index that keeps keys unique per workspace.
+const monitorKeyIndex = "idx_monitors_tenant_key"
+
+// keyTakenOr turns a violation of the key's unique index into
+// ErrMonitorKeyTaken and returns any other error as is.
+func keyTakenOr(err error) error {
+	if pgerr.IsUniqueViolationOf(err, monitorKeyIndex) {
+		return ErrMonitorKeyTaken
+	}
+	return err
+}
+
+// normalizedKey is the key column value of a request's key: nil (no key)
+// for nil or "", which is how a PATCH removes a key.
+func normalizedKey(key *string) *string {
+	if key == nil || *key == "" {
+		return nil
+	}
+	value := *key
+	return &value
+}
 
 // ErrCallMonitorForbidden refuses a SIP test-call (INVITE) monitor to anyone
 // but a tenant admin's session. Each check of such a monitor places a real,
@@ -139,8 +216,39 @@ func (s *Service) ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, mon
 	return merged, nil
 }
 
-// CreateMonitor creates a new monitor
+// InTx runs fn as one save: every monitor, group member, dependency and
+// configuration version write made with the ctx it passes commits together
+// or not at all (api/internal/dbtx). Inside an outer save it joins it.
+// Without a Postgres-backed repository (unit tests) fn runs as is.
+//
+// When it opens the transaction, a deadlock or serialization failure runs fn
+// once more, then comes back wrapped in dbtx.ErrConflict (handlers answer
+// 503: nothing was saved). fn must therefore only write through ctx.
+func (s *Service) InTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if s.versions == nil {
+		return fn(ctx)
+	}
+	return dbtx.RunRetry(ctx, s.versions.db, func(ctx context.Context, _ *sql.Tx) error {
+		return fn(withSaveScope(ctx))
+	})
+}
+
+// CreateMonitor creates a new monitor and records its first version, in one
+// transaction.
 func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *models.CreateMonitorRequest) (*models.Monitor, error) {
+	var monitor *models.Monitor
+	err := s.InTx(ctx, func(ctx context.Context) error {
+		var err error
+		monitor, err = s.createMonitor(ctx, tenantID, req)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return monitor, nil
+}
+
+func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, req *models.CreateMonitorRequest) (*models.Monitor, error) {
 	if err := RequireCallPermission(ctx, req.Type, req.Config); err != nil {
 		return nil, err
 	}
@@ -179,6 +287,10 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	if req.ConsecutiveFailuresThreshold != nil {
 		consecutiveFailuresThreshold = *req.ConsecutiveFailuresThreshold
 	}
+	recoveryThreshold := 1 // DB default: single-sample recovery (S-T7)
+	if req.RecoveryThreshold != nil {
+		recoveryThreshold = *req.RecoveryThreshold
+	}
 	notificationMode := "default" // DB default
 	if req.NotificationMode != nil {
 		notificationMode = *req.NotificationMode
@@ -202,6 +314,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		ID:                           monitorID,
 		TenantID:                     tenantID,
 		Name:                         req.Name,
+		Key:                          normalizedKey(req.Key),
 		Type:                         req.Type,
 		Config:                       config,
 		IntervalSeconds:              req.IntervalSeconds,
@@ -214,6 +327,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		CreatedAt:                    now,
 		UpdatedAt:                    now,
 		ConsecutiveFailuresThreshold: consecutiveFailuresThreshold,
+		RecoveryThreshold:            recoveryThreshold,
 		NotificationMode:             notificationMode,
 		MemberAlertRollup:            memberAlertRollup,
 		DependencySuppression:        dependencySuppression,
@@ -221,7 +335,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	}
 
 	if err := s.repo.Create(ctx, monitor); err != nil {
-		return nil, err
+		return nil, keyTakenOr(err)
 	}
 
 	if len(locationIDs) > 0 {
@@ -250,6 +364,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		monitor.NotificationChannels = []models.MonitorChannelAssignment{}
 	}
 
+	s.recordVersion(ctx, tenantID, monitorID, SecretFieldChanges("", nil, req.Type, config))
 	s.maskSecrets(monitor)
 	return monitor, nil
 }
@@ -360,8 +475,45 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 	}, nil
 }
 
-// UpdateMonitor updates a monitor (partial update)
+// UpdateMonitor updates a monitor (partial update) and records the version,
+// in one transaction: a write that fails half way leaves nothing behind.
 func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UUID, req *models.UpdateMonitorRequest) (*models.Monitor, error) {
+	var monitor *models.Monitor
+	err := s.InTx(ctx, func(ctx context.Context) error {
+		var err error
+		monitor, err = s.updateMonitor(ctx, tenantID, monitorID, req)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return monitor, nil
+}
+
+// OnlyPause reports whether an update changes nothing but the pause state.
+// Pausing is not configuration: it records no version (it shows in the
+// state timeline and the audit log instead).
+func OnlyPause(req *models.UpdateMonitorRequest) bool {
+	if req == nil || req.Enabled == nil {
+		return false
+	}
+	rest := *req
+	rest.Enabled = nil
+	return reflect.ValueOf(rest).IsZero()
+}
+
+func (s *Service) updateMonitor(ctx context.Context, tenantID, monitorID uuid.UUID, req *models.UpdateMonitorRequest) (*models.Monitor, error) {
+	// Lock the row first (lock order, api/internal/dbtx; a no-op when the
+	// caller already did, together with the save's other monitors), then
+	// keep the configuration before any write as the baseline of a monitor
+	// without history.
+	if err := s.LockMonitors(ctx, tenantID, []uuid.UUID{monitorID}, nil); err != nil {
+		return nil, err
+	}
+	if !OnlyPause(req) {
+		s.CaptureBaseline(ctx, tenantID, monitorID)
+	}
+
 	// Load straight from the repo: the stored (unmasked) config is needed to
 	// resolve write-only secret placeholders in the incoming config.
 	existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
@@ -380,6 +532,12 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
+	if req.Key != nil {
+		setParts = append(setParts, fmt.Sprintf("key = $%d", argIndex))
+		args = append(args, normalizedKey(req.Key))
+		argIndex++
+	}
+
 	if req.Type != nil {
 		setParts = append(setParts, fmt.Sprintf("type = $%d", argIndex))
 		args = append(args, *req.Type)
@@ -391,11 +549,13 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		effectiveType = *req.Type
 	}
 
+	var secretChanges []string
 	if len(req.Config) > 0 {
 		config, err := s.prepareConfigForWrite(effectiveType, req.Config, existing.Config)
 		if err != nil {
 			return nil, err
 		}
+		secretChanges = SecretFieldChanges(existing.Type, existing.Config, effectiveType, config)
 		setParts = append(setParts, fmt.Sprintf("config = $%d", argIndex))
 		args = append(args, config)
 		argIndex++
@@ -439,6 +599,14 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	if req.ConsecutiveFailuresThreshold != nil {
 		setParts = append(setParts, fmt.Sprintf("consecutive_failures_threshold = $%d", argIndex))
 		args = append(args, *req.ConsecutiveFailuresThreshold)
+		argIndex++
+	}
+
+	// A new recovery threshold applies from the next passing check; passes
+	// already counted toward a recovery in progress are kept (S-T7).
+	if req.RecoveryThreshold != nil {
+		setParts = append(setParts, fmt.Sprintf("recovery_threshold = $%d", argIndex))
+		args = append(args, *req.RecoveryThreshold)
 		argIndex++
 	}
 
@@ -530,7 +698,7 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 
 	if len(setParts) > 0 {
 		if err := s.repo.Update(ctx, monitor, setParts, args); err != nil {
-			return nil, err
+			return nil, keyTakenOr(err)
 		}
 	} else {
 		// No DB column updates but we still need to handle monitor_channels below.
@@ -549,6 +717,7 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		monitor.Enabled = *req.Enabled
 		if existing.Enabled != *req.Enabled {
 			monitor.CurrentState = "unknown"
+			monitor.ConsecutiveSuccesses = 0
 		}
 	}
 
@@ -599,6 +768,9 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		}
 	}
 
+	if !OnlyPause(req) {
+		s.recordVersion(ctx, tenantID, monitorID, secretChanges)
+	}
 	return monitor, nil
 }
 
@@ -641,9 +813,73 @@ func effectiveLocationQuorum(requested *int, locationCount int) int {
 	return quorum
 }
 
-// DeleteMonitor deletes a monitor
+// DeleteMonitor deletes a monitor. Groups holding it and monitors
+// depending on it lose it from their settings, so each gets a system
+// version in the same transaction.
 func (s *Service) DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) error {
-	return s.repo.Delete(ctx, tenantID, monitorID)
+	return s.deleteMonitors(ctx, tenantID, []uuid.UUID{monitorID}, func(ctx context.Context) error {
+		return s.repo.Delete(ctx, tenantID, monitorID)
+	})
+}
+
+// deleteMonitors runs a delete in one transaction: the deleted monitors and
+// the groups and dependents that name them are locked together, FOR UPDATE
+// in one ascending pass before the first write (lock order,
+// api/internal/dbtx; the affected rows' lock is what their system versions
+// rely on), the affected monitors are prepared for their system versions
+// (set-based, see SystemVersions), the delete runs, and the versions are
+// recorded; a recording failure never fails the delete.
+func (s *Service) deleteMonitors(ctx context.Context, tenantID uuid.UUID, deleted []uuid.UUID, del func(ctx context.Context) error) error {
+	return s.InTx(ctx, func(ctx context.Context) error {
+		var affected []uuid.UUID
+		if s.versions != nil {
+			var err error
+			if affected, err = s.versions.MonitorsAffectedByDelete(ctx, tenantID, deleted); err != nil {
+				return err
+			}
+		}
+		if err := s.LockMonitors(ctx, tenantID, append(append([]uuid.UUID{}, deleted...), affected...), nil); err != nil {
+			return err
+		}
+		tx, inTx := dbtx.From(ctx)
+		var cascade *SystemVersions
+		if s.versions != nil && inTx {
+			cascade = PrepareSystemVersionsTx(ctx, tx, tenantID, affected)
+		}
+		if err := del(ctx); err != nil {
+			return err
+		}
+		if cascade != nil {
+			cascade.RecordTx(ctx, tx)
+		}
+		return nil
+	})
+}
+
+// ValidateMergedConfig validates config the way a save of it would store it
+// for the monitor: merged with the secrets it holds now and normalized. A
+// restore checks this before writing, because a version's masked config can
+// rely on a secret the monitor no longer holds (a connection string, say),
+// and the saved monitor would then lack a required field.
+func (s *Service) ValidateMergedConfig(ctx context.Context, tenantID, monitorID uuid.UUID, monitorType models.MonitorType, config json.RawMessage) error {
+	existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
+	if err != nil {
+		return err
+	}
+	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), config, existing.Config)
+	if err != nil {
+		return err
+	}
+	if merged, _, err = secrets.NormalizeSensitiveHeaders(string(monitorType), merged); err != nil {
+		return err
+	}
+	// A conflict with a kept secret (basic auth beside a stored
+	// Authorization secret header) is reported as such, the way a save
+	// reports it.
+	if err := validation.ValidateMergedSecretPairs(monitorType, merged); err != nil {
+		return fmt.Errorf("%w: %v", ErrSecretConflict, err)
+	}
+	return validation.DefaultRegistry.Validate(monitorType, merged)
 }
 
 // DeleteMonitorHistory clears raw checks, alert events, and persisted analytics state.
@@ -692,7 +928,54 @@ func (s *Service) BulkDeleteMonitors(
 	if err := s.repo.VerifyMonitorsBelongToTenant(ctx, tenantID, monitorIDs); err != nil {
 		return 0, err
 	}
-	return s.repo.BulkSoftDelete(ctx, tenantID, monitorIDs)
+	var deleted int64
+	err := s.deleteMonitors(ctx, tenantID, monitorIDs, func(ctx context.Context) error {
+		var err error
+		deleted, err = s.repo.BulkSoftDelete(ctx, tenantID, monitorIDs)
+		return err
+	})
+	return deleted, err
+}
+
+// BulkAlertingBatchSize bounds the monitors one transaction of a bulk
+// alerting edit changes, so the row locks it holds (which result ingest of
+// those monitors waits on) stay short.
+const BulkAlertingBatchSize = 100
+
+// ErrChannelsNotInTenant reports a bulk edit naming a channel that is not
+// one of the tenant's.
+var ErrChannelsNotInTenant = errors.New("one or more channels not found")
+
+// ErrBulkAlertingRefused reports a bulk alerting edit that a selected
+// monitor's type cannot take; the wrapped text names the monitor and rule.
+var ErrBulkAlertingRefused = errors.New("bulk alerting edit refused")
+
+// verifyChannels refuses channel ids that are not the tenant's (the
+// repository would only refuse them on write, after earlier monitors of the
+// edit were changed). Without a Postgres-backed repository it checks nothing.
+func (s *Service) verifyChannels(ctx context.Context, tenantID uuid.UUID, channelIDs []string) error {
+	if s.versions == nil {
+		return nil
+	}
+	parsed := make([]uuid.UUID, 0, len(channelIDs))
+	for _, id := range channelIDs {
+		channelID, err := uuid.Parse(id)
+		if err != nil {
+			return fmt.Errorf("%w: invalid channel_id %q", ErrChannelsNotInTenant, id)
+		}
+		parsed = append(parsed, channelID)
+	}
+	parsed = sortedIDs(parsed)
+	var count int
+	if err := dbtx.Of(ctx, s.versions.db).QueryRowContext(ctx, `
+		SELECT count(*) FROM alert_channels WHERE id = ANY($1) AND tenant_id = $2
+	`, pq.Array(parsed), tenantID).Scan(&count); err != nil {
+		return fmt.Errorf("verify channels: %w", err)
+	}
+	if count != len(parsed) {
+		return ErrChannelsNotInTenant
+	}
+	return nil
 }
 
 // BulkUpdateAlerting applies alerting fields to many monitors in a tenant-scoped way.
@@ -702,6 +985,7 @@ func (s *Service) BulkUpdateAlerting(
 	tenantID uuid.UUID,
 	monitorIDs []uuid.UUID,
 	threshold *int,
+	recoveryThreshold *int,
 	mode *string,
 	channels []models.MonitorChannelAssignment,
 ) (int, error) {
@@ -712,10 +996,10 @@ func (s *Service) BulkUpdateAlerting(
 		return 0, err
 	}
 
-	// The updates below are one UpdateMonitor each, with no transaction, so
-	// the test-call gate UpdateMonitor applies would only stop the edit at
-	// the first call monitor, after the earlier rows were written. Refuse
-	// the whole edit up front instead: a 403 then means nothing changed.
+	// Everything a request can get wrong is checked up front, so a 403 or a
+	// 400 means nothing changed: the test-call gate (UpdateMonitor would only
+	// stop at the first call monitor), the per-type threshold rules the
+	// handler's range check cannot see, and the channels.
 	for _, monitorID := range monitorIDs {
 		existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
 		if err != nil {
@@ -724,19 +1008,90 @@ func (s *Service) BulkUpdateAlerting(
 		if err := RequireCallPermission(ctx, existing.Type, existing.Config); err != nil {
 			return 0, err
 		}
+		if err := bulkThresholdAllowed(existing, threshold); err != nil {
+			return 0, err
+		}
 	}
 
-	for _, monitorID := range monitorIDs {
-		req := &models.UpdateMonitorRequest{
-			ConsecutiveFailuresThreshold: threshold,
-			NotificationMode:             mode,
-			NotificationChannels:         channels,
+	if len(channels) > 0 {
+		ids := make([]string, 0, len(channels))
+		for _, channel := range channels {
+			ids = append(ids, channel.ChannelID)
 		}
-		if _, err := s.UpdateMonitor(ctx, tenantID, monitorID, req); err != nil {
-			return 0, fmt.Errorf("failed to update monitor %s: %w", monitorID, err)
+		if err := s.verifyChannels(ctx, tenantID, ids); err != nil {
+			return 0, err
 		}
 	}
-	return len(monitorIDs), nil
+
+	// Batches of BulkAlertingBatchSize monitors in ascending id order, one
+	// transaction each with its rows locked first (lock order,
+	// api/internal/dbtx): every monitor of a batch and its version, or none
+	// of them. Batches commit one after the other, so a failure part-way
+	// (an infrastructure or concurrency error, or a type change racing the
+	// checks above) leaves the earlier batches applied; the count says how
+	// many.
+	ordered := sortedIDs(monitorIDs)
+	updated := 0
+	for start := 0; start < len(ordered); start += BulkAlertingBatchSize {
+		batch := ordered[start:min(start+BulkAlertingBatchSize, len(ordered))]
+		err := s.InTx(ctx, func(ctx context.Context) error {
+			// Rows first, then the batch's baselines and versions set-based
+			// (one savepoint each, not one per monitor).
+			if err := s.LockMonitors(ctx, tenantID, batch, nil); err != nil {
+				return err
+			}
+			// The threshold rule again, on the locked rows: a type change
+			// committed since the check above (a monitor made a domain
+			// monitor) must not take a threshold its new type refuses. The
+			// batch then writes nothing, but earlier batches stay applied
+			// and the count reports them, as for any failure part-way.
+			if threshold != nil {
+				for _, monitorID := range batch {
+					locked, err := s.repo.GetByID(ctx, tenantID, monitorID)
+					if err != nil {
+						return err
+					}
+					if err := bulkThresholdAllowed(locked, threshold); err != nil {
+						return err
+					}
+				}
+			}
+			s.CaptureBaselines(ctx, tenantID, batch...)
+			ctx, versions := DeferVersions(ctx)
+			for _, monitorID := range batch {
+				req := &models.UpdateMonitorRequest{
+					ConsecutiveFailuresThreshold: threshold,
+					RecoveryThreshold:            recoveryThreshold,
+					NotificationMode:             mode,
+					NotificationChannels:         channels,
+				}
+				if _, err := s.updateMonitor(ctx, tenantID, monitorID, req); err != nil {
+					return fmt.Errorf("failed to update monitor %s: %w", monitorID, err)
+				}
+			}
+			versions.Flush(ctx)
+			return nil
+		})
+		if err != nil {
+			return updated, err
+		}
+		updated += len(batch)
+	}
+	return updated, nil
+}
+
+// bulkThresholdAllowed applies the per-type failure-threshold rules a save
+// of the monitor would: a domain monitor's floor (validation.
+// ValidateMonitorUpdate). The bulk edit changes no location, so only the
+// threshold half of the domain rule is asked (location count 0).
+func bulkThresholdAllowed(monitor *models.Monitor, threshold *int) error {
+	if threshold == nil || monitor.Type != models.MonitorTypeDomain {
+		return nil
+	}
+	if err := sharedmodels.ValidateDomainMonitorRules(*threshold, 0); err != nil {
+		return fmt.Errorf("%w: monitor %q: %v", ErrBulkAlertingRefused, monitor.Name, err)
+	}
+	return nil
 }
 
 // generatePushToken generates a unique token for push monitors

@@ -34,6 +34,16 @@ type AlertDetails struct {
 	RootCauseMonitorID   *string    `json:"root_cause_monitor_id,omitempty"`
 	RootCauseMonitorName *string    `json:"root_cause_monitor_name,omitempty"`
 	RootCauseDownSince   *time.Time `json:"root_cause_down_since,omitempty"`
+	// A reopened alert (relapse) arrives as "created" with these set.
+	RelapseCount int        `json:"relapse_count,omitempty"`
+	ReopenedAt   *time.Time `json:"reopened_at,omitempty"`
+	// Kind and the location subject let a live row of a monitor-less alert
+	// (mesh edge, offline location) render and link like a listed one.
+	Kind               string  `json:"kind,omitempty"`
+	SourceLocationID   *string `json:"source_location_id,omitempty"`
+	SourceLocationName *string `json:"source_location_name,omitempty"`
+	TargetLocationID   *string `json:"target_location_id,omitempty"`
+	TargetLocationName *string `json:"target_location_name,omitempty"`
 }
 
 // Subscriber listens for alert events from NATS and broadcasts to SSE clients
@@ -171,6 +181,8 @@ func (s *Subscriber) convertToAlertWithDetails(event *AlertEvent) *models.AlertW
 			ResolvedAt:   event.Alert.ResolvedAt,
 			FailureCount: event.Alert.FailureCount,
 			LastError:    event.Alert.LastError,
+			RelapseCount: event.Alert.RelapseCount,
+			ReopenedAt:   event.Alert.ReopenedAt,
 			CreatedAt:    event.Alert.TriggeredAt,
 			UpdatedAt:    event.Timestamp,
 		},
@@ -184,6 +196,23 @@ func (s *Subscriber) convertToAlertWithDetails(event *AlertEvent) *models.AlertW
 	}
 	alert.RootCauseMonitorName = event.Alert.RootCauseMonitorName
 	alert.RootCauseDownSince = event.Alert.RootCauseDownSince
+	alert.Kind = event.Alert.Kind
+	alert.SourceLocationID = parseOptionalUUID(event.Alert.SourceLocationID)
+	alert.TargetLocationID = parseOptionalUUID(event.Alert.TargetLocationID)
+	alert.SourceLocationName = event.Alert.SourceLocationName
+	alert.TargetLocationName = event.Alert.TargetLocationName
 
 	return alert
+}
+
+// parseOptionalUUID parses an optional event ID; nil when absent or invalid.
+func parseOptionalUUID(s *string) *uuid.UUID {
+	if s == nil {
+		return nil
+	}
+	id, err := uuid.Parse(*s)
+	if err != nil {
+		return nil
+	}
+	return &id
 }

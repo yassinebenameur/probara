@@ -65,6 +65,11 @@ spec:
         - name: STATUS_PAGE_BASE_URL
           value: "{{ .Values.statusPage.baseUrl }}"
         {{- end }}
+        # Visitors' email subscription requests are forwarded to the API
+        # in-cluster (the API stores subscribers; this service stays
+        # read-only).
+        - name: STATUS_PAGE_INTERNAL_API_URL
+          value: {{ printf "http://%s-api:%v" (include "monitoring-platform.fullname" .) .Values.api.httpPort | quote }}
         {{- if .Values.statusPage.vapid.publicKey }}
         # Rendered as a literal on purpose. The VAPID public key is published
         # inside every status page as the applicationServerKey, so it is not a
@@ -81,8 +86,31 @@ spec:
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_VAPID_PRIVATE_KEY" "key" "status_page_vapid_private_key" "secret" .Values.secrets.statusPageVapidPrivateKeyExistingSecret "secretKey" .Values.secrets.statusPageVapidPrivateKeyExistingSecretKey) | nindent 8 }}
         {{- end }}
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPagePreviewSecret "secret" .Values.secrets.statusPagePreviewSecretExistingSecret) }}
-        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" true) | nindent 8 }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" (not .Values.secrets.statusPagePreviewSecretExistingSecret)) | nindent 8 }}
         {{- end }}
+        {{- /* Visitor sessions on password and private pages: a per-field
+        Secret (must hold the key), the chart-wide Secret (key optional, so
+        an older Secret keeps working with those pages closed), or the
+        chart-managed Secret with a literal or derived value. */}}
+        {{- if or .Values.secrets.statusPageSessionSecretExistingSecret .Values.secrets.existingSecret (include "monitoring-platform.statusPageSessionSecret" .) }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_SESSION_SECRET" "key" "status_page_session_secret" "secret" .Values.secrets.statusPageSessionSecretExistingSecret "secretKey" .Values.secrets.statusPageSessionSecretExistingSecretKey "optional" (and (not .Values.secrets.statusPageSessionSecretExistingSecret) .Values.secrets.existingSecret)) | nindent 8 }}
+        {{- end }}
+        {{- with (include "monitoring-platform.statusPageInternalTokenEnv" .) }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        {{- if or (kindIs "bool" .Values.statusPage.cookieSecure) .Values.statusPage.cookieSecure }}
+        - name: STATUS_PAGE_COOKIE_SECURE
+          value: {{ toString .Values.statusPage.cookieSecure | quote }}
+        {{- end }}
+        {{- with (include "monitoring-platform.statusPagePlatformHosts" .) }}
+        - name: STATUS_PAGE_PLATFORM_HOSTS
+          value: {{ . | quote }}
+        {{- end }}
+        {{- if .Values.statusPage.trustForwardedHost }}
+        - name: STATUS_PAGE_TRUST_FORWARDED_HOST
+          value: "true"
+        {{- end }}
+        {{- include "monitoring-platform.edgeEnv" (dict "ctx" . "component" "status-page") | nindent 8 }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

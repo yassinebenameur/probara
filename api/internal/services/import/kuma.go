@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 // Uptime Kuma migration support.
@@ -86,17 +88,6 @@ var kumaHTTPMethods = map[string]bool{
 
 var kumaDNSRecordTypes = map[string]bool{
 	"A": true, "AAAA": true, "CNAME": true, "TXT": true, "MX": true, "NS": true,
-}
-
-// kumaSensitiveHeaders are request headers we refuse to carry across. HTTP
-// config headers are not in shared/secrets.MonitorSecretFields, so anything
-// placed there is stored in plaintext and read back unmasked.
-var kumaSensitiveHeaders = map[string]bool{
-	"authorization":       true,
-	"proxy-authorization": true,
-	"cookie":              true,
-	"x-api-key":           true,
-	"x-auth-token":        true,
 }
 
 // kumaBackup is the envelope of a Kuma backup export.
@@ -330,6 +321,8 @@ type kumaMonitor struct {
 	Hostname   string  `json:"hostname"`
 	Port       kumaInt `json:"port"`
 	PacketSize kumaInt `json:"packetSize"`
+	// PingCount is Kuma 2's echoes per check (ping_count, default 1).
+	PingCount kumaInt `json:"ping_count"`
 
 	// dns
 	DNSResolveServer string `json:"dns_resolve_server"`
@@ -479,6 +472,7 @@ func translateKumaMonitor(monitor kumaMonitor, notifierNames map[string]string) 
 	switch kumaType {
 	case "http", "keyword", "json-query":
 		config, warnings, reason = kumaHTTPConfig(monitor, kumaType)
+		disable = kumaBasicAuthPasswordMissing(config)
 	case "grpc-keyword":
 		config, warnings, reason = kumaGRPCConfig(monitor)
 	case "port":
@@ -599,17 +593,44 @@ func kumaHTTPConfig(monitor kumaMonitor, kumaType string) (map[string]interface{
 	config := map[string]interface{}{"url": raw, "method": method}
 	var warnings []string
 
-	headers, dropped, headerErr := parseKumaHeaders(monitor.Headers)
+	headers, secretHeaders, headerErr := parseKumaHeaders(monitor.Headers)
 	if headerErr != "" {
 		warnings = append(warnings, headerErr)
+	}
+
+	// Basic auth carries over into basic_auth_* (the password is a registered
+	// secret, encrypted when the monitor is created). Uptime Kuma sends it in
+	// place of any Authorization header the monitor also lists, so that header
+	// is dropped as Kuma itself would have overridden it.
+	if user, pass, ok := kumaBasicAuth(monitor); ok {
+		if strings.Contains(user, ":") {
+			warnings = append(warnings, "basic auth was not imported: its username contains ':', which basic auth cannot encode")
+		} else {
+			config["basic_auth_username"] = user
+			if pass != "" {
+				config["basic_auth_password"] = pass
+			} else {
+				// scripts/kuma-export redacts the password and keeps the
+				// username; an enabled monitor would send "user:" and alert.
+				warnings = append(warnings, kumaBasicAuthPasswordWarning)
+			}
+			// Authorization is a sensitive name, so it can only be here.
+			for name := range secretHeaders {
+				if strings.EqualFold(name, "Authorization") {
+					delete(secretHeaders, name)
+					warnings = append(warnings, "the Authorization header was dropped: Uptime Kuma replaced it with the monitor's basic auth, which was imported instead")
+				}
+			}
+		}
 	}
 	if len(headers) > 0 {
 		config["headers"] = headers
 	}
-	if len(dropped) > 0 {
-		warnings = append(warnings, fmt.Sprintf(
-			"credential-bearing request headers were not imported (%s) - re-enter them on the monitor",
-			strings.Join(dropped, ", ")))
+	// Credential-named headers land in secret_headers, encrypted at rest and
+	// masked on every read (secrets.IsSensitiveHeaderName, the same rule the
+	// API applies to any write).
+	if len(secretHeaders) > 0 {
+		config["secret_headers"] = secretHeaders
 	}
 
 	if body := strings.TrimSpace(monitor.Body); body != "" {
@@ -686,14 +707,38 @@ func kumaHTTPConfig(monitor kumaMonitor, kumaType string) (map[string]interface{
 	return config, warnings, ""
 }
 
-// kumaAuthWarning reports dropped HTTP authentication. None of it is imported:
-// Probara's http config has no auth fields, and folding credentials into
-// headers would store them in plaintext.
-func kumaAuthWarning(monitor kumaMonitor) string {
-	dropped := make([]string, 0, 4)
-	if strings.TrimSpace(monitor.BasicAuthPass) != "" || strings.TrimSpace(monitor.BasicAuthUser) != "" {
-		dropped = append(dropped, "basic auth")
+// kumaBasicAuthPasswordWarning names a basic-auth username imported without
+// its password; such a monitor is created disabled, as database monitors are.
+const kumaBasicAuthPasswordWarning = "the basic auth password was not imported, so this monitor was created disabled - re-enter the basic auth password and enable it"
+
+// kumaBasicAuthPasswordMissing reports a translated http config that carries a
+// basic-auth username but no password.
+func kumaBasicAuthPasswordMissing(config map[string]interface{}) bool {
+	_, hasUser := config["basic_auth_username"]
+	_, hasPassword := config["basic_auth_password"]
+	return hasUser && !hasPassword
+}
+
+// kumaBasicAuth returns the monitor's basic-auth pair when Uptime Kuma would
+// send one: auth method "basic", or no method on rows older than the
+// auth-method column. NTLM reuses the same columns and is never basic auth.
+func kumaBasicAuth(monitor kumaMonitor) (string, string, bool) {
+	method := strings.ToLower(strings.TrimSpace(monitor.AuthMethod))
+	if method != "" && method != "basic" {
+		return "", "", false
 	}
+	user := strings.TrimSpace(monitor.BasicAuthUser)
+	if user == "" {
+		return "", "", false
+	}
+	return user, monitor.BasicAuthPass, true
+}
+
+// kumaAuthWarning reports dropped HTTP authentication: OAuth2 client
+// credentials, NTLM and client certificates have no equivalent on Probara's
+// http monitor. Basic auth is imported (kumaBasicAuth).
+func kumaAuthWarning(monitor kumaMonitor) string {
+	dropped := make([]string, 0, 3)
 	if strings.TrimSpace(monitor.OAuthClientSecret) != "" || strings.TrimSpace(monitor.OAuthClientID) != "" {
 		dropped = append(dropped, "OAuth2 client credentials")
 	}
@@ -706,7 +751,7 @@ func kumaAuthWarning(monitor kumaMonitor) string {
 	if len(dropped) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("HTTP authentication was not imported (%s) - Probara's HTTP monitor has no credential fields", strings.Join(dropped, ", "))
+	return fmt.Sprintf("HTTP authentication was not imported (%s) - Probara's HTTP monitor supports basic auth and request headers only", strings.Join(dropped, ", "))
 }
 
 func kumaTCPConfig(monitor kumaMonitor) (map[string]interface{}, []string, string) {
@@ -728,9 +773,19 @@ func kumaPingConfig(monitor kumaMonitor) (map[string]interface{}, []string, stri
 	}
 	var warnings []string
 	if size := int(monitor.PacketSize); size > 0 && size != kumaDefaultPacketSize {
-		warnings = append(warnings, fmt.Sprintf("the custom ICMP packet size (%d bytes) was dropped - Probara's ping check is not tunable", size))
+		warnings = append(warnings, fmt.Sprintf("the custom ICMP packet size (%d bytes) was dropped - Probara's ping check sends a fixed packet size", size))
 	}
-	return map[string]interface{}{"host": host}, warnings, ""
+	config := map[string]interface{}{"host": host}
+	// Kuma's default of one echo maps to Probara's own default (three); a
+	// count the operator raised is kept, within Probara's bound.
+	if n := int(monitor.PingCount); n > 1 {
+		if n > sharedmodels.PingMaxCount {
+			warnings = append(warnings, fmt.Sprintf("the ping count of %d was lowered to %d, Probara's maximum", n, sharedmodels.PingMaxCount))
+			n = sharedmodels.PingMaxCount
+		}
+		config["count"] = n
+	}
+	return config, warnings, ""
 }
 
 func kumaDNSConfig(monitor kumaMonitor) (map[string]interface{}, []string, string) {
@@ -970,9 +1025,10 @@ func kumaDBSchemes(target models.MonitorType) (map[string]bool, int) {
 // helpers
 // ---------------------------------------------------------------------------
 
-// parseKumaHeaders decodes Kuma's JSON-string headers column, dropping any
-// header whose name suggests it carries a credential.
-func parseKumaHeaders(raw string) (map[string]string, []string, string) {
+// parseKumaHeaders decodes Kuma's JSON-string headers column, splitting it
+// into plain headers and credential-bearing ones (secrets.IsSensitiveHeaderName)
+// bound for secret_headers.
+func parseKumaHeaders(raw string) (map[string]string, map[string]string, string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "null" || raw == "{}" {
 		return nil, nil, ""
@@ -984,36 +1040,19 @@ func parseKumaHeaders(raw string) (map[string]string, []string, string) {
 	}
 
 	headers := make(map[string]string, len(decoded))
-	dropped := make([]string, 0)
+	secretHeaders := make(map[string]string)
 	for name, value := range decoded {
 		trimmed := strings.TrimSpace(name)
 		if trimmed == "" {
 			continue
 		}
-		if isKumaSensitiveHeader(trimmed) {
-			dropped = append(dropped, trimmed)
+		if secrets.IsSensitiveHeaderName(trimmed) {
+			secretHeaders[trimmed] = fmt.Sprint(value)
 			continue
 		}
 		headers[trimmed] = fmt.Sprint(value)
 	}
-	sort.Strings(dropped)
-	if len(headers) == 0 {
-		headers = nil
-	}
-	return headers, dropped, ""
-}
-
-func isKumaSensitiveHeader(name string) bool {
-	lower := strings.ToLower(name)
-	if kumaSensitiveHeaders[lower] {
-		return true
-	}
-	for _, marker := range []string{"token", "secret", "apikey", "api-key", "password"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	return headers, secretHeaders, ""
 }
 
 // parseKumaAcceptedStatusCodes converts Kuma's status-code selectors into the
@@ -1200,7 +1239,8 @@ func summarizeKumaTranslation(mapped []*kumaMapped, skipped []models.ImportSkipp
 				notifications++
 			case strings.HasPrefix(warning, "renamed from"):
 				renamed++
-			case strings.HasPrefix(warning, "the database password was not imported"):
+			case strings.HasPrefix(warning, "the database password was not imported"),
+				warning == kumaBasicAuthPasswordWarning:
 				disabled++
 			}
 		}
@@ -1216,7 +1256,7 @@ func summarizeKumaTranslation(mapped []*kumaMapped, skipped []models.ImportSkipp
 	}
 	if disabled > 0 {
 		warnings = append(warnings, fmt.Sprintf(
-			"%d database monitor(s) were imported disabled because their password was not carried over",
+			"%d monitor(s) were imported disabled because their password was not carried over",
 			disabled))
 	}
 

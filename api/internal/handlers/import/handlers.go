@@ -19,6 +19,7 @@ const maxUploadSize = 10 * 1024 * 1024 // 10MB
 type Handlers struct {
 	service importservice.ImportService
 	logger  *logger.Logger
+	audit   auditRecorder
 }
 
 // NewHandlers creates a new import handlers instance
@@ -121,7 +122,8 @@ func (h *Handlers) Execute(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
-// Export handles GET /api/v1/monitors/export
+// Export handles GET /api/v1/monitors/export. keyed=true exports only the
+// monitors with a key (the document apply manages).
 func (h *Handlers) Export(w http.ResponseWriter, r *http.Request) {
 	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
@@ -129,7 +131,8 @@ func (h *Handlers) Export(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantID := tenantUUID.String()
 
-	data, err := h.service.ExportMonitors(r.Context(), tenantUUID)
+	opts := importservice.ExportOptions{KeyedOnly: r.URL.Query().Get("keyed") == "true"}
+	data, err := h.service.ExportMonitors(r.Context(), tenantUUID, opts)
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),

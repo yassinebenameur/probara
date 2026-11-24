@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,7 +38,32 @@ type Message struct {
 	Nak          func() error
 	InProgress   func() error
 	NumDelivered uint64
+	// Timestamp is when the stream stored the message (its first
+	// publication), zero when unknown.
+	Timestamp time.Time
 }
+
+// Terminate asks Consume to TERM the message: the server never redelivers
+// it and it leaves the consumer's ack-pending set. For a handler that has
+// given up on a message it cannot process, as opposed to one it has
+// processed (nil, an ACK) or wants retried (any other error, a NAK).
+func Terminate(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &terminateError{err: err}
+}
+
+// IsTerminal reports whether err asks for a TERM (see Terminate).
+func IsTerminal(err error) bool {
+	var term *terminateError
+	return errors.As(err, &term)
+}
+
+type terminateError struct{ err error }
+
+func (e *terminateError) Error() string { return e.err.Error() }
+func (e *terminateError) Unwrap() error { return e.err }
 
 // RetryAfter requests a delayed NAK instead of the immediate retry default.
 func RetryAfter(err error, delay time.Duration) error {
@@ -74,11 +102,60 @@ func reconnectOptions() []nats.Option {
 	}
 }
 
+// websocketPath lets a ws:// or wss:// URL carry an HTTP path, as in
+// "wss://probara.example.com/nats" behind a path-routed ingress. nats.go
+// ignores the URL path and upgrades on "/" unless nats.ProxyPath is set, so
+// the path moves into that option. Other schemes, server lists and path-less
+// URLs pass through unchanged; userinfo (location credentials) is kept.
+func websocketPath(natsURL string) (string, []nats.Option) {
+	if strings.Contains(natsURL, ",") {
+		return natsURL, nil
+	}
+	u, err := url.Parse(natsURL)
+	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") {
+		return natsURL, nil
+	}
+	path := strings.TrimRight(u.Path, "/")
+	if path == "" {
+		return natsURL, nil
+	}
+	u.Path, u.RawPath = "", ""
+	return u.String(), []nats.Option{nats.ProxyPath(path)}
+}
+
+// checkWebsocketCredentials refuses a plain ws:// URL that carries
+// credentials to anything but a loopback host: a private-location worker's
+// URL holds its location credential, which ws:// would send in clear across
+// the network. wss:// (TLS) and credential-free ws:// URLs pass.
+func checkWebsocketCredentials(natsURL string) error {
+	for _, raw := range strings.Split(natsURL, ",") {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || !strings.EqualFold(u.Scheme, "ws") || u.User == nil {
+			continue
+		}
+		host := u.Hostname()
+		if strings.EqualFold(host, "localhost") {
+			continue
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			continue
+		}
+		return fmt.Errorf("refusing to send NATS credentials over plaintext ws:// to %s: use wss:// (TLS)", host)
+	}
+	return nil
+}
+
 // NewClient creates a new NATS JetStream client. The connection retries
 // forever (initial connect and reconnects) so a NATS outage never leaves
-// the client permanently disconnected.
+// the client permanently disconnected. natsURL may be nats://, tls://, or
+// ws:// / wss:// (the broker's websocket listener, optionally with a path),
+// which private-location workers use to reach the broker over 443.
 func NewClient(natsURL string) (*Client, error) {
-	nc, err := nats.Connect(natsURL, reconnectOptions()...)
+	if err := checkWebsocketCredentials(natsURL); err != nil {
+		return nil, err
+	}
+	natsURL, pathOpts := websocketPath(natsURL)
+	nc, err := nats.Connect(natsURL, append(reconnectOptions(), pathOpts...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
@@ -245,6 +322,11 @@ type ConsumerOptions struct {
 	MaxDeliver    int
 	BackOff       []time.Duration
 	FilterSubject string
+	// MaxAckPending caps the messages delivered and not yet acked or
+	// terminated, including those waiting out a delayed NAK; at the cap the
+	// server delivers only redeliveries, no new message. 0 keeps the
+	// server default (1000).
+	MaxAckPending int
 }
 
 // CreateConsumerWithOptions creates or gets a consumer with custom retry
@@ -286,6 +368,7 @@ func (c *Client) CreateConsumerWithOptions(ctx context.Context, streamName, cons
 		MaxDeliver:    maxDeliver,
 		BackOff:       opts.BackOff,
 		FilterSubject: opts.FilterSubject,
+		MaxAckPending: opts.MaxAckPending,
 	}
 
 	// CreateOrUpdate: a durable that already exists with an older retry
@@ -471,10 +554,17 @@ func (c *Client) Consume(ctx context.Context, consumer jetstream.Consumer, handl
 				Nak:          msg.Nak,
 				InProgress:   msg.InProgress,
 				NumDelivered: metadata.NumDelivered,
+				Timestamp:    metadata.Timestamp,
 			}
 
 			// Handle the message
 			if err := handler(queueMsg); err != nil {
+				if IsTerminal(err) {
+					if termErr := msg.TermWithReason(truncateReason(err.Error())); termErr != nil {
+						return fmt.Errorf("failed to TERM message: %w", termErr)
+					}
+					continue
+				}
 				// Explicit NAKs bypass the server's BackOff configuration.
 				var retry *retryAfterError
 				var nakErr error
@@ -495,6 +585,16 @@ func (c *Client) Consume(ctx context.Context, consumer jetstream.Consumer, handl
 			}
 		}
 	}
+}
+
+// truncateReason bounds a TERM reason, which the server copies into the
+// advisory it publishes.
+func truncateReason(reason string) string {
+	const max = 200
+	if len(reason) <= max {
+		return reason
+	}
+	return reason[:max]
 }
 
 // HealthCheck performs a simple health check on the NATS connection

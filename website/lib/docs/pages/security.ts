@@ -111,6 +111,11 @@ export const SECURITY_PAGE: DocPage = {
             'Use separate [API keys](/docs/administration/#api-keys) per integration, give them an expiry, select `read` unless mutation is necessary, and revoke them when ownership changes.',
           ],
         },
+        {
+          type: 'paragraph',
+          text:
+            'A [deleted workspace](/docs/administration/#workspaces) is refused where its tenant is resolved, not only hidden from lists: the session and MCP-token identity lookup (superadmins included), API-key, push-token, collector-token and private-location credential lookups, acknowledge, report-unsubscribe and status-page subscription links, the status-page read path and subscriber email, and every background loop of the scheduler, alerter and worker check that the workspace is live in the same query. A credential minted by a request racing the delete is therefore refused too. The scheduler’s first purge run blanks its stored secrets (channel and monitor credentials, push tokens, private-location worker credentials), then erases the data in bounded batches, keys, tokens and status pages first; once its row is gone nothing of it remains in the database except audit log entries, which follow `AUDIT_RETENTION_DAYS`. Deleting a workspace does not rotate platform credentials (`PROBARA_SECRETS_KEY`, NATS, database) and cannot recall data already sent to providers or captured in backups.',
+        },
       ],
     },
     {
@@ -133,13 +138,13 @@ export const SECURITY_PAGE: DocPage = {
             ],
             [
               'Access token',
-              'JWT signed by `ADMIN_JWT_SECRET`, default 15-minute TTL',
-              'A JWT secret change invalidates active access tokens across all replicas.',
+              'JWT signed by `ADMIN_JWT_SECRET`, default 15-minute TTL; carries the id of its session (`sid`), which the API checks on every request. Its cookie is kept for the refresh lifetime, so the browser sends the expired token with its refresh (the [rate limit](#edge-controls) recognises it); the token’s own expiry still ends what it authenticates',
+              'A JWT secret change invalidates active access tokens across all replicas. Revoking a session refuses its access tokens on their next request, before they expire (see [sessions](#sign-in-lockout-sessions)).',
             ],
             [
               'Refresh token',
-              'SHA-256 hash stored in `admin_sessions`; rotated on use, with a 60-second reuse window so concurrent refreshes (parallel requests, multiple tabs) do not invalidate the session',
-              'Default lifetime is 30 days. The reuse window also means a stolen refresh token can be replayed for up to 60 seconds after rotation. Protect database backups because they contain session metadata and hashes.',
+              'SHA-256 hash stored in `admin_sessions`, inside its session (`admin_session_families`, one per sign-in); rotated on use, with a 60-second reuse window so concurrent refreshes (parallel requests, multiple tabs) do not invalidate the session',
+              'Default lifetime is 30 days, sliding with each refresh. Within the 60-second window a rotated token earns only a new access token (15 minutes), never another refresh token, so a session never splits in two; presented again after the window, it signs its whole session out (it was copied), for the thief and the user alike. Rows of expired tokens and of sessions revoked or expired more than the refresh lifetime plus one day ago (31 days by default) are pruned hourly. Protect database backups because they contain session metadata and hashes.',
             ],
             [
               'MCP OAuth tokens',
@@ -156,21 +161,197 @@ export const SECURITY_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'Session cookies are HttpOnly and SameSite=Lax. Their Secure attribute is controlled by `ADMIN_COOKIE_SECURE`, which defaults to false. Production HTTPS deployments must set it to true (the Helm chart does so when `api.publicBaseURL` is an `https://` origin, or through `api.cookieSecure`) and preserve one stable JWT secret across API replicas.',
+            'Session cookies are HttpOnly and SameSite=Lax (which is not what stops cross-site request forgery: see below). Their Secure attribute is controlled by `ADMIN_COOKIE_SECURE`, which defaults to false. Production HTTPS deployments must set it to true (the Helm chart does so when `api.publicBaseURL` is an `https://` origin, or through `api.cookieSecure`) and preserve one stable JWT secret across API replicas.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Cross-origin browser access is an allowlist: only origins in `API_ALLOWED_ORIGINS` get `Access-Control-Allow-Origin` (with credentials) and preflight answers; every other `Origin` gets no CORS headers, so the browser withholds the response. Unset, the one allowed origin is that of `APP_BASE_URL` (the operator UI), and without that the API serves same-origin callers only, which is all the bundled UI needs because it calls the API through its own `/api` path. `*` is refused. The public OAuth/MCP discovery and token routes keep a wildcard policy without credentials.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Cross-site request forgery is refused by origin, not by SameSite: the operator UI and the status pages are often the same *site* (one host on two ports, or `app.` and `status.` subdomains), and a status-page template’s script runs there, so to the browser its requests are same-site and carry the session cookie. Every request a session cookie authenticates with a method other than GET, HEAD or OPTIONS, and every sign-in (both steps), refresh, sign-out and account-link action (password reset, invite acceptance, email-change confirmation, forgot-password), must come from a trusted origin, or the API answers `403` with the error code `cross_origin_refused` before looking anything up. Trusted are the operator UI (`APP_BASE_URL`), `PUBLIC_BASE_URL`, the `API_ALLOWED_ORIGINS` entries, and the API’s own origin as the request reached it: its `Host`, or the `X-Forwarded-Host` of a peer in `TRUSTED_PROXY_CIDRS` (from any other peer the header is ignored). The API judges the `Origin` header; without it, `Sec-Fetch-Site` (only `same-origin`); without either, the `Referer`’s origin. The operator UI needs none of these settings: its `/api` proxy compares each write’s origin with the `Host` the browser reached it on (any port-forward, LAN address, Caddy or nginx-ingress; behind a proxy that rewrites `Host`, set `API_PROXY_TRUST_FORWARDED_HOST=true` on the UI to use `X-Forwarded-Host` instead) and, for its own pages, forwards the write without those headers, and the bundled Helm ingress sends `/api` to the API with the browser’s host, which is the API’s own origin. A page on another origin cannot pass that comparison: the browser sets `Host` from the URL, and the proxy ignores a client-sent `X-Forwarded-Host`. The `403` names the refused origin; set `APP_BASE_URL` (or `API_ALLOWED_ORIGINS`) when a legitimate page is refused. A request with none of the three is not from a browser — `curl` with a cookie jar, a script — or comes from the UI’s proxy as described, and is allowed: browsers send `Origin` on every cross-origin unsafe request. A session-cookie write with a body must also send `Content-Type: application/json` (`multipart/form-data` on the import preview), or it gets `415 unsupported_media_type`, so a `text/plain` request that needs no preflight cannot carry JSON. API keys and MCP tokens are never sent by a browser on its own and are not checked. A reverse proxy in front of the API itself (not the UI) that rewrites `Host` without being listed in `TRUSTED_PROXY_CIDRS` needs `APP_BASE_URL` set. Status pages served from the operator UI’s own origin (a status-page path on the UI host) are indistinguishable from the UI and cannot be protected this way: give them their own host.',
+        },
+      ],
+    },
+    {
+      id: 'sign-in-lockout-sessions',
+      title: 'Sign-in lockout and sessions',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Ten failed password sign-ins in a row lock the account’s password sign-in for 15 minutes. The count and the lock are stored on the user and timed by the database clock, so every API replica enforces the same lock and a restart does not reset it. A successful sign-in resets the count, a failure more than 24 hours after the previous one starts a new count (occasional typos never add up to a lock), the lock lifts on its own, and a superadministrator can lift it sooner ([unlock](/docs/administration/#sign-in-lockout-sessions)). Attempts made during a lock are refused without being counted, and do not extend it. The numbers are fixed. SSO (OIDC) sign-ins, API keys, MCP connections and the first-administrator form are not affected, and `go run ./cmd/admin` clears a lock when it resets a password.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Sign-in answers an unknown username, a wrong password and a locked account the same way, including a locked account’s correct password: the same `401`, the same message, and one bcrypt comparison each. The lock therefore never confirms that an account exists. The sign-in page states the rule with every refusal, so a locked user learns why their password stopped working without the page telling anyone which accounts exist. Operators see the lock instead: a **Locked** badge and the lock’s end in Users, and the audit events `auth.lockout` (the failure that locked), `auth.login` failures with `reason: locked` (attempts during the lock) and `user.unlock`.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Anyone who can reach the sign-in page can lock a password account by guessing for it. What bounds that: a lock lasts 15 minutes and attempts during it do not extend it; it never ends existing sessions, so a user who is signed in stays signed in, and SSO sign-in, API keys and MCP connections keep working; a superadministrator can unlock at once; every lock is audited, so a spray across many accounts is visible; and the API [rate limit](#edge-controls) charges each failed sign-in to the client address’s failure budget, which bounds how many accounts one address can keep locked — where the address identifies a client. Behind an untrusted proxy (a default Helm install) only a limit at the ingress bounds it.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'A session is one sign-in, by password or SSO. It lasts across refresh-token rotations until the refresh lifetime runs out (sliding, `ADMIN_REFRESH_TTL_DAYS`), the user signs out, or it is revoked. The access token carries the session id and the API checks the session on every request it authenticates with a session cookie — one indexed lookup, no cache — so a revoked session is refused on its next request on every replica rather than when its access token expires. The live alert stream re-checks its credential every 15 seconds (session, account, workspace membership, API key) and closes as soon as it no longer admits the stream, and it ends when the access token it was opened with expires, so the browser reopens it with its refreshed session. Access tokens issued before this check existed carry no session id and are honoured until they expire (15 minutes). **Account → Sessions** lists your sessions (browser, client address, sign-in time, last activity) and signs out one or all others; a superadministrator does the same for any user on their Users page, or with the `list_user_sessions`, `revoke_user_session` and `revoke_user_sessions` MCP tools. Last activity moves at each token refresh, about once per access-token lifetime while the session is in use, not on every request. Signing out an SSO session ends it in Probara only; it does not sign the user out of the identity provider, so they may sign in again without a password.',
+        },
+        {
+          type: 'table',
+          columns: ['Event', 'Sessions it ends'],
+          rows: [
+            ['Sign out', 'That session'],
+            ['A user signs out one session, or everywhere else (Account → Sessions)', 'That one, or all but the session in use'],
+            ['A superadministrator signs out one session or all of a user’s', 'That one, or all (on their own account: all but the session in use)'],
+            ['A superadministrator sets a user’s password', 'All of the user’s sessions; setting your own keeps the session in use'],
+            ['`go run ./cmd/admin` resets a password', 'All of that account’s sessions'],
+            ['The user is deleted', 'All'],
+            ['The user completes a [password reset or an invite](#account-links-two-factor)', 'All of the user’s sessions and MCP connections'],
+            ['The user changes their own password (Account → Password)', 'All but the session in use, and every MCP connection'],
+            ['A superadministrator sets a user’s password (as above)', 'Also every MCP connection of the user'],
+            ['The user turns two-factor sign-in off, or uses a recovery code (to sign in or on Account → Two-factor)', 'All but the session in use (a recovery code suggests a lost device)'],
+            ['Two-factor turned on, a superadministrator’s two-factor reset, an email change', 'None'],
+            ['A rotated refresh token is presented again after the 60-second window', 'That session'],
+            ['Lockout, unlock, a role or membership change (removing the last membership included)', 'None: roles and memberships are checked on every request anyway, and a lock must not let a guesser sign people out'],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'API keys and MCP connections are not sessions: revoke keys under Settings → Access and MCP connections under Settings → MCP. A disabled account is refused on every request whatever its sessions.',
+        },
+      ],
+    },
+    {
+      id: 'account-links-two-factor',
+      title: 'Account links and two-factor sign-in',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Invites, password resets and email-change confirmations are single-use links for password accounts. Each carries 256 random bits; only their SHA-256 is stored (`admin_account_tokens`), so the database never holds a usable link. A link works once, until it expires, and only for its purpose: an invite never resets a password, a reset link never confirms an email address. A newer link of the same kind replaces the previous one. The token sits in the URL fragment (`/reset-password#…`), which browsers never send to a server, and the page passes it to the API in the `X-Action-Token` header, so access logs, proxies and metric labels never see it; the pages are not indexed and send no referrer. Accounts that sign in with single sign-on get none of this: their password, email address and second factor belong to the identity provider, which also links the account by email.',
+        },
+        {
+          type: 'table',
+          columns: ['Link or step', 'Valid for', 'Notes'],
+          rows: [
+            ['Invite (set your password)', '7 days', 'For an account without a password; a superadministrator sends it'],
+            ['Password reset', '1 hour', 'From the public forgot-password form, or generated by a superadministrator'],
+            ['Email-change confirmation', '24 hours', 'Sent to the new address; the current one gets a notice'],
+            ['Second sign-in step', '5 minutes', 'Issued only after a correct password; one sign-in, used once'],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'The **forgot-password** form (`POST /api/v1/auth/password/forgot`, by username or email address) answers every request with the same `202` and body at once, whether the account exists, signs in with SSO, is disabled, locked or has no address; the lookup and the email happen afterwards, so neither the answer nor its timing tells anything. A link goes only to an enabled password account with an email address (a locked one included: the reset is how its owner gets back in), at most 3 per account per hour. The API rate limit bounds the form per client address. Without email delivery (`SMTP_*` and `APP_BASE_URL` on the API) the form sends nothing and the page tells users to ask an administrator; a superadministrator then gets the link in the response, once, to hand over. Links are never logged, audited or returned when they can be emailed.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Completing a **reset** sets the password, signs the account out of every browser, revokes its MCP connections (workspace API keys are not the user’s credentials and stay), retires every other open link and pending sign-in step of the account, and clears the sign-in lockout — except on an account with two-factor sign-in on, where an ordinary lock and its failure count stay and two-factor stays on: a reset needs only the mailbox, so it must never buy a fresh round of code guesses or bypass the second factor (it does lift a held lock, below). Changing the email address, by confirmation or by a superadministrator, retires open invite and reset links, which went to the old address; a deleted account’s links go with it, and a disabled account’s links are refused. An **email change** needs the current password, goes to the new address and applies only when that link is used; whether another account already uses the address is checked then, not when asking, so the form cannot probe for accounts. A password reset, the user’s own password change, a superadministrator setting the password or resetting two-factor, and `cmd/admin` all cancel a pending change, so someone who started one with a stolen password cannot finish it after the owner recovers the account. Every check of the current password on the account page counts toward the [sign-in lockout](#sign-in-lockout-sessions).',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Passwords are at least 12 characters and at most 72 bytes, the most bcrypt hashes; accented or non-Latin letters take two to four bytes, so such passwords hold fewer characters. The API and the forms count bytes; existing passwords are unaffected. **Two-factor sign-in** is optional, per user, for password accounts (SSO users rely on their identity provider). It is TOTP (RFC 6238: HMAC-SHA1, 6 digits, 30-second steps, one step of clock drift either way), enrolled from Account → Two-factor with the password and confirmed with a code; the QR code is drawn in the browser, so the secret never reaches a third party. The secret is stored encrypted with `PROBARA_SECRETS_KEY` and never in plaintext: without the key, enrolment is refused. A code is accepted once (the last used time step is stored, and only later ones count). Enrolment issues 10 recovery codes, shown once and stored as hashes; each works once in place of a code, and a new set replaces them all. Turning two-factor off, or replacing the recovery codes, needs the password and a code.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'With two-factor on, a correct password answers with a challenge (`mfa_required`, 5 minutes, single use) and sets no cookie; `POST /api/v1/auth/login/mfa` with a code or recovery code starts the session. A wrong password gets the ordinary refusal, so the first step never tells whether a wrong password belongs to a two-factor account. Failed codes count toward the same lockout as failed passwords, a correct password never resets the count that codes built up, and while the account is locked the second step answers a right code exactly like a wrong one. The rate limiter treats the second step as a sign-in. The session list shows which sessions passed a second factor.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'A failed second factor means someone has the password. When wrong codes lock an account, the user is mailed (“someone entered your password”), the audit log records `auth.second_factor_lockout`, and the user’s page in Users shows how many such locks happened in the last 24 hours. The third within 24 hours **holds** the account locked: it does not lift after 15 minutes but stays until a superadministrator unlocks it (Unlock sign-in, or `cmd/admin`) or the user completes a password reset, which proves the mailbox; the next sign-in still needs the second factor, and the count stays, so another lock holds it again. Without the hold, someone with the password would get ten code guesses every 15 minutes indefinitely. With email delivery the user is also mailed when two-factor is turned on or off (by them or a superadministrator), when a recovery code is used, when the password changes (their own change, a reset, or a superadministrator), and at the old address when an email change completes.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'A user who loses their authenticator signs in with a recovery code. Without one, a superadministrator resets their two-factor from the user’s page (`POST /api/v1/users/{id}/reset-2fa`, MCP `reset_user_two_factor`, audited as `user.two_factor_reset`); the user then signs in with the password alone and can enrol again. For the break-glass account, `go run ./cmd/admin -reset-2fa <username>` does the same against the database. Audit events: `user.invite`, `user.password_reset_link`, `auth.password_reset_request`, `auth.password_reset`, `auth.invite_accept`, `auth.email_change_request`, `auth.email_change`, `auth.password_change`, `auth.two_factor_enable`, `auth.two_factor_disable`, `auth.recovery_codes_regenerate`, and `auth.login` with `second_factor` (or `step: second_factor` on a failure); none carries a token or code.',
+        },
+      ],
+    },
+    {
+      id: 'edge-controls',
+      title: 'Security headers and rate limits',
+      blocks: [
+        {
+          type: 'table',
+          columns: ['Surface', 'Headers'],
+          rows: [
+            [
+              'API',
+              '`X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, a `Permissions-Policy` that denies camera, microphone, geolocation, payment and USB, `X-Frame-Options: DENY` and `Content-Security-Policy: default-src \'none\'; frame-ancestors \'none\'` on every response.',
+            ],
+            [
+              'Operator UI',
+              'The same `nosniff`, `Referrer-Policy`, `Permissions-Policy` and `X-Frame-Options: DENY`. A nonce-based Content-Security-Policy (`\'strict-dynamic\'`, `frame-ancestors \'none\'`, `object-src \'none\'`, and a `frame-src` of the UI itself, any `https:` origin and the configured status-page origin, so the template editor can preview status pages) ships **report-only** for this release: violations appear in the browser console but nothing is blocked.',
+            ],
+            [
+              'Status pages',
+              '`nosniff`, the same `Referrer-Policy` and `Permissions-Policy` on every response; each rendered page adds an enforced `Content-Security-Policy` with a per-response script nonce, chosen by the page’s [CSP mode](/docs/status-pages/#content-security-policy), whose `frame-ancestors` admits only the page’s own origin and the operator UI (`APP_BASE_URL`), for the template editor’s preview.',
+            ],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            '`Referrer-Policy` is `strict-origin-when-cross-origin` rather than `no-referrer`: no path ever reaches another origin, and the browser still sends a real `Origin` on a page’s own form and `fetch` posts, which the status page’s push subscription and the MCP consent checks require.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'HSTS (`Strict-Transport-Security: max-age=…`, without `includeSubDomains`) is off until `SECURITY_HSTS_MAX_AGE` is positive, and even then the API and status page send it only on HTTPS requests: TLS terminated by the service, or `X-Forwarded-Proto: https` from a peer in `TRUSTED_PROXY_CIDRS`. A forwarding header from any other peer never counts. Compose defaults to off; Helm turns it on (one year) when the chart’s ingress has `tls` configured. The operator UI cannot see whether a request came through a trusted proxy, so it sends no HSTS itself; behind the bundled ingress the API’s responses on the same host carry it, otherwise set it at your TLS proxy.',
+        },
+        {
+          type: 'list',
+          items: [
+            'The API has a general rate limit: token buckets of `API_RATE_LIMIT_PER_MINUTE` (default 600) with `API_RATE_LIMIT_BURST` (default 120). A request that presents a credential is never judged on an address bucket. A credential that validates spends from its own bucket — API key, MCP grant, or session user. A session cookie the API signed keys the request by its user even on unauthenticated routes and even once expired, for as long as it could still be refreshed (`ADMIN_REFRESH_TTL_DAYS`). An expired one sent without an `Authorization` header always gets its `401`, so the UI refreshes instead of being sent to sign in; sent with one, the API looks that credential up, and its failure is charged like any other. `/auth/refresh` with a refresh cookie is keyed on that cookie, or, when the browser also sends an access cookie the API signed (live, or expired within the refresh lifetime), on that cookie’s user. A request whose credential validates but which is then refused — a malformed `X-Tenant-ID`, a workspace the caller cannot open (`404 workspace_not_found`) — spends from the credential’s bucket like a served one.',
+            'Address buckets apply to two things only: unauthenticated requests that present no credential (sign-in, bootstrap, OIDC start and callback, OAuth registration and token, discovery documents), and verified failures — a `401` on an authenticated route, a failed sign-in, a `401` from `/auth/refresh`, or a `401`/`404` for an unknown push or discovery-collector token. Failures spend from the address’s failure bucket after the answer is known. Once it is empty, every request from that address that presents something only a lookup can check — an API key or MCP token, a refresh cookie, a push or collector token, a sign-in — is answered `429` before anything is looked up, so guessing keys or tokens cannot buy unlimited database lookups. Not refused this way: requests authenticated by a live session cookie (checked by its signature alone), an expired one sent on its own, a refresh that comes with an access cookie the API signed (on any replica: the signature needs no lookup, and the user’s own bucket bounds the refreshes, whose `401` is never turned into a `429`), any API key, MCP token, refresh cookie, push token or collector token that verified successfully on the same API replica in the last 10 minutes, and a refresh cookie that replica issued (by refresh or sign-in) within the access-token lifetime plus 10 minutes, since the browser presents it only once its access token has expired; each success restarts that window, and a credential that fails verification loses it at once. If a refresh is still answered `429`, the operator UI keeps the session, retries a few times as `Retry-After` asks, and then reports the request as rate limited instead of signing the user out. The replica keeps only a keyed hash of each such credential, in memory, bounded, dropping the least recently verified first. A valid credential the replica has not seen succeed in that window, and every sign-in, waits until the address has budget again. Which routes are authenticated is read from the router, so a new unauthenticated route is limited without being listed.',
+            'An address bucket is used only when the address identifies a client: it was forwarded by a peer in `TRUSTED_PROXY_CIDRS`, or it is the TCP peer and a public address. A loopback, private (RFC 1918, `fc00::/7`), link-local or shared-space (`100.64.0.0/10`) peer that is not a trusted proxy usually stands for many people — the UI’s `/api` proxy, an ingress pod, a NAT gateway — so its traffic skips the address buckets rather than letting one client empty a bucket everyone shares. The API logs a warning at startup when the limiter is on and the list is empty. IPv6 addresses share a bucket per `/64`.',
+            'Over the limit the API answers `429 Too Many Requests` with `Retry-After` in seconds. `0` disables the limiter.',
+            'Not limited here, because machines call them at a steady rate from shared addresses and they have their own bounds: health and metrics probes, `/static` downloads, valid push heartbeats (`/api/v1/push/{token}`, one per monitor interval) and discovery-collector calls (integration token), and — for credentials that validate — OTLP export (limited per monitor by `OTLP_MONITOR_RATE_PER_MIN`) and the alert stream. Their failures are charged as above; while their address’s failure bucket is empty, a token that verified in the last 10 minutes keeps working and any other is refused with the rest. The MCP endpoint is not charged itself; each tool call it dispatches is charged to the caller’s credential.',
+            'Buckets live in memory on each API replica, so the effective cluster-wide ceiling is the limit times the replica count, and a restart resets them. When the map of buckets is full, buckets that have refilled are dropped first and then the least recently used, so filling it never resets a bucket in use.',
+            'The limiter bounds request volume. Password guessing against one account is stopped by the [sign-in lockout](#sign-in-lockout-sessions), whatever the address. On a default Helm install (no `trustedProxyCIDRs`) and in the development Compose stack, every request reaches the API from a private peer, so sign-in attempts are not rate-limited per address: each account still allows only ten guesses per 15 minutes, but guessing across many accounts can only be limited by the ingress or proxy in front.',
+          ],
+        },
+        {
+          type: 'table',
+          columns: ['Deployment', 'What the API rate limit covers'],
+          rows: [
+            [
+              'No proxy, clients connect to the API directly',
+              'Everything: credentials per credential, and anonymous requests and failures per client address — for public clients. Clients on a private network (an internal deployment, an office LAN) get no address limits; their credentials are still limited.',
+            ],
+            [
+              'Compose (`docker-compose.yml`) and `make start-all-local`',
+              'Browsers reach the API through the UI’s `/api` proxy or from the Docker gateway, both private peers, so only credential limits apply: each session, refresh token and API key has its own bucket. Sign-in, anonymous calls and failed credentials are not limited per address; the per-account [sign-in lockout](#sign-in-lockout-sessions) still applies.',
+            ],
+            [
+              'Release Compose with its edge proxy',
+              'The edge proxy writes the client address, and the API trusts forwarding headers only from the frontend’s fixed address (`PROBARA_FRONTEND_IP`, a `/32`), through which every browser request arrives, so everything is limited, per real client. Where Docker’s userland proxy rewrites source addresses (Docker Desktop, rootless), every client arrives as the gateway and shares one address bucket; credentials are still limited separately.',
+            ],
+            [
+              'Helm, `trustedProxyCIDRs` empty (the default)',
+              'Requests arrive from the ingress controller pod, a private peer: credential limits only, and sign-in attempts are not limited per address (the per-account sign-in lockout still applies). The install notes warn about this.',
+            ],
+            [
+              'Helm with `trustedProxyCIDRs` set to the ingress pod CIDR',
+              'Everything, per real client, including internal users with private addresses behind the ingress.',
+            ],
+          ],
         },
         {
           type: 'callout',
-          tone: 'warning',
-          title: 'CORS currently reflects arbitrary Origin values',
+          tone: 'info',
+          title: 'Keep ingress limits too',
           text:
-            'Authenticated API and alert SSE paths echo a supplied `Origin` and set `Access-Control-Allow-Credentials: true`; there is no configured origin allowlist. SameSite=Lax provides some browser protection, but keep API traffic same-origin behind the frontend/reverse proxy or add explicit trusted-origin enforcement.',
-        },
-        {
-          type: 'callout',
-          tone: 'warning',
-          title: 'Edge controls are still required',
-          text:
-            'The application does not provide a general login/API rate limiter or a complete production security-header policy. Apply rate limits, request-size limits, HSTS, CSP where compatible, frame protection, content-type protection, and trusted proxy/header rules at the ingress or reverse proxy.',
+            'The application limits are per replica and in memory. Keep request-size limits, connection limits, and a coarse per-address rate limit at the ingress or reverse proxy as the first line of defense.',
         },
       ],
     },
@@ -217,7 +398,7 @@ export const SECURITY_PAGE: DocPage = {
             [
               '`PROBARA_SECRETS_KEY*`',
               'API, scheduler, worker, alerter, maintenance CLIs',
-              'Historical versions are needed to open existing ciphertext.',
+              'Historical versions are needed to open existing ciphertext. Acknowledge links in notifications are signed with a key derived from the current version; removing a version revokes the links it signed.',
             ],
             [
               '`OIDC_CLIENT_SECRET`',
@@ -228,6 +409,21 @@ export const SECURITY_PAGE: DocPage = {
               '`STATUS_PAGE_PREVIEW_SECRET`',
               'API and status-page service',
               'Changing invalidates outstanding one-hour preview tokens.',
+            ],
+            [
+              '`STATUS_PAGE_SESSION_SECRET`',
+              'Status-page service only',
+              'Signs visitor sessions on password and private status pages. Changing it signs every visitor out, kiosk displays included (they open their kiosk URL again). Unset closes those pages.',
+            ],
+            [
+              '`STATUS_PAGE_INTERNAL_TOKEN`',
+              'API and status-page service',
+              'Proves a forwarded email subscription came through the status service (its visibility gate and per-visitor throttle). Rotating it only fails the requests in flight; unset, no page takes subscribers.',
+            ],
+            [
+              '`BOOTSTRAP_SETUP_CODE`',
+              'API only, until the first administrator exists',
+              'Gates first-administrator creation on a reachable install; at least 16 characters besides dashes and spaces, or the API refuses to start. While it is set, an SSO sign-in never becomes the first superadministrator: just-in-time users are ordinary members, and the first-administrator form stays open until a superadministrator exists. Once any superadministrator has existed, bootstrap is closed for good, with or without the code, even if every user is later disabled or removed outside the product. Useless after that; remove or rotate it freely, but removing it brings back SSO bootstrap on an install that has never had a superadministrator.',
             ],
             [
               '`NATS_LOCATION_AUTH_ISSUER_SEED`',
@@ -308,6 +504,25 @@ go run ./cmd/admin/reencrypt_monitor_configs`,
 go run ./cmd/admin/encrypt_existing_channels`,
         },
         {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrade every worker first, private-location workers included',
+          text:
+            'HTTP headers and basic auth, gRPC metadata and synthetic variables that carry credentials now live in secret maps (`secret_headers`, `basic_auth_password`, `secret_metadata`, `secret_variables`), and the API moves them there on every save. A worker older than this release ignores those maps and sends the request without its credentials, so the monitor fails. Upgrade every platform and private-location worker before upgrading the API and scheduler, saving monitors, or running the backfill below. Nothing enforces the order.',
+        },
+        {
+          type: 'code',
+          language: 'bash',
+          title: 'Move plaintext request credentials into secrets (once, after upgrading)',
+          code: `go run ./cmd/admin/migrate_sensitive_headers -dry-run
+go run ./cmd/admin/migrate_sensitive_headers`,
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Monitors saved before HTTP, gRPC and synthetic request credentials became [secrets](/docs/monitors/#secrets) keep them in plain text until their next save. `migrate_sensitive_headers` moves them for every monitor at once, with the current key: credential-named HTTP `headers` into `secret_headers`, gRPC `metadata` into `secret_metadata`, literal credential headers of synthetic API steps into generated `secret_variables` (the header becomes the `{{reference}}`), and credential-named synthetic API and browser `variables` such as `password` or `api_key` into `secret_variables` under the same name. It applies the same rule every save applies. First it repairs keys stored in another case before the API refused them (`Headers`, `Variables`, `Metadata`, a synthetic step’s `Request` or `Headers`, a miscased secret field such as `Password`), which earlier releases stored and returned in plain text and which every save now refuses: it renames them to the exact spelling, merging two spellings that agree; a monitor whose spellings disagree is left untouched and logged as `[conflict]` with the key paths, to fix by hand (the tool then exits non-zero). A credential-named variable it cannot move without creating an invalid secret name stays plain and is logged as `[warn]`; rename it. Soft-deleted monitors are migrated too, since their rows stay at rest until purged. It logs monitor ids and key names, never values, skips rows edited while it runs (run it again for those), and a second run finds nothing more to do. It also scrubs [configuration history](/docs/monitors/#config-history): a version taken from such a row before versions applied these rules could hold the credential, so every version’s config is masked the same way (`versions_scrubbed` in the summary); this part is idempotent too. Run it only after every worker is upgraded (see above).',
+        },
+        {
           type: 'list',
           ordered: true,
           items: [
@@ -342,7 +557,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'paragraph',
           text:
-            '`HTTP_BLOCK_PRIVATE_IPS=true` is the recommended setting; the code default is `false`, and neither the Helm chart nor Compose sets it, so set it on every worker that runs inside a network it should not reach. Despite its historical name, the guard is shared by HTTP, synthetic API, TCP, gRPC, PostgreSQL, MySQL, MongoDB, Redis, broker, SIP, a DNS monitor\'s custom nameserver, and other worker dial paths. Synthetic browser journeys are the exception: Chromium resolves and connects on its own, and the policy is not applied to it at all, so a browser monitor reaches whatever its worker\'s network reaches.',
+            '`HTTP_BLOCK_PRIVATE_IPS=true` is the recommended setting; the code default is `false`, and neither the Helm chart nor Compose sets it, so set it on every worker that runs inside a network it should not reach. Despite its historical name, the guard is shared by HTTP, synthetic API, TCP, gRPC, PostgreSQL, MySQL, MongoDB, Redis, broker, SIP, ping (the target is resolved and vetted once, and echoes go to the vetted address), a DNS monitor\'s custom nameserver, and other worker dial paths. Synthetic browser journeys are the exception: Chromium resolves and connects on its own, and the policy is not applied to it at all, so a browser monitor reaches whatever its worker\'s network reaches.',
         },
         {
           type: 'table',
@@ -384,6 +599,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             "[Kubernetes discovery](/docs/discovery/#limits) marks a suggestion internal from its name alone (Service addresses, IP literals, single-label names and `.svc`, `.cluster.local`, `.local`, `.internal` hosts) and requires a private location only for those. That flag is a routing hint, not an SSRF control: a public-looking Ingress host that resolves to a private address is classed external and can be approved onto the shared fleet. Keep `HTTP_BLOCK_PRIVATE_IPS=true` on every fleet that runs discovered checks, with `HTTP_ALLOWED_CIDRS` granting a private location only the cluster ranges it should reach.",
             'Treat `tls_skip_verify` and custom CA settings as scoped exceptions; prefer correct certificate chains and server names.',
             'Run workers without cloud instance metadata access and with a minimally privileged service account.',
+            "[Domain monitors](/docs/monitors/#domain) look registrations up over RDAP and WHOIS at servers chosen by the IANA bootstrap data and by remote referrals, never by the monitor, so their lookups always refuse private, loopback, link-local and reserved destinations, even with `HTTP_BLOCK_PRIVATE_IPS=false` (`HTTP_ALLOWED_CIDRS` still admits). RDAP redirects must stay on `https`, a hostname and the default port, at most three hops; WHOIS referrals must name a hostname, on port 43, at most one registrar hop. Each worker throttles lookups per registry server and backs off after a rate-limit answer, and testing a domain lookup from the form or `POST /monitors/test` needs write permission, so a read-only credential cannot spend the registries' limits on the worker's address.",
           ],
         },
         {
@@ -396,7 +612,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'paragraph',
           text:
-            'Notification channels (generic webhook, Slack, Discord, Teams, PagerDuty, Opsgenie, Telegram, Twilio) have their own policy, because their destinations are tenant-supplied and the requests leave the API, alerter and worker unattended. It uses the same address table and resolve-then-validate dialer as the monitor guard, but it is on by default and configured separately, so enabling internal monitoring never opens internal notification targets.',
+            'Notification channels (generic webhook, Slack, Discord, Teams, PagerDuty, Opsgenie, Telegram, Twilio, ntfy, Gotify) have their own policy, because their destinations are tenant-supplied and the requests leave the API, alerter and worker unattended. It uses the same address table and resolve-then-validate dialer as the monitor guard, but it is on by default and configured separately, so enabling internal monitoring never opens internal notification targets. A self-hosted ntfy or Gotify server on a private network is the common case for the allow-list below: list just that server\'s address.',
         },
         {
           type: 'table',
@@ -420,6 +636,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             'Set both on the API (channel test), alerter (synchronous delivery) and worker (asynchronous delivery); a service that never receives the policy fails closed.',
             'Redirects are never followed, so an allowed host cannot bounce a request to a blocked one.',
             'Transport errors are logged without the request URL, because webhook paths and Telegram bot tokens are credentials.',
+            'The [delivery history](/docs/alerting/#delivery-history) stores errors sanitized: URLs cut to their host, tokens and credential parameters masked, and the channel\'s own secret values removed wherever a provider echoed them. SMS numbers are stored masked, and so are phone numbers and email addresses inside provider errors.',
             'With an `HTTPS_PROXY` configured, the policy vets the proxy address (allow-list it) and destination control becomes the proxy\'s job.',
           ],
         },
@@ -434,7 +651,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             'Stored endpoints must be `https` and must match `STATUS_PAGE_PUSH_ENDPOINT_ALLOWLIST` (default: the Google, Mozilla, Microsoft, and Apple push services). Matching is on a dot boundary, so `fcm.googleapis.com.attacker.example` does not match `fcm.googleapis.com`.',
             'Setting the allowlist to `*` disables the check for a self-hosted push service and re-opens this surface; restrict egress by network policy if you do.',
             'Request bodies are capped, subscriptions are rate limited per client IP, and each page has a subscription cap so the table cannot grow without bound.',
-            '`X-Forwarded-For` is honored for rate-limit keying only when `STATUS_PAGE_TRUSTED_PROXY=true`, because the header is client-settable.',
+            'The rate-limit key is the client address resolved through the [trusted proxy list](#audit-proxy-trust) (`TRUSTED_PROXY_CIDRS`), so a visitor cannot rotate `X-Forwarded-For` to get a fresh bucket. The older `STATUS_PAGE_TRUSTED_PROXY=true` still works while `TRUSTED_PROXY_CIDRS` is unset, but it trusts every peer and logs a deprecation warning.',
             'Subscriptions store only the opaque browser endpoint and its public keys — no visitor identity, no email address, and no page-visit history.',
           ],
         },
@@ -452,7 +669,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'list',
           items: [
-            'Use `tls://` or `wss://` for every public broker endpoint. Deploy generation rejects plaintext schemes and URLs that already contain userinfo.',
+            'Use `tls://` or `wss://` for every public broker endpoint. Deploy generation rejects plaintext schemes and URLs that already contain userinfo. The broker\'s websocket listener is plaintext and must sit behind a TLS-terminating ingress or proxy (the chart refuses a websocket Ingress without TLS unless `tlsTerminatedUpstream` says a load balancer does it); websocket clients go through the same authorization callout as TCP clients, and workers refuse to send credentials over plain `ws://` to anything but loopback.',
             'Keep the account issuer seed only in API. Configure only its public account key in NATS.',
             'Use a separate platform NATS user for trusted internal services. Never give it to a location worker.',
             'Location claims restrict result publication, heartbeat publication, consumer pull/ACK operations, inbox responses, and test-job subscription to that location.',
@@ -466,7 +683,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
           tone: 'warning',
           title: 'Local Compose NATS is not a private-location broker',
           text:
-            'It listens without authentication or TLS. The embedded Helm NATS service is ClusterIP-only until you add secure external exposure. Setting `PUBLIC_NATS_URL` alone does not create that exposure.',
+            'It listens without authentication or TLS. The embedded Helm NATS service is ClusterIP-only until you add secure external exposure (`nats.websocket.ingress.*`, which refuses to render without `nats.auth.enabled`). Setting `PUBLIC_NATS_URL` alone does not create that exposure. The [release Compose override](/docs/deployment/#release-compose) turns authentication on.',
         },
       ],
     },
@@ -496,6 +713,16 @@ go run ./cmd/admin/encrypt_existing_channels`,
               term: 'AI training labels',
               description:
                 'A label is copied server-side from the decision snapshot the worker stored when the analysis or alert triage completed (dependency pairs: evidence recomputed at labelling time); client-supplied evidence is rejected. It holds the evidence counters and booleans, catalogue keys, opaque decision IDs, the monitor and incident IDs the UI names decisions with, and the labelling user ID. It never holds names or free text. Labels are kept until the workspace is deleted: `data_retention_days` does not prune them, and they survive monitor purges and incident deletion.',
+            },
+            {
+              term: 'Acknowledge links',
+              description:
+                'Pages on chat, email, SMS and webhook channels carry a [one-click acknowledge link](/docs/alerting/#acknowledge-links) to a confirm page in the operator UI. Its token binds the workspace, the alert, the channel it was delivered on and an expiry 72 hours after the notification was built, under a truncated HMAC-SHA256 whose key is derived (HKDF-SHA256, purpose-specific) from the current `PROBARA_SECRETS_KEY` version; nothing is stored server side. It authorizes acknowledging that one alert and nothing else, and verification is constant time. Loading the page only reads; the acknowledgement is a separate POST on a button press, so link scanners and previewers cannot trigger it. The token sits in the URL fragment, which browsers never send, and reaches the API in the `X-Action-Token` header, so it appears in no URL a server, proxy or `Referer` sees and in none of the API\'s request logs or metric labels. Malformed, forged, wrong-action and other-workspace tokens all get the same 404 answer, and forged ones are refused before any database access. Removing the key version that signed a link, or deleting the channel it went to, revokes it; there is no other way to revoke one link early. The use that acknowledges is audited as `alert.acknowledge` attributed to the channel\'s link; repeat uses of the same link write nothing.',
+            },
+            {
+              term: 'Report unsubscribe links',
+              description:
+                'Each [emailed SLA report](/docs/slas/#schedules) carries its recipient\'s own unsubscribe link, built the same way as acknowledge links (same key derivation, a distinct action, so neither token works as the other) and binding the workspace, the schedule and a hash of the address salted with the schedule, never the address itself. It is valid for a year. The link in the body opens a confirm page with the token in the URL fragment, and only its button\'s POST unsubscribes. The `List-Unsubscribe` header points at the API\'s one-click route (RFC 8058) with the token as a query parameter, since mail clients POST there without custom headers; the API logs request paths only, never query strings. Every refusal gets the same 404, and the public routes reveal nothing beyond the SLA\'s name. Deleting the schedule revokes its links. Each unsubscribe is audited as `sla-report-schedule.unsubscribe`.',
             },
             {
               term: 'Suspected-cause follow-ups',
@@ -530,12 +757,17 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'list',
           items: [
-            'Published [status pages](/docs/status-pages/#page-model) are intentionally public. Do not include private monitor URLs, internal hostnames, customer names, or operational notes unless disclosure is intended.',
+            'Published [status pages](/docs/status-pages/#page-model) are public unless their [visibility](/docs/status-pages/#visibility) says otherwise. Do not include private monitor URLs, internal hostnames, customer names, or operational notes on a public or unlisted page unless disclosure is intended. Unlisted is a hidden link, not access control.',
+            'Password and private pages are checked before the render cache and on every sub-route; refusals and gated content are `private, no-store`, and a private page without a credential answers exactly like a missing one. Visitor passwords are bcrypt-hashed and kiosk tokens SHA-256-hashed by the API; the status service only reads them and never writes a session, a token use or an attempt. Kiosk tokens leave the URL on first use (redirect to the clean URL, `Referrer-Policy: no-referrer` on that response) and the status service never logs them, but the redirect source stays in that browser\'s history and any proxy or ingress that logs query strings records the full kiosk URL: disable query logging for `/public/status/` there. Wrong passwords and tokens share a failure budget per client address (IPv6 per /64) and per page; set `TRUSTED_PROXY_CIDRS` so visitors behind your proxy are told apart. Set `STATUS_PAGE_SESSION_SECRET` on the status service for these pages to open at all, and `STATUS_PAGE_BASE_URL` (https) or `STATUS_PAGE_COOKIE_SECURE` so the session cookie is `Secure` behind TLS termination.',
+            'Pages on one origin share it. A gated page refuses requests and frames initiated by another status page, but custom template or head/footer script on any page can still open another page in a window and read it: template editors are trusted with every gated page on the installation that shares the platform origin. A page on its own [custom domain](/docs/status-pages/#custom-domains) is the only page on that origin, and it is not reachable from another origin\'s script with the visitor\'s session.',
+            'Custom domains: only a domain verified by its DNS records (a TXT record holding a per-domain value proves control, a CNAME to `STATUS_PAGE_CNAME_TARGET` proves routing) is served, and only its own page there: other slugs, `/metrics` and the health routes are not reachable on it. Verification makes DNS lookups only, with per-lookup timeouts, absolute names and bounded answers, and never connects to what the names resolve to; its messages to the workspace use fixed wording and name a CNAME target only under the hostname\'s own domain, so a resolver that sees private zones does not leak them. A hostname is verified for one page at most; unverified claims coexist without revealing each other, the first to verify supersedes the rest, and claims expire after 14 days. The installation\'s own hosts are refused. The status service serves its platform routes only on its platform hosts (`STATUS_PAGE_BASE_URL`, `STATUS_PAGE_PLATFORM_HOSTS`) and internal names; any other host gets a verified domain\'s page or not found, including before its domain table has loaded. The status service matches the `Host` header against a table of verified domains loaded from the database, so a forged `Host` can only select a verified domain\'s own page and never reaches the database or a cache key; `X-Forwarded-Host` counts only with `STATUS_PAGE_TRUST_FORWARDED_HOST` and only from `TRUSTED_PROXY_CIDRS` peers. A session cookie on a custom domain is host-only at `/` and always `Secure`.',
             'Set one strong shared `STATUS_PAGE_PREVIEW_SECRET` on API and status service (Helm: `secrets.statusPagePreviewSecret`, rendered into both). Without it, preview-token enforcement is disabled.',
             'Preview tokens are HMAC-SHA256 values with a one-hour expiry. Treat preview URLs as temporary bearer links.',
-            'The status service’s optional API proxy is intentionally restricted, but should still be exposed only through the expected status editing/preview flow.',
+            'The status service forwards nothing to the operator API on a visitor’s behalf: the only requests it makes there are the email subscription calls described below, which carry `STATUS_PAGE_INTERNAL_TOKEN` and none of the visitor’s cookies or headers.',
+            '[Email subscribers](/docs/status-pages/#email-subscribers) are the one place a status page stores personal data: the address of each visitor who subscribed. The API stores it and keeps SHA-256 hashes of it (and of its inbox, the address without a `+tag`) for lookups, caps and audit records; the status service only forwards the form, presenting `STATUS_PAGE_INTERNAL_TOKEN` and nothing that identifies the visitor, and the API answers the subscribe and confirm routes for no other caller, so the page\'s visibility gate and the per-visitor throttle cannot be bypassed. Subscribing is double opt-in with a 48-hour signed confirmation link; unconfirmed addresses are deleted after 7 days and unsubscribing deletes the address. Addresses are readable (list, CSV export) by members with write access only; viewers see counts. Confirmation and unsubscribe links are `PROBARA_SECRETS_KEY`-signed tokens carried in the URL fragment of the page link, so no server or request log sees them; the one-click `List-Unsubscribe` URL carries its token as a query parameter, which the API logs never record but a proxy that logs query strings would. The subscribe form answers alike for every address and sends confirmations in the background; a page takes at most 100 new addresses an hour (whatever became of them) and 500 waiting for confirmation, an inbox gets at most 5 confirmation emails a day across every page and alias, and the installation sends at most 500 an hour. Password and private pages take no subscribers and email nobody; unsubscribe links in older mail keep working on them without revealing the page.',
             'Synthetic browser screenshots can contain credentials, cookies, personal data, or application content. Store them encrypted, authorize retrieval, and expire them. Apply the same controls if trace or HAR capture is implemented later.',
             'Never make `SYNTHETIC_BROWSER_ARTIFACTS_DIR` a public static directory.',
+            'A failed HTTP check stores the [redacted response](/docs/monitors/#http) it got (status, headers, up to 8 KiB of body) with its result for 30 days. Every workspace member who can read the monitor sees it, in the UI and through the API and MCP single-result read (`GET /monitors/{id}/results/{resultId}`, `get_monitor_result`); list reads leave it out. The monitor\'s own credentials, cookies, credential headers and obvious credential fields are removed before storage, but other personal or business data a server puts in an error body is kept.',
           ],
         },
       ],
@@ -560,11 +792,20 @@ go run ./cmd/admin/encrypt_existing_channels`,
           ],
         },
         {
-          type: 'callout',
-          tone: 'warning',
-          title: 'X-Forwarded-For is trusted without a proxy allowlist',
+          type: 'paragraph',
           text:
-            'Audit and session code use the first `X-Forwarded-For` value when present. Ensure the public edge strips client-supplied forwarding headers and writes the canonical client address; never expose API directly behind an untrusted pass-through proxy.',
+            'The IP in audit records and admin sessions, the API rate-limit address buckets, and the status page push rate-limit key come from one resolver. Forwarding headers are client-settable, so they count only when the TCP peer is listed in `TRUSTED_PROXY_CIDRS` (comma-separated CIDRs or bare IPs, IPv4 or IPv6, read by the API and status-page services; Helm: `trustedProxyCIDRs`).',
+        },
+        {
+          type: 'list',
+          items: [
+            'Unset (the default), no proxy is trusted: the recorded address is the TCP peer, and `X-Forwarded-For` / `X-Real-IP` are ignored. Behind a proxy this records the proxy, not the visitor, so set the list in any deployment that has one.',
+            'From a trusted peer, `X-Forwarded-For` is read right to left. Each proxy appends the address it received the connection from, so the first entry outside the list is the client, and anything a client prepended to the left of it is ignored. An entry that is not an IP address ends the walk at the nearest address that could be checked.',
+            '`X-Real-IP` is used only when a trusted peer sent no `X-Forwarded-For`. If every hop is trusted, the leftmost entry is used.',
+            'Your proxies must append to `X-Forwarded-For` (nginx `$proxy_add_x_forwarded_for`, the ingress-nginx and Traefik defaults) rather than pass a client value through unchanged.',
+            'List only proxies you operate. A range that also contains clients, such as a whole VPC that users connect from, lets those clients forge their address. In Kubernetes this is usually the pod CIDR of the ingress controller; the chart default is empty and its install notes warn when the ingress is on and the list is empty.',
+            'The operator UI’s own `/api` proxy cannot see its TCP peer, and Next.js keeps a client-sent `X-Forwarded-For`, so it drops `X-Forwarded-For` and `X-Real-IP` before calling the API: UI traffic that reaches the API through it is recorded with the frontend’s address. If a proxy you run sets or appends the header in front of the UI, set `API_PROXY_TRUST_FORWARDED_FOR=true` on the frontend and list both that proxy and the frontend in `TRUSTED_PROXY_CIDRS`. With the bundled Helm ingress, `/api` goes straight to the API, so this does not apply.',
+          ],
         },
       ],
     },
@@ -590,7 +831,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             ],
             [
               'Ingress',
-              'HTTPS-only, HSTS, trusted proxy headers, body/time limits, rate limiting, origin policy, SSE buffering disabled where required, and separate routing for public status pages.',
+              'HTTPS-only, HSTS, trusted proxy headers (append to `X-Forwarded-For`; list the ingress in `TRUSTED_PROXY_CIDRS`), body/time limits, a coarse rate limit in front of the application one, SSE buffering disabled where required, and separate routing for public status pages.',
             ],
             [
               'Workers',
@@ -624,6 +865,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             'Confirm notification egress cannot reach internal metadata/control-plane addresses.',
             'Test location disable/revocation and ensure one location cannot consume another location’s jobs.',
             'Validate audit capture, drop warnings, retention, export restrictions, and external log durability.',
+            'Check the [security headers](#edge-controls) on API, UI, and status-page responses through the real ingress, including HSTS on HTTPS and `429` with `Retry-After` from the API limiter, and that a forged `X-Forwarded-For` does not change the IP in a new audit record.',
             'Restore a database backup with the complete keyring and verify encrypted channels, monitors, and locations.',
             'Scan images/dependencies and run Go race tests, frontend production builds, Helm lint, and integration tests before release.',
           ],
@@ -644,7 +886,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             ],
             [
               'Administrator password/session',
-              'Reset password, revoke sessions, inspect audit activity, and consider JWT rotation if token-signing material was exposed.',
+              'Reset the password (which signs the user out of every browser and revokes their MCP connections; workspace API keys are separate) or sign their sessions out from Users, inspect audit activity, and consider JWT rotation if token-signing material was exposed.',
             ],
             [
               'JWT secret',

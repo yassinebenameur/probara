@@ -10,7 +10,8 @@
 //
 // Event types: created, reminder, resolved, acknowledged (paging channels
 // only) and suspected_cause, the opt-in follow-up carrying a local AI
-// triage's named cause (channels advertising plugin.CapabilityFollowUp).
+// triage's named cause (channels advertising plugin.CapabilityFollowUp). A
+// created event of a reopened alert is a relapse notice (relapse.go).
 package present
 
 import (
@@ -97,6 +98,10 @@ type Message struct {
 
 	ActionURL   string
 	ActionLabel string
+	// AckURL is the signed one-click acknowledge link and AckLabel its
+	// caption. Set only on created and reminder pages; see ackFor.
+	AckURL   string
+	AckLabel string
 
 	AlertID   string
 	TenantID  string
@@ -109,6 +114,13 @@ type Message struct {
 // set (dispatch requests carry both). appBaseURL is the public operator-UI
 // origin; empty omits the deep link.
 func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message {
+	return BuildWith(event, eventType, Options{AppBaseURL: appBaseURL})
+}
+
+// BuildWith is Build with the delivery context a real send has: the channel
+// and the link signer, which add the acknowledge link (Options).
+func BuildWith(event notifications.AlertEvent, eventType string, opts Options) Message {
+	appBaseURL := opts.AppBaseURL
 	if eventType == "" {
 		eventType = event.Type
 	}
@@ -134,11 +146,18 @@ func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message
 		Resolved:    resolved,
 	}
 	m.Tone, m.StatusWord = toneFor(alert, eventType, resolved)
+	if m.MonitorName == "" && alert.IsLocationOffline() {
+		// The subject is a location, not a monitor.
+		m.MonitorName = locationName(alert)
+	}
 	if m.MonitorName == "" {
 		m.MonitorName = "Unnamed monitor"
 	}
 	m.Title = m.Label + ": " + m.MonitorName
 	m.Summary = summaryFor(alert, eventType, resolved, elapsed)
+	if isRelapsePage(alert, eventType, resolved) {
+		m.Summary = relapseLead(alert) + " " + m.Summary
+	}
 	m.Metric = metricFor(alert, resolved)
 	if eventType == EventSuspectedCause && !resolved {
 		// A follow-up to a page already delivered: it keeps what tells the
@@ -176,6 +195,7 @@ func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message
 
 	m.Rows = detailRows(alert, elapsed)
 	m.ActionURL, m.ActionLabel = actionFor(alert, appBaseURL)
+	m.AckURL, m.AckLabel = ackFor(event, eventType, resolved, opts)
 	return m
 }
 
@@ -219,7 +239,8 @@ func suspectedCauseRows(alert notifications.AlertDetails, elapsed string) []Row 
 // followedUpPage names the page a follow-up refers to: the kind-aware
 // headline the page itself carried, e.g. "CPU Usage High".
 func followedUpPage(alert notifications.AlertDetails) string {
-	if alert.IsMeshEdge() || alert.IsLatencyAnomaly() || alert.IsHostMetric() || alert.IsTLSExpiry() {
+	if alert.IsMeshEdge() || alert.IsLatencyAnomaly() || alert.IsHostMetric() || alert.IsTLSExpiry() ||
+		alert.IsDomainExpiry() || alert.IsLocationOffline() {
 		return labelFor(alert, EventCreated)
 	}
 	return "Down alert"
@@ -230,15 +251,26 @@ func followedUpPage(alert notifications.AlertDetails) string {
 // the alert's own workspace.
 func suspectedCauseAction(event notifications.AlertEvent, appBaseURL string) (string, string) {
 	base := strings.TrimRight(strings.TrimSpace(appBaseURL), "/")
-	id := strings.TrimSpace(event.Alert.ID)
-	if base == "" || id == "" {
+	path := AlertPath(event.Alert.ID, event.TenantID)
+	if base == "" || path == "" {
 		return "", ""
 	}
+	return base + path, "Review the triage"
+}
+
+// AlertPath is the operator-UI path that opens one alert on the Alerts page
+// in its workspace (web/lib/alert-links.ts parses it), or "" without an
+// alert ID.
+func AlertPath(alertID, tenantID string) string {
+	id := strings.TrimSpace(alertID)
+	if id == "" {
+		return ""
+	}
 	q := url.Values{"alert": {id}}
-	if tenant := strings.TrimSpace(event.TenantID); tenant != "" {
+	if tenant := strings.TrimSpace(tenantID); tenant != "" {
 		q.Set("tenant", tenant)
 	}
-	return base + "/alerts?" + q.Encode(), "Review the triage"
+	return "/alerts?" + q.Encode()
 }
 
 // Severity maps the tone onto the three-level scale paging providers use.
@@ -289,22 +321,9 @@ func (m Message) MetricLine() string {
 }
 
 // Short renders a compact plain-text form for length-limited channels (SMS,
-// push): title, summary, and the deep link when configured.
-func (m Message) Short() string {
-	var b strings.Builder
-	b.WriteString(m.StatusWord)
-	b.WriteString(" · ")
-	b.WriteString(m.Title)
-	if m.Summary != "" {
-		b.WriteString("\n")
-		b.WriteString(m.Summary)
-	}
-	if m.ActionURL != "" {
-		b.WriteString("\n")
-		b.WriteString(m.ActionURL)
-	}
-	return b.String()
-}
+// push): title, summary, the deep link and the acknowledge link when
+// configured. ShortWithin bounds it.
+func (m Message) Short() string { return m.ShortWithin(0) }
 
 // Facts returns the label/value pairs chat layouts show as fields: the
 // metric, the detail rows, root cause, failing locations and blast radius, in
@@ -341,6 +360,17 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 			return ToneUp, "BACK TO NORMAL"
 		case alert.IsTLSExpiry():
 			return ToneUp, "CERTIFICATE RENEWED"
+		case alert.IsDomainExpiry():
+			if alert.MetricValue == nil {
+				return ToneUp, "RESOLVED"
+			}
+			return ToneUp, "DOMAIN RENEWED"
+		case alert.IsLocationOffline():
+			if locationClosedWithoutRecovery(alert) {
+				// Nothing came back: the alert just stopped applying.
+				return ToneInfo, "CLOSED"
+			}
+			return ToneUp, "BACK ONLINE"
 		}
 		return ToneUp, "RECOVERED"
 	}
@@ -352,6 +382,13 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		// title already starts with the label.
 		return ToneInfo, "AI TRIAGE"
 	}
+	if isRelapsePage(alert, eventType, resolved) {
+		// The kind's page tone, under one word every channel shows.
+		firstPage := alert
+		firstPage.RelapseNotice = false
+		tone, _ := toneFor(firstPage, EventCreated, false)
+		return tone, "RELAPSED"
+	}
 	// Degradations that are not hard outages read as warnings, not failures.
 	switch {
 	case alert.IsLatencyAnomaly():
@@ -360,11 +397,26 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		return ToneWarn, "THRESHOLD BREACHED"
 	case alert.IsTLSExpiry():
 		return ToneWarn, "EXPIRING SOON"
+	case alert.IsDomainExpiry():
+		// Past expiry the name stops resolving (or is released), which is an
+		// outage, not a warning.
+		if alert.MetricValue != nil && *alert.MetricValue < 0 {
+			return ToneDown, "DOMAIN EXPIRED"
+		}
+		if alert.MetricValue == nil {
+			return ToneWarn, "EXPIRY UNKNOWN"
+		}
+		return ToneWarn, "EXPIRING SOON"
 	case alert.IsMeshEdge():
 		if eventType == EventReminder {
 			return ToneDown, "PATH STILL DOWN"
 		}
 		return ToneDown, "PATH DOWN"
+	case alert.IsLocationOffline():
+		if eventType == EventReminder {
+			return ToneDown, "STILL OFFLINE"
+		}
+		return ToneDown, "OFFLINE"
 	}
 	if eventType == EventReminder {
 		return ToneDown, "STILL DOWN"
@@ -385,6 +437,9 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 	if eventType == EventSuspectedCause {
 		return "Suspected Cause"
 	}
+	if isRelapsePage(alert, eventType, alert.Status == "resolved") {
+		return relapseLabel(alert)
+	}
 	switch {
 	case alert.IsLatencyAnomaly():
 		switch eventType {
@@ -398,6 +453,35 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 		return alert.HostMetricLabel(eventType)
 	case alert.IsTLSExpiry():
 		return alert.TLSExpiryLabel(eventType)
+	case alert.IsDomainExpiry():
+		// No value: the alerter could not determine the expiry date
+		// (domain_expiry with metric_value NULL).
+		if alert.MetricValue == nil {
+			if eventType == EventResolved {
+				return "Domain Expiry Alert Resolved"
+			}
+			return "Domain Expiry Unknown"
+		}
+		switch eventType {
+		case EventResolved:
+			return "Domain Renewed"
+		case EventReminder:
+			return "Domain Still Expiring"
+		default:
+			return "Domain Expiring"
+		}
+	case alert.IsLocationOffline():
+		switch eventType {
+		case EventResolved:
+			if locationClosedWithoutRecovery(alert) {
+				return "Location Alert Closed"
+			}
+			return "Location Back Online"
+		case EventReminder:
+			return "Location Still Offline"
+		default:
+			return "Location Offline"
+		}
 	case alert.IsMeshEdge():
 		switch eventType {
 		case EventResolved:
@@ -475,6 +559,26 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 		if resolved {
 			return "The TLS certificate has been renewed."
 		}
+		// The alert measures the chain's earliest expiry; when that is an
+		// intermediate the server presents, say so, since renewing the
+		// server's own certificate does not fix it.
+		if cert, ok := alert.TLSExpiryCertificate(); ok && cert.Intermediate {
+			which := "An intermediate certificate"
+			if cn := notifications.CommonName(cert.Subject); cn != "" {
+				which += " (" + cn + ")"
+			}
+			if alert.MetricValue != nil && *alert.MetricValue < 0 {
+				return which + " has expired."
+			}
+			if alert.MetricValue != nil {
+				s := fmt.Sprintf("%s expires in %s", which, dayValue(*alert.MetricValue))
+				if alert.ThresholdValue != nil {
+					s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
+				}
+				return s + "."
+			}
+			return which + " is approaching expiry."
+		}
 		if alert.MetricValue != nil {
 			s := fmt.Sprintf("The TLS certificate expires in %s", dayValue(*alert.MetricValue))
 			if alert.ThresholdValue != nil {
@@ -483,6 +587,46 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 			return s + "."
 		}
 		return "The TLS certificate is approaching expiry."
+
+	case alert.IsDomainExpiry():
+		if alert.MetricValue == nil {
+			if resolved {
+				return "The registration expiry date can be read again, or the monitor no longer runs."
+			}
+			return "The registration expiry date could not be determined, so this domain is not being watched for expiry. The last error says why."
+		}
+		if resolved {
+			return "The domain registration has been renewed."
+		}
+		if *alert.MetricValue < 0 {
+			return fmt.Sprintf("The domain registration expired %s ago. Renew it before the registry releases the name.", dayValue(-*alert.MetricValue))
+		}
+		s := fmt.Sprintf("The domain registration expires in %s", dayValue(*alert.MetricValue))
+		if alert.ThresholdValue != nil {
+			s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
+		}
+		return s + "."
+
+	case alert.IsLocationOffline():
+		name := locationName(alert)
+		if resolved {
+			switch alert.ResolveReason {
+			case notifications.ResolveReasonManual:
+				return fmt.Sprintf("An operator closed the alert for location %s. If it is still not reporting, a new alert opens.", name)
+			case notifications.ResolveReasonLocationDisabled:
+				return fmt.Sprintf("Location %s was disabled, so it is no longer expected to report.", name)
+			case notifications.ResolveReasonLocationDeleted:
+				return fmt.Sprintf("Location %s was deleted.", name)
+			}
+			if outage != "" {
+				return fmt.Sprintf("Location %s is reporting again after %s offline.", name, outage)
+			}
+			return fmt.Sprintf("Location %s is reporting again.", name)
+		}
+		if eventType == EventReminder && outage != "" {
+			return fmt.Sprintf("Location %s is still not reporting, %s after it went silent.", name, outage)
+		}
+		return fmt.Sprintf("Location %s has stopped reporting; monitors that run from it go stale without fresh checks.", name)
 
 	case alert.IsMeshEdge():
 		path := meshPath(alert)
@@ -557,6 +701,18 @@ func metricFor(alert notifications.AlertDetails, resolved bool) *Metric {
 			p.Note = "warns under " + dayValue(*alert.ThresholdValue)
 		}
 		return p
+	case alert.IsDomainExpiry():
+		if alert.MetricValue == nil {
+			return nil
+		}
+		p := &Metric{Label: "Registration left", Value: dayValue(*alert.MetricValue)}
+		if *alert.MetricValue < 0 {
+			p = &Metric{Label: "Registration expired", Value: dayValue(-*alert.MetricValue) + " ago"}
+		}
+		if alert.ThresholdValue != nil {
+			p.Note = "warns under " + dayValue(*alert.ThresholdValue)
+		}
+		return p
 	}
 	return nil
 }
@@ -569,12 +725,24 @@ func detailRows(alert notifications.AlertDetails, elapsed string) []Row {
 			rows = append(rows, Row{Label: "Path", Value: strings.TrimPrefix(path, "from ")})
 		}
 	}
+	if alert.IsLocationOffline() {
+		rows = append(rows, Row{Label: "Location", Value: locationName(alert)})
+		// While it is open: when the location went quiet and what that
+		// strands. Once closed, the summary says what happened instead.
+		if alert.ResolvedAt == nil {
+			if alert.LocationLastSeenAt != nil {
+				rows = append(rows, Row{Label: "Last heartbeat", Value: HumanTime(*alert.LocationLastSeenAt)})
+			}
+			rows = append(rows, Row{Label: "Monitors", Value: locationMonitorsValue(alert)})
+		}
+	}
 	if name := strings.TrimSpace(alert.PolicyName); name != "" {
 		rows = append(rows, Row{Label: "Alert rule", Value: name})
 	}
 	if !alert.TriggeredAt.IsZero() {
 		rows = append(rows, Row{Label: "Triggered", Value: HumanTime(alert.TriggeredAt)})
 	}
+	rows = append(rows, relapseRows(alert)...)
 	if alert.ResolvedAt != nil {
 		rows = append(rows, Row{Label: "Resolved", Value: HumanTime(*alert.ResolvedAt)})
 	}
@@ -610,6 +778,9 @@ func actionFor(alert notifications.AlertDetails, appBaseURL string) (string, str
 	}
 	if alert.IsMeshEdge() {
 		return base + "/mesh", "Open the mesh matrix"
+	}
+	if alert.IsLocationOffline() {
+		return base + "/locations", "Open locations"
 	}
 	if id := strings.TrimSpace(alert.MonitorID); id != "" && id != emptyUUID {
 		return base + "/monitors/" + id, "Open the monitor"
@@ -759,6 +930,47 @@ func meshPath(alert notifications.AlertDetails) string {
 		return "on " + name
 	}
 	return "between locations"
+}
+
+// locationClosedWithoutRecovery reports whether a resolved location_offline
+// alert closed for a reason other than the location reporting again.
+func locationClosedWithoutRecovery(alert notifications.AlertDetails) bool {
+	switch alert.ResolveReason {
+	case notifications.ResolveReasonLocationDisabled, notifications.ResolveReasonLocationDeleted,
+		notifications.ResolveReasonManual:
+		return true
+	}
+	return false
+}
+
+// locationMonitorsValue is the blast radius of an offline location: the
+// monitors that run from it, and how many of those run nowhere else (they
+// get no fresh checks at all and go unknown, S-F2).
+func locationMonitorsValue(alert notifications.AlertDetails) string {
+	total, only := alert.LocationMonitorCount, alert.LocationOnlyMonitorCount
+	switch {
+	case total == 0:
+		return "none run from it"
+	case only == 0:
+		return fmt.Sprintf("%d, all also run from another location", total)
+	case only == total:
+		return fmt.Sprintf("%d, none with another location", total)
+	}
+	return fmt.Sprintf("%d, %d with no other location", total, only)
+}
+
+// locationName is a location_offline alert's subject: the Source location
+// name, else the alert's display name.
+func locationName(alert notifications.AlertDetails) string {
+	if alert.SourceLocationName != nil {
+		if name := strings.TrimSpace(*alert.SourceLocationName); name != "" {
+			return name
+		}
+	}
+	if name := strings.TrimSpace(alert.MonitorName); name != "" {
+		return name
+	}
+	return "unknown"
 }
 
 func capitalize(s string) string {

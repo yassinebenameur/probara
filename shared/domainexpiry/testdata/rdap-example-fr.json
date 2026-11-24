@@ -1,0 +1,102 @@
+{
+  "objectClassName": "domain",
+  "ldhName": "example.fr",
+  "status": [
+    "active"
+  ],
+  "events": [
+    {
+      "eventAction": "registration",
+      "eventDate": "2001-12-10T23:00:00Z"
+    },
+    {
+      "eventAction": "expiration",
+      "eventDate": "2029-07-18T08:26:59Z"
+    },
+    {
+      "eventAction": "last changed",
+      "eventDate": "2026-06-05T06:59:15.743011Z"
+    },
+    {
+      "eventAction": "transfer",
+      "eventDate": "2017-07-18T08:26:59Z"
+    },
+    {
+      "eventAction": "last update of RDAP database",
+      "eventDate": "2026-11-15T20:59:57.984051321Z"
+    }
+  ],
+  "entities": [
+    {
+      "objectClassName": "entity",
+      "roles": [
+        "sponsor",
+        "registrar"
+      ],
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Registry Operations"
+          ]
+        ]
+      ]
+    },
+    {
+      "objectClassName": "entity",
+      "roles": [
+        "registrant",
+        "administrative"
+      ],
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Example Holder"
+          ]
+        ]
+      ]
+    },
+    {
+      "objectClassName": "entity",
+      "roles": [
+        "technical"
+      ],
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Example Holder"
+          ]
+        ]
+      ]
+    }
+  ]
+}

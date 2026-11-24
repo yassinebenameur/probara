@@ -34,9 +34,12 @@ export interface NotificationSettings {
   // upstream dependency is down, and for the grace period after it recovers.
   dependency_suppression_enabled: boolean;
   dependency_suppression_grace_seconds: number;
+  // Relapse reopen: an alert that recovered on its own and fails again
+  // within this many minutes reopens instead of a new one opening. 0 = off.
+  alert_reopen_cooldown_minutes: number;
 }
 
-export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry';
+export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry' | 'domain_expiry' | 'location_offline';
 
 export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down' | 'degraded';
 
@@ -44,6 +47,7 @@ export interface Monitor {
   id: string;
   tenant_id: string;
   name: string;
+  key?: string; // Config-as-code key (POST /monitors/apply); absent = unmanaged
   type: MonitorType;
   config?: MonitorConfig; // Optional for backward compatibility
   interval_seconds: number;
@@ -61,6 +65,10 @@ export interface Monitor {
   created_at: string;
   updated_at: string;
   consecutive_failures_threshold: number;
+  /** Passing checks in a row before a down monitor is up again (1-10). */
+  recovery_threshold?: number;
+  /** Read-only: passes so far toward that confirmation; non-zero only while down. */
+  consecutive_successes?: number;
   notification_mode: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
@@ -100,6 +108,7 @@ export interface AlertRouting {
 
 export interface CreateMonitorRequest {
   name: string;
+  key?: string;
   type: MonitorType;
   config: MonitorConfig;
   interval_seconds: number;
@@ -107,6 +116,7 @@ export interface CreateMonitorRequest {
   enabled?: boolean;
   tags?: string[];
   consecutive_failures_threshold?: number;
+  recovery_threshold?: number;
   notification_mode?: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
@@ -118,6 +128,7 @@ export interface CreateMonitorRequest {
 
 export interface UpdateMonitorRequest {
   name?: string;
+  key?: string; // '' removes the key
   type?: MonitorType;
   config?: MonitorConfig;
   interval_seconds?: number;
@@ -125,6 +136,7 @@ export interface UpdateMonitorRequest {
   enabled?: boolean;
   tags?: string[];
   consecutive_failures_threshold?: number;
+  recovery_threshold?: number;
   notification_mode?: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;

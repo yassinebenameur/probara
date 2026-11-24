@@ -1,0 +1,20 @@
+%%
+%% This is the AFNIC Whois server.
+%%
+
+domain:                        example.fr
+status:                        ACTIVE
+eppstatus:                     active
+hold:                          NO
+registrar:                     Example Registrar SAS
+Expiry Date:                   2029-07-18T08:26:59Z
+created:                       2001-12-10T23:00:00Z
+last-update:                   2026-06-05T06:59:15.743011Z
+source:                        FRNIC
+
+nserver:                       ns1.example.fr
+
+registrar:                     Example Registrar SAS
+anonymous:                     No
+registered:                    2014-07-29T15:35:33Z
+source:                        FRNIC

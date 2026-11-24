@@ -34,6 +34,7 @@ const (
 	MonitorTypeTCP              = sharedmodels.MonitorTypeTCP
 	MonitorTypeMySQL            = sharedmodels.MonitorTypeMySQL
 	MonitorTypeWebSocket        = sharedmodels.MonitorTypeWebSocket
+	MonitorTypeDomain           = sharedmodels.MonitorTypeDomain
 )
 
 // MonitorChannelAssignment is one channel in a monitor's custom routing list.
@@ -49,6 +50,7 @@ type Monitor struct {
 	ID                           uuid.UUID                  `json:"id"`
 	TenantID                     uuid.UUID                  `json:"tenant_id"`
 	Name                         string                     `json:"name"`
+	Key                          *string                    `json:"key,omitempty"` // Stable config-as-code identity (POST /monitors/apply); nil = unmanaged
 	Type                         MonitorType                `json:"type"`
 	Config                       json.RawMessage            `json:"config"`
 	IntervalSeconds              int                        `json:"interval_seconds"`
@@ -61,6 +63,8 @@ type Monitor struct {
 	MemberIDs                    []uuid.UUID                `json:"member_ids,omitempty"`     // Populated for group monitors
 	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"` // Upstream monitors this one depends on
 	ConsecutiveFailuresThreshold int                        `json:"consecutive_failures_threshold"`
+	RecoveryThreshold            int                        `json:"recovery_threshold"`    // Passing checks in a row before a down monitor is up again (S-T7), 1-10
+	ConsecutiveSuccesses         int                        `json:"consecutive_successes"` // Read-only: passes so far toward that confirmation; non-zero only while down
 	NotificationMode             string                     `json:"notification_mode"`
 	MemberAlertRollup            string                     `json:"member_alert_rollup"`    // 'per_monitor' | 'group'; only meaningful for group monitors
 	DependencySuppression        string                     `json:"dependency_suppression"` // 'inherit' | 'on' | 'off': page when an upstream dependency is down? 'inherit' follows the workspace setting
@@ -83,6 +87,7 @@ type Monitor struct {
 // CreateMonitorRequest represents a request to create a monitor
 type CreateMonitorRequest struct {
 	Name                         string                     `json:"name"`
+	Key                          *string                    `json:"key,omitempty"`
 	Type                         MonitorType                `json:"type"`
 	Config                       json.RawMessage            `json:"config"`
 	IntervalSeconds              int                        `json:"interval_seconds"`
@@ -90,6 +95,7 @@ type CreateMonitorRequest struct {
 	Enabled                      *bool                      `json:"enabled,omitempty"`
 	Tags                         []string                   `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
+	RecoveryThreshold            *int                       `json:"recovery_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`
@@ -102,6 +108,7 @@ type CreateMonitorRequest struct {
 // UpdateMonitorRequest represents a request to update a monitor
 type UpdateMonitorRequest struct {
 	Name                         *string                    `json:"name,omitempty"`
+	Key                          *string                    `json:"key,omitempty"` // nil = unchanged, "" = remove the key
 	Type                         *MonitorType               `json:"type,omitempty"`
 	Config                       json.RawMessage            `json:"config,omitempty"`
 	IntervalSeconds              *int                       `json:"interval_seconds,omitempty"`
@@ -109,6 +116,7 @@ type UpdateMonitorRequest struct {
 	Enabled                      *bool                      `json:"enabled,omitempty"`
 	Tags                         *[]string                  `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
+	RecoveryThreshold            *int                       `json:"recovery_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`

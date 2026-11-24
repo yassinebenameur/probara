@@ -6,7 +6,9 @@ package ingest
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -26,6 +28,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -58,6 +61,7 @@ type Ingest struct {
 	ingestErrors    *prometheus.CounterVec
 	duplicates      prometheus.Counter
 	meshIngested    prometheus.Counter
+	abandoned       *prometheus.CounterVec
 }
 
 // New creates the ingest component. statusPub may be nil (status page updates
@@ -100,6 +104,11 @@ func New(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegistry *metri
 		[]string{},
 	)
 	i.meshIngested = meshCounter.With(prometheus.Labels{})
+	i.abandoned = metricsRegistry.NewCounter(
+		"result_ingest_abandoned_total",
+		"Check results terminated unprocessed after their retry budget, by reason (platform, credential)",
+		[]string{"reason"},
+	)
 
 	return i
 }
@@ -112,10 +121,93 @@ func (i *Ingest) ConfigureEncryption(encryptor secrets.Encryptor) {
 	}
 }
 
+// errRejected marks a location message refused on its own merits: a subject
+// or payload that does not match, an identifier that does not parse, a
+// location (or monitor link) that is unknown, disabled or deleted, a bad
+// signature. Redelivering it cannot change the answer, so it is acked and
+// dropped. Every other verification error is the platform's (a database
+// error, a schema the migrations have not reached yet, an undecryptable
+// stored credential) and must not cost the result: it is retried, within the
+// budgets of retryOrGiveUp.
+var errRejected = errors.New("rejected")
+
+func rejectf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", errRejected, fmt.Sprintf(format, args...))
+}
+
+// isRejected reports whether err is a verdict on the message itself.
+func isRejected(err error) bool { return errors.Is(err, errRejected) }
+
+// errUndecryptableCredential marks a stored location credential the
+// scheduler's key cannot open. With a key configured that is usually
+// permanent for the location (encrypted under a key since removed), so its
+// results get a short retry budget; see retryOrGiveUp.
+var errUndecryptableCredential = errors.New("decrypt location credential")
+
+// Retry budgets, in deliveries. A delayed NAK keeps the message in the
+// consumer's ack-pending set (nats-server: a NAK with a delay only moves the
+// pending entry's timestamp), and at MaxAckPending the server delivers no
+// new message, for any tenant. So no retry may be unbounded: past its budget
+// a message is terminated (TERM), logged and counted.
+//
+// platformMaxDeliveries covers platformRetryBudget of backoff: database and
+// schema errors, which is what a deploy produces while migrations run.
+// credentialMaxDeliveries is for an undecryptable credential while a key is
+// configured: a few seconds, in case a key rotation is mid-rollout.
+const (
+	platformRetryBudget     = 15 * time.Minute
+	credentialMaxDeliveries = 3
+	// resultIngestMaxAckPending must exceed the results that can be waiting
+	// out a NAK at once: in-flight work plus failing traffic times its
+	// budget. 20000 holds ~1300 failing results a minute for the full
+	// platform budget; the server default (1000) would let one broken
+	// location stall every tenant's results within minutes.
+	resultIngestMaxAckPending = 20000
+)
+
+var platformMaxDeliveries = deliveriesWithin(platformRetryBudget)
+
+// deliveriesWithin is the number of deliveries whose NAK delays
+// (retryDelay) fit in budget, counting the first delivery.
+func deliveriesWithin(budget time.Duration) uint64 {
+	var n uint64 = 1
+	var elapsed time.Duration
+	for {
+		d := retryDelay(n)
+		if elapsed+d > budget {
+			return n
+		}
+		elapsed += d
+		n++
+	}
+}
+
+// ingestBackoff is the redelivery schedule of a result the ingest could not
+// process yet. The consumer is created with it, but JetStream applies a
+// consumer's BackOff only to AckWait expiries, never to an explicit NAK, so
+// handleMessage NAKs with retryDelay instead of an immediate redelivery that
+// would busy-loop while the database is down or behind.
+var ingestBackoff = []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, time.Minute}
+
+// retryDelay is the NAK delay for the numDelivered-th delivery of a message.
+func retryDelay(numDelivered uint64) time.Duration {
+	if numDelivered < 1 {
+		numDelivered = 1
+	}
+	if numDelivered > uint64(len(ingestBackoff)) {
+		return ingestBackoff[len(ingestBackoff)-1]
+	}
+	return ingestBackoff[numDelivered-1]
+}
+
+// locationCredential returns the plaintext credential of an enabled location
+// of a live workspace (bound to tenantID and monitorID when given). Errors
+// wrapping errRejected mean the message cannot authenticate; anything else
+// is a platform failure the caller must retry.
 func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, monitorID string) (string, error) {
 	locationUUID, err := uuid.Parse(locationID)
 	if err != nil {
-		return "", fmt.Errorf("invalid location_id: %w", err)
+		return "", fmt.Errorf("%w: invalid location_id: %w", errRejected, err)
 	}
 	var stored string
 	query := `
@@ -123,12 +215,16 @@ func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, m
 		FROM locations l
 		WHERE l.id = $1
 		  AND l.enabled = TRUE AND l.deleted_at IS NULL
-		  AND l.worker_credential IS NOT NULL`
+		  AND l.worker_credential IS NOT NULL
+		  -- A deleted workspace's private locations are cut off: their
+		  -- results and heartbeats are refused here, as their NATS
+		  -- connections are at the authorization callout.
+		  AND ` + tenancy.LiveTenantSQL("l.tenant_id")
 	args := []any{locationUUID}
 	if tenantID != "" {
 		tenantUUID, err := uuid.Parse(tenantID)
 		if err != nil {
-			return "", fmt.Errorf("invalid tenant_id: %w", err)
+			return "", fmt.Errorf("%w: invalid tenant_id: %w", errRejected, err)
 		}
 		query += " AND l.tenant_id = $2"
 		args = append(args, tenantUUID)
@@ -136,7 +232,7 @@ func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, m
 	if monitorID != "" {
 		monitorUUID, err := uuid.Parse(monitorID)
 		if err != nil {
-			return "", fmt.Errorf("invalid monitor_id: %w", err)
+			return "", fmt.Errorf("%w: invalid monitor_id: %w", errRejected, err)
 		}
 		query += ` AND EXISTS (
 			SELECT 1 FROM monitor_locations ml
@@ -147,11 +243,14 @@ func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, m
 		args = append(args, monitorUUID)
 	}
 	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&stored); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", rejectf("no enabled location %s of a live workspace matches", locationID)
+		}
 		return "", fmt.Errorf("location credential lookup: %w", err)
 	}
 	credential, err := i.secretsEncryptor.Decrypt(stored)
 	if err != nil {
-		return "", fmt.Errorf("decrypt location credential: %w", err)
+		return "", fmt.Errorf("%w: %w", errUndecryptableCredential, err)
 	}
 	return credential, nil
 }
@@ -160,19 +259,19 @@ func (i *Ingest) verifyLocationResult(ctx context.Context, subject string, m mod
 	locationPrefix := i.config.CheckResultSubject + ".loc."
 	if subject == i.config.CheckResultSubject {
 		if m.LocationID != "" {
-			return fmt.Errorf("location result published on platform subject")
+			return rejectf("location result published on platform subject")
 		}
 		if m.LocationSignature != "" {
-			return fmt.Errorf("location signature without location_id")
+			return rejectf("location signature without location_id")
 		}
 		return nil
 	}
 	if !strings.HasPrefix(subject, locationPrefix) {
-		return fmt.Errorf("unexpected result subject %q", subject)
+		return rejectf("unexpected result subject %q", subject)
 	}
 	subjectLocation := strings.TrimPrefix(subject, locationPrefix)
 	if subjectLocation == "" || strings.Contains(subjectLocation, ".") || m.LocationID != subjectLocation {
-		return fmt.Errorf("result subject location does not match payload")
+		return rejectf("result subject location does not match payload")
 	}
 	monitorID := m.MonitorID
 	if m.Mesh != nil {
@@ -184,7 +283,12 @@ func (i *Ingest) verifyLocationResult(ctx context.Context, subject string, m mod
 	}
 	signature := m.LocationSignature
 	m.LocationSignature = ""
-	return locationauth.VerifyJSON(credential, signature, m)
+	// VerifyJSON is pure: a missing or wrong signature, or a stored
+	// credential that cannot sign at all, gives the same answer every time.
+	if err := locationauth.VerifyJSON(credential, signature, m); err != nil {
+		return fmt.Errorf("%w: %w", errRejected, err)
+	}
+	return nil
 }
 
 // Start ensures the results stream, creates the durable consumer and spawns
@@ -206,15 +310,17 @@ func (i *Ingest) Start() error {
 		return fmt.Errorf("failed to ensure results stream: %w", err)
 	}
 
-	// Unlimited redelivery: a check result must never be dropped because the
-	// ingest transaction kept failing — most notably during a Helm rollout
-	// window where new code runs against the pre-migration schema and every
-	// persist errors until the migration job lands. The stream's MaxAge is
-	// the only bound; the backoff keeps a stuck message from busy-looping.
+	// No server-side delivery limit: the handler bounds retries itself
+	// (retryOrGiveUp), by reason, so a database outage or a migration in
+	// progress costs no result while a message that can never succeed is
+	// terminated instead of holding the ack-pending window. The backoff
+	// (applied to NAKs by retryDelay) keeps a failing message from
+	// busy-looping, and MaxAckPending is sized for the retries in flight.
 	consumer, err := i.queue.CreateConsumerWithOptions(ctx, i.config.CheckResultStream, i.config.ResultIngestConsumerName,
 		queue.ConsumerOptions{
-			MaxDeliver: -1,
-			BackOff:    []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, time.Minute},
+			MaxDeliver:    -1,
+			BackOff:       ingestBackoff,
+			MaxAckPending: resultIngestMaxAckPending,
 		})
 	if err != nil {
 		return fmt.Errorf("failed to create ingest consumer: %w", err)
@@ -265,8 +371,11 @@ func (i *Ingest) consumeLoop(ctx context.Context, consumer jetstream.Consumer, i
 }
 
 // handleMessage persists one result message. Returning an error Naks the
-// message for redelivery; returning nil Acks it. Poison messages (bad JSON,
-// bad UUIDs, unknown monitor) are logged and acked — retrying cannot fix them.
+// message for redelivery after retryDelay; returning nil Acks it. Poison
+// messages (bad JSON, bad UUIDs, unknown monitor, a location result that
+// fails authentication) are logged and acked — retrying cannot fix them.
+// Platform failures (database errors, a schema behind the code) are never
+// acked: they are retried, then terminated past their budget.
 func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 	var m models.CheckResultMessage
 	if err := json.Unmarshal(msg.Data, &m); err != nil {
@@ -285,14 +394,24 @@ func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 		return nil
 	}
 	if err := i.verifyLocationResult(ctx, msg.Subject, m); err != nil {
-		logEntry.WithError(err).Warn("Rejecting unauthenticated location result")
-		return nil
+		if isRejected(err) {
+			logEntry.WithError(err).Warn("Rejecting unauthenticated location result")
+			return nil
+		}
+		// The result may well be genuine: the database is unreachable or
+		// its schema is behind this code. Acking would lose it for good.
+		logEntry.WithError(err).WithField("delivery", msg.NumDelivered).Error("Could not verify location result; retrying")
+		i.ingestErrors.With(prometheus.Labels{}).Inc()
+		return i.retryOrGiveUp(logEntry, msg, err)
 	}
 
 	// Mesh probes are edge results, not monitor results — they carry no
 	// monitor_id and never touch check_results or monitor state.
 	if m.Mesh != nil {
-		return i.handleMeshResult(ctx, m)
+		if err := i.handleMeshResult(ctx, m); err != nil {
+			return i.retryOrGiveUp(logEntry, msg, err)
+		}
+		return nil
 	}
 
 	result, err := i.buildResult(m)
@@ -310,7 +429,7 @@ func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 		}
 		logEntry.WithError(err).Error("Failed to persist check result")
 		i.ingestErrors.With(prometheus.Labels{}).Inc()
-		return err
+		return i.retryOrGiveUp(logEntry, msg, err)
 	}
 
 	if outcome.duplicate {
@@ -326,6 +445,26 @@ func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 		i.publishStatusUpdate(m.MonitorID, m.TenantID, "state_change")
 	}
 	return nil
+}
+
+// retryOrGiveUp answers a message that failed for a reason not its own: a
+// delayed NAK while its retry budget lasts, then a TERM, so a message that
+// can never succeed stops holding a slot of the ack-pending window.
+func (i *Ingest) retryOrGiveUp(logEntry *logrus.Entry, msg *queue.Message, err error) error {
+	reason, budget := "platform", platformMaxDeliveries
+	if _, noKey := i.secretsEncryptor.(secrets.NoOpEncryptor); errors.Is(err, errUndecryptableCredential) && !noKey {
+		reason, budget = "credential", credentialMaxDeliveries
+	}
+	if msg.NumDelivered < budget {
+		return queue.RetryAfter(err, retryDelay(msg.NumDelivered))
+	}
+	fields := logrus.Fields{"delivery": msg.NumDelivered, "reason": reason}
+	if !msg.Timestamp.IsZero() {
+		fields["age_seconds"] = int(time.Since(msg.Timestamp).Seconds())
+	}
+	logEntry.WithError(err).WithFields(fields).Warn("Dropping check result after its retry budget")
+	i.abandoned.With(prometheus.Labels{"reason": reason}).Inc()
+	return queue.Terminate(err)
 }
 
 func (i *Ingest) buildResult(m models.CheckResultMessage) (monitorResult, error) {

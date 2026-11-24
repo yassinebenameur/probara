@@ -27,9 +27,19 @@
 // the alert's suppression_reason, so what pages and what the UI calls
 // suppressed cannot disagree. Classify does not model it: routing reachability
 // is static configuration, dependency suppression follows live upstream state.
+//
+// Mesh-edge alerts have the same kind of per-alert rule: while one of an
+// edge's locations has stopped reporting, its location_offline alert is the
+// root cause and the edge dispatches nothing
+// (SuppressedByOfflineLocationPredicate, reported as suppression_reason
+// "location_offline").
 package alertrouting
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/monitorstate"
+)
 
 // Routing source values reported by Classify.
 const (
@@ -156,6 +166,19 @@ func Classify(c Counts) Status {
 		}
 	}
 	return st
+}
+
+// TenantTargetsSQL returns the `$1` tenant's default routes as
+// `(channel_id, delay_seconds, pos)`, unordered. It is the routing of the
+// alerts that have no monitor (mesh edges, location_offline): exactly the
+// rows TargetsSQL emits for a monitor in 'default' mode, minus the monitor
+// column (TestTenantTargetsSQLMatchesDefaults pins the pair). Like TargetsSQL
+// it ignores is_active; callers join alert_channels and filter.
+func TenantTargetsSQL() string {
+	return `
+		SELECT tdc.channel_id, tdc.delay_seconds, tdc.position AS pos
+		FROM tenant_default_channels tdc
+		WHERE tdc.tenant_id = $1`
 }
 
 // TargetsSQL returns the set of routed channel assignments for the monitors in
@@ -308,10 +331,13 @@ func SuppressedByDependencyPredicate(alertAlias, monAlias, tenantAlias string) s
 // never had a root cause this is its triggered_at; for one whose root cause
 // cleared it is the end of the grace period, so escalation-tier delays for a
 // late-paging downstream are measured from when it became unexplained rather
-// than firing every tier at once.
+// than firing every tier at once. Coming out of an acknowledgement or a
+// snooze, or reopening as a relapse (DispatchResumedAtExpr), restarts it the
+// same way; GREATEST ignores its NULL for an alert never muted or reopened.
 func DispatchEligibleSinceExpr(alertAlias, tenantAlias string) string {
 	return `GREATEST(` + alertAlias + `.triggered_at,
-		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at))`
+		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at),
+		` + DispatchResumedAtExpr(alertAlias) + `)`
 }
 
 // ImpactedMonitorsSubquery returns a SQL scalar subquery yielding a JSON array
@@ -348,4 +374,39 @@ func UnreachablePredicate(monAlias string) string {
 			FROM monitors rg WHERE rg.id = ` + rollup + `)
 		ELSE ` + ChannelCountExpr(monAlias, true) + ` = 0
 	END)`
+}
+
+// SuppressionReasonLocationOffline is the value the API reports in an alert's
+// suppression_reason when SuppressedByOfflineLocationPredicate holds for it.
+const SuppressionReasonLocationOffline = "location_offline"
+
+// SuppressedByOfflineLocationPredicate returns a SQL boolean that is TRUE when
+// the open mesh_edge alert aliased by alertAlias must not dispatch because one
+// of its two locations has stopped reporting (S-F6): that location's own
+// location_offline alert is the root cause and speaks for every path it
+// breaks, so a dead site pages once instead of once per edge. Like dependency
+// suppression it gates dispatch only; the edge alert still opens and
+// resolves, and a channel it already paged still hears the resolve.
+//
+// A location holds its edges while it is disconnected and either
+//
+//   - not yet offline (the 60–180 s window): edges into a dead site go down
+//     after a few probes, before the site counts as offline, and its alert
+//     opens at the threshold; or
+//   - offline with an open location_offline alert, which is the page.
+//
+// An offline location without an open alert (beyond the alert horizon, or
+// held by the fleet-silence or startup guard) holds nothing: while no
+// location alert pages, the edges page for themselves. Never NULL; FALSE for
+// every other kind.
+func SuppressedByOfflineLocationPredicate(alertAlias string) string {
+	return `(` + alertAlias + `.kind = 'mesh_edge' AND EXISTS (
+		SELECT 1 FROM locations sol
+		WHERE sol.id IN (` + alertAlias + `.source_location_id, ` + alertAlias + `.target_location_id)
+		  AND ` + monitorstate.LocationDisconnectedPredicate("sol") + `
+		  AND (NOT ` + monitorstate.LocationOfflinePredicate("sol") + `
+			OR EXISTS (SELECT 1 FROM alerts sola
+				WHERE sola.kind = 'location_offline'
+				  AND sola.status IN ('active', 'acknowledged')
+				  AND sola.source_location_id = sol.id))))`
 }

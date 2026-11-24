@@ -1,13 +1,15 @@
 'use client';
 
 import type { MonitorLocationStatus } from '@/lib/types';
-import { displayStatusFromState, isFailingStatus, monitorStateColors } from '@/lib/monitor-utils';
+import { displayStatusFromState, isFailingStatus, monitorStateColors, recoveryProgress } from '@/lib/monitor-utils';
 import { formatLatency } from '@/lib/format';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 
 interface MonitorLocationStripProps {
   locations: MonitorLocationStatus[];
   quorum: number;
+  /** The monitor's recovery_threshold: each location confirms its own recovery. */
+  recoveryThreshold?: number;
 }
 
 function stateLabel(state: MonitorLocationStatus['current_state']): string {
@@ -26,7 +28,7 @@ function stateLabel(state: MonitorLocationStatus['current_state']): string {
 // Per-location status for multi-location monitors: one tile per location
 // (state, last response time, last check), under a header that states the
 // quorum rule, so a failing location reads against what it takes to go down.
-export function MonitorLocationStrip({ locations, quorum }: MonitorLocationStripProps) {
+export function MonitorLocationStrip({ locations, quorum, recoveryThreshold }: MonitorLocationStripProps) {
   if (locations.length === 0) return null;
 
   const failing = locations.filter((loc) => isFailingStatus(displayStatusFromState(loc))).length;
@@ -52,6 +54,7 @@ export function MonitorLocationStrip({ locations, quorum }: MonitorLocationStrip
           // is how long the failure took (often the timeout), so it moves to
           // the state's tooltip instead of reading as response time.
           const showLatency = hasLatency && loc.current_state === 'up';
+          const recovery = recoveryProgress({ ...loc, recovery_threshold: recoveryThreshold });
           return (
             <li key={loc.id} className="glass-well min-w-0 px-3.5 py-2.5">
               <div className="flex min-w-0 items-center gap-2">
@@ -69,9 +72,10 @@ export function MonitorLocationStrip({ locations, quorum }: MonitorLocationStrip
                   title={hasLatency && !showLatency ? `Last check failed after ${formatLatency(loc.last_latency_ms)}` : undefined}
                 >
                   {stateLabel(loc.current_state)}
+                  {recovery && ` · recovering ${recovery.passes}/${recovery.needed}`}
                 </span>
                 {loc.last_check_at && <RelativeTime value={loc.last_check_at} className="truncate" />}
-                {!loc.connected && <span className="ml-auto shrink-0 text-amber-300">worker offline</span>}
+                {!loc.connected && <span className="ml-auto shrink-0 text-amber-300">worker disconnected</span>}
               </div>
             </li>
           );

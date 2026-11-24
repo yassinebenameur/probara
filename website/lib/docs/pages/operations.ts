@@ -35,7 +35,7 @@ export const OPERATIONS_PAGE: DocPage = {
             [
               'Scheduler',
               'PostgreSQL and NATS',
-              'No useful degraded mode. It schedules checks, ingests results, builds rollups, purges deleted monitors, enforces retention, and schedules mesh probes.',
+              'No useful degraded mode. It schedules checks, ingests results, builds rollups, purges deleted monitors and deleted workspaces, enforces retention, and schedules mesh probes.',
             ],
             [
               'Worker',
@@ -227,8 +227,8 @@ make healthcheck`,
             ],
             [
               'Result ingest',
-              '`results_ingested_total`, `result_ingest_errors_total`, `result_ingest_duplicates_total`, `mesh_results_ingested_total`',
-              'Publish success without ingest growth, ingest errors, or unexpectedly high duplicates.',
+              '`results_ingested_total`, `result_ingest_errors_total`, `result_ingest_duplicates_total`, `mesh_results_ingested_total`, `result_ingest_abandoned_total{reason}`',
+              'Publish success without ingest growth, ingest errors, or unexpectedly high duplicates. Any `result_ingest_abandoned_total`: results the scheduler gave up on and dropped, after about 15 minutes of database or schema errors (`platform`) or three deliveries whose location credential the configured `PROBARA_SECRETS_KEY` cannot decrypt (`credential`); the scheduler logs each one.',
             ],
             [
               'Retention and rollups',
@@ -239,6 +239,11 @@ make healthcheck`,
               'Monitor purge',
               '`monitor_purge_runs_total`, `monitor_purge_rows_total`, `monitor_purge_monitors_total`, `monitor_purge_errors_total`, `monitor_purge_run_duration_seconds`',
               'Growing errors or deleted monitors never becoming fully purged.',
+            ],
+            [
+              'Workspace purge',
+              '`workspace_purge_rows_total`, `workspace_purge_workspaces_total`, `workspace_purge_errors_total`, `workspace_purge_pending`, `workspace_purge_run_duration_seconds`',
+              'Growing errors, or `workspace_purge_pending` staying above zero while `workspace_purge_rows_total` no longer grows.',
             ],
             [
               'Worker execution',
@@ -254,6 +259,11 @@ make healthcheck`,
               'SIP test calls',
               '`sip_linger_total{outcome=late_answer|late_bye_ok|late_bye_unconfirmed|late_cancel|quiet|flow_closed|aborted}`, `sip_linger_dropped_total`, `test_check_side_effect_rejected_total{type=…}`, `sip_call_teardown_unconfirmed_total{evidence=audio_after_bye|none}`, `sip_media_sessions_total{outcome=measured|truncated|refused|unusable_answer|not_held|interrupted}`, `sip_media_refused_total{reason=…}`, `sip_media_rx_dropped_total{reason=invalid|foreign|overflow}`, `sip_media_unreliable_total`',
               "Any `sip_linger_dropped_total` growth: every linger slot (32 per worker) was taken, so a late or forked answer to that call was neither ACKed nor BYE'd and may stay up, and billed, until the far end times it out. Sustained `late_answer` means the far end answers after the check gave up. `late_bye_ok` and `late_bye_unconfirmed` count the second BYE a linger sends when a call's hang-up BYE drew no response: `late_bye_ok` means the far end confirmed it (a 2xx, or 481 for a dialog it had already ended), and `late_bye_unconfirmed` means it went unanswered again or was refused, so the call may still be up, and billed, until the far end times it out; it outranks a late answer in the same linger. `test_check_side_effect_rejected_total` counts `Test` calls a worker refused because 16 were already running on it; scheduled checks are not affected. `sip_call_teardown_unconfirmed_total{evidence=audio_after_bye}` counts unconfirmed hang-ups after which the far end kept sending audio: those calls are likely still up and billed. For [call quality](/docs/monitors/#network-protocols), `sip_media_refused_total` by reason shows far ends whose media address the worker policy refuses (`private_behind_public` growth usually means a carrier leaks private SDP addresses, or `HTTP_ALLOWED_CIDRS` lacks an on-premises range); `sip_media_rx_dropped_total{reason=foreign}` growth means audio arriving from addresses the SDP did not name (asymmetric media); and any sustained `sip_media_unreliable_total` means the worker is too loaded to time media, so its quality thresholds are skipped: give it CPU or fewer concurrent checks.",
+            ],
+            [
+              'Alerter locations',
+              '`probara_alerter_locations{state=online|offline|never_seen|disabled}`, `probara_alerter_location_offline_guard{reason=fleet_silent|startup}`, `probara_alerter_location_offline_guard_limit_seconds{reason}`',
+              'Offline count rising: locations past the 180-second rule. Not every one has an alert: locations silent for more than 7 days and locations held by the guard do not. `fleet_silent` at 1 means several locations went quiet together, so check NATS and the scheduler before the hold ends (`guard_limit_seconds`, 15 minutes after the newest heartbeat). Platform-wide counts; per-workspace detail is on the Locations page.',
             ],
             [
               'Status live updates',
@@ -333,7 +343,28 @@ go run ./cmd/migrate`,
         {
           type: 'paragraph',
           text:
-            'The migration CLI requires `POSTGRES_URL`, defaults `MIGRATIONS_PATH` to `./migrations`, and retries the initial database connection up to 30 times at one-second intervals. API startup also runs the shared migration set. The [Helm migration Job](/docs/deployment/#migrations-upgrades) is a post-install/post-upgrade hook.',
+            'The migration CLI requires `POSTGRES_URL`, defaults `MIGRATIONS_PATH` to `./migrations`, and retries the initial database connection up to 30 times at one-second intervals. API startup also runs the shared migration set under the same database lock, as a safety net. Migrations run before the services that need them: the [Helm migration Job](/docs/deployment/#migrations-upgrades) is a `pre-upgrade` hook (`post-install` on a first install), and in Compose every database service waits for the `migrations` service to complete. During a rolling upgrade, pods of the previous release therefore run briefly against the new schema; the notes below say what each release tolerates there.',
+        },
+        {
+          type: 'callout',
+          tone: 'info',
+          title: 'Upgrading to offline-location alerts',
+          text:
+            'Migration 000103 rewrites the `alerts` subject constraint and builds an index on it, which scans and locks the `alerts` table while it runs (quick at typical sizes; plan a quiet moment for a very large alert history). 000104 adds `locations.enabled_at`. During a mixed-version rollout, an alerter replica still on the previous version sends the resolve notices of `location_offline` alerts without the location\'s name and still pages mesh paths that the new version holds for an offline location; finish the rollout of every alerter replica.',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to relapse reopen',
+          text:
+            'Migration 000105 only adds columns, a table and constraints that skip scanning existing rows, so it is quick at any size. Upgrade the delivery workers before the alerter, or together with it: with asynchronous dispatch an older worker would send a [relapse notice](/docs/alerting/#relapses) under the first episode\'s PagerDuty or Opsgenie key, folding it into the earlier incident instead of opening a new one. Nothing relapses until a workspace sets its reopen cooldown, so upgrading in that order is enough.',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to sign-in lockout and sessions',
+          text:
+            'Migrations 000116 and 000117 add columns to `admin_users`, the `admin_session_families` table and a column and index on `admin_sessions`; 000117 turns every live refresh token into its own [session](/docs/security/#sign-in-lockout-sessions), so nobody is signed out by the upgrade. Complete the rollout of every API replica before revoking sessions: during a rolling upgrade an API replica still on the previous version ignores sessions, honours the refresh token of a revoked one, and the token it issues starts a fresh session, so revocations made while old replicas run may not hold. Access tokens issued before the upgrade carry no session id and stay valid until they expire (15 minutes).',
         },
         {
           type: 'code',
@@ -429,6 +460,11 @@ make db-restore`,
                 'Operator labels on AI analyses, alert triages and dependency suggestions are not pruned by time or by `data_retention_days`, and survive monitor purges and incident deletion; they are removed only with their workspace.',
             },
             {
+              term: 'Notification delivery history',
+              description:
+                'Every alert notification attempt ([delivery history](/docs/alerting/#delivery-history)) is kept 90 days for every tenant, whatever `data_retention_days` says (`0` included), and is deleted earlier with its alert, channel or workspace. The daily tenant cleanup prunes it within the same batch and per-run limits; its backlog shows as `store="alert_notification_deliveries"` on `retention_cleanup_backlogged_tenants` and `retention_cleanup_oldest_expired_timestamp_seconds`.',
+            },
+            {
               term: 'Audit retention',
               description:
                 '`AUDIT_RETENTION_DAYS` is a separate compliance control, defaults to 365 days, and uses `0` to retain forever.',
@@ -437,6 +473,11 @@ make db-restore`,
               term: 'Monitor purge',
               description:
                 'Soft-deleted monitors are later purged with dependent rows in bounded batches.',
+            },
+            {
+              term: 'Workspace purge',
+              description:
+                'A deleted [workspace](/docs/administration/#workspaces) is erased by the scheduler in bounded batches, table by table, and its row goes last; every pass first blanks its stored secrets (channel and monitor credentials, push tokens, worker credentials). It shares the `MONITOR_PURGE_*` settings (cadence, batch size, per-run cap) but holds its own lock, so one replica runs it at a time and a run that stops (budget, restart, lost lock) simply resumes on the next tick. Each run logs `workspace purge progress` with the rows deleted per table, and `deleted workspace fully purged` when the row is gone. Audit log entries are kept.',
             },
             {
               term: 'Rollups',
@@ -462,9 +503,9 @@ make db-restore`,
             ['`METRIC_RAW_RETENTION_DAYS`', '`30`', 'Raw OTLP metric samples (daily partitions); a tenant\'s `data_retention_days` can tighten it. Hourly metric rollups are kept 400 days.'],
             ['`OTLP_MAX_SERIES_PER_MONITOR`', '`2000`', 'Metric-series cardinality cap per agent monitor; overflow points are rejected via OTLP `partial_success`.'],
             ['`OTLP_MONITOR_RATE_PER_MIN`', '`60`', 'OTLP ingest requests per minute per monitor; excess returns `429` with `Retry-After`.'],
-            ['`MONITOR_PURGE_INTERVAL_SECONDS`', '`30`', 'Soft-delete purge cadence.'],
-            ['`MONITOR_PURGE_BATCH_SIZE`', '`5000`', 'Child-row purge batch size.'],
-            ['`MONITOR_PURGE_MAX_ROWS_PER_RUN`', '`200000`', 'Purge safety cap.'],
+            ['`MONITOR_PURGE_INTERVAL_SECONDS`', '`30`', 'Soft-delete purge cadence (deleted monitors and deleted workspaces).'],
+            ['`MONITOR_PURGE_BATCH_SIZE`', '`5000`', 'Purge batch size (rows per statement).'],
+            ['`MONITOR_PURGE_MAX_ROWS_PER_RUN`', '`200000`', 'Purge safety cap, per run of each purge.'],
           ],
         },
         {
@@ -633,6 +674,11 @@ helm lint ./helm/monitoring-platform \\
               'Confirm provider protocol. Use the correct implicit-TLS port or a supported non-TLS/private relay setting.',
             ],
             [
+              'Email fails with `i/o timeout`',
+              'The SMTP server accepted the connection but did not answer in time. Alert email is bounded by the dispatch that sends it: the worker’s 15-second dispatch timeout with `ALERTER_ASYNC_DISPATCH=true`, otherwise the alerter’s evaluation cycle (`ALERT_EVAL_INTERVAL_SECONDS`, default 30). Transactional mail (invites, resets, subscriber mail, reports) allows 30 seconds per message. Either way no single step (connect, greeting, authentication, a message) waits more than 30 seconds',
+              'Check that the host and port reach a responsive relay and that nothing between drops the session; a relay that greets slowly fails the same way.',
+            ],
+            [
               'OIDC redirects or callback fails',
               'Issuer/client secret/callback mismatch, bad public base URL, or JIT tenant/role error',
               'Compare the exact HTTPS callback with the IdP registration and inspect OIDC discovery.',
@@ -649,8 +695,8 @@ helm lint ./helm/monitoring-platform \\
             ],
             [
               'Frontend links point to old origin',
-              '`NEXT_PUBLIC_*` changed only at runtime',
-              'Rebuild the frontend client bundle with the desired public values or use stable relative routing.',
+              '`NEXT_PUBLIC_*` changed only at runtime, or status-page links on the UI\'s own origin',
+              'Status-page links and the template preview take `STATUS_PAGE_BASE_URL` from the API at runtime: set it on the API (Helm `statusPage.baseUrl`; release Compose `.env`). Other public values are build-time: rebuild the frontend client bundle with them or use stable relative routing.',
             ],
             [
               'Settings → AI says “not configured correctly”',

@@ -125,11 +125,18 @@ func (s *Service) buildReport(ctx context.Context, tenantID uuid.UUID, sla *mode
 	if len(members) == 0 {
 		report.Notes = append(report.Notes, "No monitors match this SLA.")
 		report.Budget = budgetFor(sla.TargetPct, report.Summary, period)
+		report.Burn = emptyBurn(window)
 		return report, nil
 	}
 
 	days := sharedanalytics.DayBuckets(loc, window.Start, window.End)
 	buckets := append([]sharedanalytics.TimeRange{window}, days...)
+	// The S-U8 burn windows ride on the same integration as extra buckets.
+	short := burnWindows(period, end, report.Period.IsClosed)
+	shortStart := len(buckets)
+	for _, w := range short {
+		buckets = append(buckets, w.rng)
+	}
 	ids := memberIDs(members)
 	res, err := s.analytics.IntegrateTimeline(ctx, tenantID, ids, buckets, opts)
 	if err != nil {
@@ -138,6 +145,8 @@ func (s *Service) buildReport(ctx context.Context, tenantID uuid.UUID, sla *mode
 
 	report.Summary = summarize(sla, res, 0, members)
 	report.Budget = budgetFor(sla.TargetPct, report.Summary, period)
+	report.Burn = buildBurn(sla, res, members, period, window, days, short, shortStart, report.Summary,
+		report.Period.IsClosed, loc)
 	for i, day := range days {
 		d := summarize(sla, res, i+1, members)
 		report.Daily = append(report.Daily, models.SLAReportDay{
@@ -272,12 +281,22 @@ func outageRow(o sharedanalytics.Outage, name string) models.SLAReportOutage {
 }
 
 // alertResponse fills MTTA from availability alerts triggered in the window,
-// including group roll-up alerts on the SLA's explicit group monitors.
+// including group roll-up alerts on the SLA's explicit group monitors. It
+// counts from an alert's first acknowledgement, which neither an
+// unacknowledge nor a relapse reopen clears: a later re-acknowledge does not
+// stretch it, and an alert unacknowledged (or reopened) before it resolved
+// still counts as acknowledged. It measures that acknowledgement from the
+// start of the paging episode it answered (first_ack_episode_started_at: the
+// trigger, or the relapse reopen it followed), so an alert first acknowledged
+// during a relapse is not charged the time it spent recovered. The COALESCEs
+// cover acknowledgements written during a rollout by an API that predates
+// first_acknowledged_at (migration 000102) or the episode start (000105).
 func (s *Service) alertResponse(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, window sharedanalytics.TimeRange, out *models.SLAReportResponse) error {
 	var mtta sql.NullFloat64
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*), COUNT(acknowledged_at),
-			AVG(EXTRACT(EPOCH FROM acknowledged_at - triggered_at)) FILTER (WHERE acknowledged_at IS NOT NULL)
+		SELECT COUNT(*), COUNT(COALESCE(first_acknowledged_at, acknowledged_at)),
+			AVG(EXTRACT(EPOCH FROM COALESCE(first_acknowledged_at, acknowledged_at) - COALESCE(first_ack_episode_started_at, triggered_at)))
+				FILTER (WHERE COALESCE(first_acknowledged_at, acknowledged_at) IS NOT NULL)
 		FROM alerts
 		WHERE tenant_id = $1 AND kind = 'availability' AND monitor_id = ANY($2)
 		  AND triggered_at >= $3 AND triggered_at < $4

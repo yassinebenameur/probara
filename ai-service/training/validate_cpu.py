@@ -9,6 +9,12 @@ committed artifact directory. A release-approved artifact is immutable.
 The evidence rendering is the artifact's own (manifest "state_format",
 missing means 1): the corpus must be rendered in it, the report records it,
 and validation never changes it.
+
+Only a current-catalogue artifact is validated, and its corpus must come
+from the committed training/generate.py. A historical artifact (manifest
+catalogue other than shared/ai/catalogue.json's) is refused: the runtime
+would refuse to serve it whatever its report said, and its corpus is
+reproduced by training/history/ instead (tests/test_history.py).
 """
 import argparse
 import hashlib
@@ -23,20 +29,22 @@ from laya.train import load_checkpoint, items_from_rows, encode_item, _forward
 from laya.common import DecisionModel, collate_items
 from safetensors import safe_open
 from laya.calibrate import fit_one_temperature
-from train import read, metrics, rules, MAX_LEN, HEAD_LEN
+from train import read, metrics, rules, guard_rules, guard_note, MAX_LEN, HEAD_LEN
 from probara_ai.cpu import CPU_FORMAT, prepare_cpu
 from upstream import verify_base
 from compose_artifact import compose, load_manifest, refresh_manifest
 from partitions import verify_partitions, verify_rendering
-from probara_ai.contract import STATE_FORMAT, artifact_state_format
+from probara_ai.contract import VERSION, artifact_state_format, historical
 from probara_ai.gate import release_gate
 from upstream import LOCK
 
 HERE = Path(__file__).resolve().parent
-# Code whose behaviour determines the cached scores: item encoding (train.py
-# read/MAX_LEN, laya), CPU preparation, the evidence contract and this file.
+# Code whose behaviour determines the cached scores and what they are scored
+# against: item encoding (train.py read/MAX_LEN, laya), CPU preparation, the
+# evidence contract (format-3 text uses the guard's bounds), the guard (metrics)
+# and this file.
 SCORE_CODE = (HERE / "validate_cpu.py", HERE / "train.py", HERE.parent / "probara_ai/contract.py",
-              HERE.parent / "probara_ai/cpu.py")
+              HERE.parent / "probara_ai/cpu.py", HERE.parent / "probara_ai/guard.py")
 
 
 def file_sha256(path):
@@ -143,12 +151,16 @@ def calibrate(cal):
 
 
 def run(args):
-    if load_manifest(args.artifact).get("release_approved") is True:
+    manifest = load_manifest(args.artifact)
+    if manifest.get("release_approved") is True:
         raise ValueError("Release-approved artifacts are immutable; validate a new version")
-    state_format = artifact_state_format(load_manifest(args.artifact))
+    if historical(manifest):
+        raise ValueError(f"{args.artifact.name} was trained under catalogue {manifest.get('catalogue')}, not {VERSION}: "
+                         "a historical artifact is never validated or served; train a new version")
+    state_format = artifact_state_format(manifest)
     verify_base(args.base)
-    # A current-format candidate must also come from the committed generator.
-    verify_partitions(args.data, args.artifact, current_generator=state_format == STATE_FORMAT)
+    # A current-catalogue candidate must come from the committed generator.
+    verify_partitions(args.data, args.artifact, current_generator=True)
     verify_rendering(args.data, state_format, parts=("calibration",) if args.calibration_only else ("calibration", "test"))
     composed_dir = args.work / args.artifact.name
     composed = compose(args.artifact, args.base, composed_dir)
@@ -163,6 +175,7 @@ def run(args):
             temperature, threshold, target = calibrate(cal)
             rows, records = zip(*cal, strict=True)
             reports[task] = {'calibration': metrics(rows, records, temperature, threshold), 'rules': rules(rows),
+                             'evidence_guard_rules': guard_rules(rows), **guard_note(task),
                              'temperature': temperature, 'threshold': threshold, 'precision_target': target}
         print(json.dumps({'calibration_only': True, 'release_approved': False, 'tasks': reports}, indent=2), flush=True)
         return 0
@@ -179,7 +192,7 @@ def run(args):
         reports[task] = {"held_out": metrics(rows, records, temperature, threshold), "conservative_rules": baseline,
                          "untuned_matched_precision": metrics(base_rows, base_records, base_temp, base_threshold),
                          "calibration_precision_target": target, "temperature": temperature, "threshold": threshold,
-                         "evidence_guard_rules": {"precision": 1., "coverage": 1., "decision_accuracy": 1.}}
+                         "evidence_guard_rules": guard_rules(rows), **guard_note(task)}
     gate = release_gate(reports)
     # Which held-out scores were reused from a cache, and its exact bytes, so
     # the committed report shows whether this run computed them itself.

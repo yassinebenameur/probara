@@ -401,6 +401,92 @@ func TestValidateStatusPageUpdate(t *testing.T) {
 			errContains: "default_theme must be either dark or light",
 		},
 		{
+			name: "valid csp mode update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					CSPMode: ptr("compatible"),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "automatic csp mode update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					CSPMode: ptr(""),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "seo overrides within bounds",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					SEOTitle:       ptr(strings.Repeat("é", models.MaxSEOTitleLength)),
+					SEODescription: ptr(strings.Repeat("é", models.MaxSEODescriptionLength)),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "seo title too long",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					SEOTitle: ptr(strings.Repeat("a", models.MaxSEOTitleLength+1)),
+				},
+			},
+			wantErr:     true,
+			errContains: "seo_title must be 120 characters or less",
+		},
+		{
+			name: "seo description too long",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					SEODescription: ptr(strings.Repeat("a", models.MaxSEODescriptionLength+1)),
+				},
+			},
+			wantErr:     true,
+			errContains: "seo_description must be 300 characters or less",
+		},
+		{
+			name: "invalid csp mode update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					CSPMode: ptr("lax"),
+				},
+			},
+			wantErr:     true,
+			errContains: "csp_mode must be strict, compatible, off",
+		},
+		{
+			name: "classic template update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					Template: ptr("classic"),
+				},
+			},
+		},
+		{
+			name: "unknown template update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					Template: ptr("modern"),
+				},
+			},
+			wantErr:     true,
+			errContains: "template must be one of: default, classic",
+		},
+		{
+			name: "empty template update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					Template: ptr(""),
+				},
+			},
+			wantErr:     true,
+			errContains: "template must be one of",
+		},
+		{
 			name: "valid sections update",
 			req: &models.UpdateStatusPageRequest{
 				Sections: &[]models.StatusPageSection{

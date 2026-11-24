@@ -2,9 +2,11 @@
 
 import { CSSProperties, KeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Bell, BellOff, Check, ChevronDown, CircleCheck, Network, PencilLine, Tag, UserCheck } from 'lucide-react';
+import { AlarmClock, AlarmClockOff, Bell, BellOff, Check, ChevronDown, CircleCheck, MapPin, Network, PencilLine, Repeat, Tag, Undo2, UserCheck } from 'lucide-react';
 import { Alert } from '@/lib/types';
-import { acknowledgeAlert, labelAlertTriage, resolveAlert } from '@/lib/api';
+import { acknowledgeAlert, labelAlertTriage, resolveAlert, snoozeAlert, unacknowledgeAlert, unsnoozeAlert } from '@/lib/api';
+import { isSnoozed, notificationState } from '@/lib/alert-mute';
+import { relapseChip, relapseLine, relapseTitle } from '@/lib/alert-relapse';
 import { labelErrorMessage } from '@/lib/ai-labels';
 import { buildTriageLabelRequest, triageMenuCopy, triagePresentation } from '@/lib/ai-triage';
 import { formatClock, formatDate, formatDateTime, formatDateTimeFull, pluralize } from '@/lib/format';
@@ -28,6 +30,7 @@ import { useOptionalAlertEvents } from '@/components/alerts/AlertStreamProvider'
 import type { AlertSelection } from '@/components/alerts/useAlertSelection';
 import TriagePill from '@/components/alerts/TriagePill';
 import TriageLabelDialog from '@/components/alerts/TriageLabelDialog';
+import SnoozeAlertDialog from '@/components/alerts/SnoozeAlertDialog';
 import { DetailList, DetailRow } from '@/components/monitors/MonitorFactsCard';
 import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
@@ -41,6 +44,8 @@ import TableSkeleton from '@/components/ui/TableSkeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 import TypeBadge from '@/components/ui/TypeBadge';
 import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
+import { commonName, tlsExpiryCertificate } from '@/lib/tls-cert';
+import AlertDeliveries from './AlertDeliveries';
 
 /** What the feed needs to know about an alert's monitor (from the monitors list). */
 export interface FeedMonitor {
@@ -144,7 +149,18 @@ function kindDetail(alert: Alert): string | null {
       alert.threshold_value != null ? ` (threshold ${formatAlertValue(alert.metric_name, alert.threshold_value)})` : ''
     }`;
   }
+  if (alert.kind === 'location_offline') return 'no worker heartbeat for 3 min or more';
   if (alert.kind === 'tls_expiry' && alert.metric_value != null) {
+    // An intermediate that expires first is named, as the notification does.
+    const cert = tlsExpiryCertificate(alert.last_error);
+    const which = cert?.intermediate ? `intermediate ${commonName(cert.subject) || 'certificate'} ` : '';
+    return `${which}expires in ${Math.round(alert.metric_value)}d${
+      alert.threshold_value != null ? ` (threshold ${Math.round(alert.threshold_value)}d)` : ''
+    }`;
+  }
+  if (alert.kind === 'domain_expiry') {
+    if (alert.metric_value == null) return 'expiry date unknown';
+    if (alert.metric_value < 0) return `expired ${Math.round(-alert.metric_value)}d ago`;
     return `expires in ${Math.round(alert.metric_value)}d${
       alert.threshold_value != null ? ` (threshold ${Math.round(alert.threshold_value)}d)` : ''
     }`;
@@ -212,8 +228,9 @@ export default function AlertFeed({
   selection,
   flashClass,
 }: AlertFeedProps) {
-  const [processing, setProcessing] = useState<{ id: string; action: 'ack' | 'resolve' | 'label' } | null>(null);
+  const [processing, setProcessing] = useState<{ id: string; action: 'ack' | 'resolve' | 'label' | 'unack' | 'unsnooze' } | null>(null);
   const [labelling, setLabelling] = useState<{ alert: Alert; mode: 'prompt' | 'correct' } | null>(null);
+  const [snoozing, setSnoozing] = useState<Alert | null>(null);
   // Screen-reader echo of the user's own ack/resolve; sighted users see the
   // row change (and flash), so there is no success toast. `seq` alternates a
   // trailing no-break space so a repeat of the same text still changes the
@@ -254,6 +271,33 @@ export default function AlertFeed({
     } finally {
       setProcessing(null);
     }
+  };
+
+  // Unacknowledge and ending a snooze resume the alert's notifications,
+  // counted from now; like acknowledge, the row changes in place.
+  const handleMuteChange = async (alert: Alert, action: 'unack' | 'unsnooze') => {
+    try {
+      setProcessing({ id: alert.id, action });
+      stream?.markLocalAction(alert.id);
+      const updated = await (action === 'unack' ? unacknowledgeAlert(alert.id) : unsnoozeAlert(alert.id));
+      onAlertUpdate?.(updated);
+      setAnnouncement(
+        `Alert for ${alertSubject(updated)} ${action === 'unack' ? 'unacknowledged' : 'no longer snoozed'}; notifications resume`
+      );
+    } catch (err) {
+      setAnnouncement('');
+      showToast(errorMessage(err, action === 'unack' ? 'Failed to unacknowledge alert' : 'Failed to end the snooze'), 'error');
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  const handleSnoozed = (updated: Alert) => {
+    setSnoozing(null);
+    onAlertUpdate?.(updated);
+    setAnnouncement(
+      `Alert for ${alertSubject(updated)} snoozed${updated.snoozed_until ? ` until ${formatDateTime(updated.snoozed_until)}` : ''}`
+    );
   };
 
   // A / R act on the row that has focus (its link, buttons or box), so the
@@ -355,6 +399,9 @@ export default function AlertFeed({
     const reason = alert.last_error ? shortFailureReason(alert.last_error) || alert.last_error : null;
     const repeat = occurrence?.get(alert.id);
     const kids = folded?.get(alert.id) ?? [];
+    const snoozed = isSnoozed(alert, now.getTime());
+    const acked = alert.status === 'acknowledged';
+    const relapsed = relapseChip(alert);
     const triggered = new Date(alert.triggered_at);
     // Under a time heading the date is already said; elsewhere an alert from
     // another day shows its date, since a bare clock time would mislead.
@@ -363,9 +410,13 @@ export default function AlertFeed({
     const hasChips =
       (alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id) ||
       (alert.suppression_reason === 'dependency' && !alert.root_cause_monitor_name) ||
+      alert.suppression_reason === 'location_offline' ||
       (alert.impacted_count ?? 0) > 0 ||
       triagePresentation(alert.triage).visible ||
-      (repeat && repeat.nth > 1);
+      (repeat && repeat.nth > 1) ||
+      acked ||
+      snoozed ||
+      relapsed !== null;
     const flashing = flashClass?.(alert.id) || '';
 
     return (
@@ -427,6 +478,15 @@ export default function AlertFeed({
                   <Network className="h-3.5 w-3.5 shrink-0 text-slate-400" strokeWidth={1.75} />
                   <span className="truncate">{subject}</span>
                 </Link>
+              ) : alert.kind === 'location_offline' ? (
+                <Link
+                  href="/locations"
+                  className={`alert-row-link inline-flex min-w-0 items-center gap-1.5 rounded-sm text-sm font-medium text-white transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
+                  title="Check location stopped reporting — view locations"
+                >
+                  <MapPin className="h-3.5 w-3.5 shrink-0 text-slate-400" strokeWidth={1.75} />
+                  <span className="truncate">{subject}</span>
+                </Link>
               ) : (
                 <Link
                   href={`/monitors/${alert.monitor_id}`}
@@ -437,6 +497,11 @@ export default function AlertFeed({
               )}
               {monitor && <TypeBadge type={monitor.type} config={monitor.config} size="sm" />}
               {alert.kind === 'mesh_edge' && <KindTag title="Directed inter-location connectivity path">mesh</KindTag>}
+              {alert.kind === 'location_offline' && (
+                <KindTag title="No worker heartbeat from this check location for 3 minutes; its monitors get no fresh checks from it">
+                  location
+                </KindTag>
+              )}
               {alert.kind === 'latency_anomaly' && <KindTag title="Latency degraded relative to baseline">latency</KindTag>}
               {alert.kind === 'host_metric' && (
                 <KindTag title="Host metric breached its configured threshold">{formatSeriesLabel(alert.metric_name)}</KindTag>
@@ -444,6 +509,11 @@ export default function AlertFeed({
               {alert.kind === 'tls_expiry' && (
                 <KindTag title="TLS certificate is inside its expiry warning window — the endpoint itself is still up">
                   certificate
+                </KindTag>
+              )}
+              {alert.kind === 'domain_expiry' && (
+                <KindTag title="Domain registration is inside its expiry warning window, or its expiry date could not be determined">
+                  domain
                 </KindTag>
               )}
             </div>
@@ -488,12 +558,52 @@ export default function AlertFeed({
                     Suppressed, upstream just recovered
                   </span>
                 )}
+                {alert.suppression_reason === 'location_offline' && (
+                  <Link
+                    href="/locations"
+                    className={`${CHIP} min-w-0 bg-well-hover text-slate-400 transition-colors hover:text-slate-200 ${FOCUS_RING}`}
+                    title="Notifications suppressed: a location on this path stopped reporting, and its own offline alert pages instead"
+                  >
+                    <BellOff className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                    <span className="truncate">Suppressed, location offline</span>
+                  </Link>
+                )}
                 {(alert.impacted_count ?? 0) > 0 && (
                   <span
                     className={`${CHIP} bg-amber-500/[0.15] text-amber-300`}
                     title="Downstream monitors whose notifications this alert stands in for"
                   >
                     Affects {pluralize(alert.impacted_count ?? 0, 'monitor')}
+                  </span>
+                )}
+                {acked && (
+                  <span
+                    className={`${CHIP} bg-well-hover text-slate-400`}
+                    title={`Acknowledged${alert.acknowledged_by ? ` by ${alert.acknowledged_by}` : ''}${
+                      alert.acknowledged_at ? ` ${formatDateTime(alert.acknowledged_at)}` : ''
+                    }: no reminders or further escalation; the recovery notice is still sent`}
+                  >
+                    <BellOff className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                    Notifications stopped
+                  </span>
+                )}
+                {snoozed && alert.snoozed_until && (
+                  <span
+                    className={`${CHIP} bg-well-hover text-slate-400`}
+                    title={`Snoozed${alert.snoozed_by ? ` by ${alert.snoozed_by}` : ''}: reminders and escalation steps not sent yet wait until then; the recovery notice is still sent`}
+                  >
+                    <AlarmClock className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                    Snoozed until {formatDateTime(alert.snoozed_until)}
+                  </span>
+                )}
+                {relapsed && (
+                  // Amber like "likely caused by": worth a look, not an outage of its own.
+                  <span
+                    className={`${CHIP} bg-amber-500/[0.15] text-amber-300`}
+                    title={relapseTitle(alert, alert.reopened_at ? formatDateTime(alert.reopened_at) : null)}
+                  >
+                    <Repeat className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                    {relapsed}
                   </span>
                 )}
                 <TriagePill triage={alert.triage} />
@@ -552,11 +662,26 @@ export default function AlertFeed({
               ) : (
                 <span className={PRIMARY_SLOT} aria-hidden="true" />
               ))}
-            {canWrite && (alert.status === 'active' || alert.triage?.labelable) ? (
+            {canWrite && (open || alert.triage?.labelable) ? (
               <RowMenu label={`More actions for ${subject}`} disabled={busy}>
                 {alert.status === 'active' && (
                   <RowMenuItem icon={<CircleCheck strokeWidth={1.75} />} onSelect={() => void handleResolve(alert.id)}>
                     Resolve
+                  </RowMenuItem>
+                )}
+                {acked && (
+                  <RowMenuItem icon={<Undo2 strokeWidth={1.75} />} onSelect={() => void handleMuteChange(alert, 'unack')}>
+                    Unacknowledge
+                  </RowMenuItem>
+                )}
+                {alert.status === 'active' && !snoozed && (
+                  <RowMenuItem icon={<AlarmClock strokeWidth={1.75} />} onSelect={() => setSnoozing(alert)}>
+                    Snooze…
+                  </RowMenuItem>
+                )}
+                {snoozed && (
+                  <RowMenuItem icon={<AlarmClockOff strokeWidth={1.75} />} onSelect={() => void handleMuteChange(alert, 'unsnooze')}>
+                    End snooze
                   </RowMenuItem>
                 )}
                 {alert.triage?.labelable && alert.triage.labelled && (
@@ -592,16 +717,44 @@ export default function AlertFeed({
               <h3 className={`mb-2.5 ${SECTION_LABEL}`}>Lifecycle</h3>
               <DetailList>
                 <DetailRow label="Triggered">{formatDateTimeFull(alert.triggered_at)}</DetailRow>
+                {relapsed && (
+                  <DetailRow label="Relapses">
+                    {/* The history comes with a single-alert read; the list carries the count and last reopen. */}
+                    {alert.relapses && alert.relapses.length > 0 ? (
+                      <ul>
+                        {alert.relapses.map((r) => (
+                          <li key={r.number} title={formatDateTimeFull(r.reopened_at)}>
+                            {relapseLine(r)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      `${alert.relapse_count}, last reopened ${alert.reopened_at ? formatDateTimeFull(alert.reopened_at) : '—'}`
+                    )}
+                  </DetailRow>
+                )}
                 <DetailRow label="Acknowledged" tone={alert.acknowledged_at ? 'default' : 'note'}>
-                  {alert.acknowledged_at ? formatDateTimeFull(alert.acknowledged_at) : 'Not acknowledged'}
+                  {alert.acknowledged_at
+                    ? `${formatDateTimeFull(alert.acknowledged_at)}${alert.acknowledged_by ? ` by ${alert.acknowledged_by}` : ''}`
+                    : 'Not acknowledged'}
                 </DetailRow>
+                {open && (
+                  <DetailRow label="Notifications" tone={notificationState(alert, now.getTime()) === 'notifying' ? 'default' : 'note'}>
+                    {notificationState(alert, now.getTime()) === 'acknowledged'
+                      ? 'Reminders and escalation stopped by the acknowledgement'
+                      : snoozed && alert.snoozed_until
+                        ? `Snoozed until ${formatDateTimeFull(alert.snoozed_until)}${alert.snoozed_by ? ` by ${alert.snoozed_by}` : ''}`
+                        : 'Reminders and escalation as configured'}
+                  </DetailRow>
+                )}
                 <DetailRow label="Resolved" tone={alert.resolved_at ? 'default' : 'note'}>
                   {alert.resolved_at ? formatDateTimeFull(alert.resolved_at) : 'Ongoing'}
                 </DetailRow>
                 {/* The alerter rewrites failure_count with the failures in
                     its current window on every evaluation, so it is a
                     recent count, not the number that triggered the alert. */}
-                <DetailRow label="Recent failures">{alert.failure_count}</DetailRow>
+                {/* A location alert counts no check failures. */}
+                {alert.kind !== 'location_offline' && <DetailRow label="Recent failures">{alert.failure_count}</DetailRow>}
               </DetailList>
             </div>
             <div className="min-w-0">
@@ -620,6 +773,7 @@ export default function AlertFeed({
                 {alert.triage.summary && <p className="mt-1 text-pretty text-xs leading-5 text-slate-400">{alert.triage.summary}</p>}
               </div>
             )}
+            <AlertDeliveries alertId={alert.id} headingClassName={SECTION_LABEL} />
           </div>
         )}
 
@@ -756,6 +910,16 @@ export default function AlertFeed({
           <kbd className={KBD}>↑</kbd>
           <kbd className={KBD}>↓</kbd> move
         </p>
+      )}
+      {snoozing && (
+        <SnoozeAlertDialog
+          subject={alertSubject(snoozing)}
+          onClose={() => setSnoozing(null)}
+          onSubmit={async (body) => {
+            stream?.markLocalAction(snoozing.id);
+            handleSnoozed(await snoozeAlert(snoozing.id, body));
+          }}
+        />
       )}
       {labelling && (
         <TriageLabelDialog

@@ -6,7 +6,7 @@ import {
   CreateMonitorRequest,
   UpdateMonitorRequest,
 } from '@/lib/types';
-import { buildTcpRequest, initialTcpFormState } from '@/lib/monitor-form/network';
+import { buildTcpRequest, initialTcpFormState, tcpTlsErrors } from '@/lib/monitor-form/network';
 import FormField from '@/components/ui/FormField';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
@@ -49,6 +49,7 @@ export default function TcpForm({
     if (formData.timeout_seconds >= formData.interval_seconds) {
       newErrors.timeout_seconds = 'Timeout must be less than interval';
     }
+    Object.assign(newErrors, tcpTlsErrors(formData));
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -114,7 +115,7 @@ export default function TcpForm({
 
         <ToggleRow
           title="TLS handshake"
-          description="Also complete a TLS handshake after connecting"
+          description="Also complete a TLS handshake after connecting, for TLS-wrapped ports such as 443, 993 or 5671"
           checked={formData.use_tls}
           onChange={(v) => setFormData({ ...formData, use_tls: v })}
         />
@@ -127,6 +128,64 @@ export default function TcpForm({
             onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
             tone="warning"
           />
+        )}
+
+        {formData.use_tls && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <FormField label="Certificate valid for at least" error={errors.tls_min_days_valid}>
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    value={formData.tls_min_days_valid}
+                    onChange={(e) => setFormData({ ...formData, tls_min_days_valid: e.target.value })}
+                    placeholder="Days, e.g. 14"
+                    className="input tabular-nums"
+                  />
+                  <FieldHint>
+                    Open a certificate-expiry alert when the server certificate or an intermediate it presents has fewer
+                    days left; the check itself still passes
+                  </FieldHint>
+                </>
+              )}
+            </FormField>
+            <FormField label="Server name (SNI)" error={errors.tls_server_name}>
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="text"
+                    value={formData.tls_server_name}
+                    onChange={(e) => setFormData({ ...formData, tls_server_name: e.target.value })}
+                    placeholder={formData.host.trim() || 'imap.example.com'}
+                    className="input font-mono"
+                  />
+                  <FieldHint>Name sent and verified in the handshake; defaults to the host</FieldHint>
+                </>
+              )}
+            </FormField>
+          </div>
+        )}
+
+        {formData.use_tls && (
+          <FormField label="Custom CA bundle (PEM)" error={errors.tls_ca_pem}>
+            {(control) => (
+              <>
+                <textarea
+                  {...control}
+                  rows={4}
+                  value={formData.tls_ca_pem}
+                  onChange={(e) => setFormData({ ...formData, tls_ca_pem: e.target.value })}
+                  placeholder={'-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----'}
+                  className="input min-h-[80px] font-mono"
+                />
+                <FieldHint>Trusted root CAs for a private CA, besides the system store</FieldHint>
+              </>
+            )}
+          </FormField>
         )}
       </FormPanel>
 
@@ -163,6 +222,8 @@ export default function TcpForm({
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
           onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
+          recoveryThreshold={formData.recovery_threshold}
+          onRecoveryThresholdChange={(n) => setFormData((prev) => ({ ...prev, recovery_threshold: n }))}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}

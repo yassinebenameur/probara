@@ -56,6 +56,14 @@ def test_approval_needs_both_flags_on_cpu_and_metrics_that_meet_the_gate(tmp_pat
     assert reason
 
 
+def test_approval_tolerates_the_guard_note(tmp_path):
+    tasks = passing()
+    tasks["dependency"]["guard_note"] = "precision is a property of the guard"
+    assert ci.approval(write_artifact(tmp_path / "a", True, {"release_approved": True, "device": "cpu",
+                                                               "tasks": tasks}))[0] is True
+    assert ci.drift(tasks, passing()) == []
+
+
 def test_approval_explains_flags_without_supporting_metrics(tmp_path):
     artifact = write_artifact(tmp_path / "a", True, {"release_approved": True, "device": "cpu", "tasks": failing()})
     assert "do not meet the release gate" in ci.approval(artifact)[1]
@@ -79,8 +87,73 @@ def test_gate_reports_the_shipped_checkpoint(tmp_path, monkeypatch):
     ci.gate(types.SimpleNamespace(artifacts=ARTIFACTS))
     values = dict(line.split("=", 1) for line in output.read_text().splitlines())
     assert values["version"] == ci.shipped_version()
-    assert values["approved"] == str(ci.approval(ARTIFACTS / values["version"])[0]).lower()
+    assert values["approved"] == str(ci.shippable(ARTIFACTS / values["version"])[0]).lower()
     assert (values["reason"] == "") is (values["approved"] == "true")
+
+
+def test_only_a_current_catalogue_approval_ships(tmp_path):
+    approved = {"release_approved": True, "device": "cpu", "tasks": passing()}
+    current = write_artifact(tmp_path / "current", True, approved)
+    (current / "manifest.json").write_text(json.dumps({"release_approved": True, "catalogue": ci.VERSION}))
+    assert ci.shippable(current) == (True, "")
+    old = write_artifact(tmp_path / "probara-laya-old", True, approved)
+    (old / "manifest.json").write_text(json.dumps({"release_approved": True, "catalogue": "probara-evidence-v1"}))
+    assert ci.approval(old)[0] is True
+    shippable, reason = ci.shippable(old)
+    assert shippable is False and "historical artifact" in reason and ci.VERSION in reason
+    unapproved = write_artifact(tmp_path / "unapproved", False, approved)
+    assert ci.shippable(unapproved) == (False, ci.approval(unapproved)[1])
+
+
+@pytest.fixture
+def verification(tmp_path, monkeypatch):
+    """verify() over fake artifacts with composition and verify_artifact faked."""
+    artifacts = tmp_path / "artifacts"
+    approved = {"release_approved": True, "device": "cpu", "tasks": passing()}
+
+    def artifact(name, manifest_approved, catalogue):
+        root = write_artifact(artifacts / name, manifest_approved, approved)
+        (root / "manifest.json").write_text(json.dumps({"release_approved": manifest_approved, "catalogue": catalogue}))
+
+    artifacts.mkdir()
+    artifact("probara-laya-old", True, "probara-evidence-v1")      # approved, historical
+    artifact("probara-laya-draft", False, "probara-evidence-v1")   # unapproved, historical
+    artifact("probara-laya-new", True, ci.VERSION)                 # approved, current
+
+    def run(shipped, accepts):
+        def verify_artifact(path):
+            if path.name not in accepts:
+                raise ValueError(f"refused {path.name}")
+        monkeypatch.setattr(ci, "shipped_version", lambda: shipped)
+        monkeypatch.setitem(sys.modules, "compose_artifact", types.SimpleNamespace(
+            compose=lambda artifact, base, output: {"model.safetensors": "0" * 64}))
+        monkeypatch.setitem(sys.modules, "probara_ai.runtime", types.SimpleNamespace(verify_artifact=verify_artifact))
+        output = tmp_path / "out"
+        output.write_text("")
+        monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+        ci.verify(types.SimpleNamespace(artifacts=artifacts, base=tmp_path / "base", work=tmp_path / "work"))
+        return dict(line.split("=", 1) for line in output.read_text().splitlines())
+
+    return run
+
+
+def test_verify_keeps_historical_artifacts_as_records(verification, capsys):
+    values = verification("probara-laya-new", {"probara-laya-new"})
+    assert values["approved"] == "true" and values["version"] == "probara-laya-new"
+    out = capsys.readouterr().out
+    assert "::notice title=Local AI historical checkpoint::probara-laya-old" in out
+    assert "::error" not in out
+
+
+def test_verify_never_ships_a_historical_artifact(verification):
+    values = verification("probara-laya-old", {"probara-laya-new"})
+    assert values["approved"] == "false" and "historical artifact" in values["reason"]
+
+
+def test_verify_fails_when_a_historical_artifact_is_accepted(verification, capsys):
+    with pytest.raises(SystemExit):
+        verification("probara-laya-new", {"probara-laya-new", "probara-laya-old"})
+    assert "verify_artifact accepted a historical checkpoint" in capsys.readouterr().out
 
 
 def test_drift_lists_only_moved_metrics():

@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +22,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	apimiddleware "github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/shared/buildinfo"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
@@ -58,6 +59,9 @@ type spec struct {
 	BodyArg *param
 	// Multipart uploads the FileArg argument's text as the form file `file`.
 	Multipart *multipart
+	// BodyOptional marks a Body the handler also accepts empty (an absent
+	// body means the defaults); the OpenAPI request body is then optional.
+	BodyOptional bool
 	// Required names body fields the agent must send (reflection cannot
 	// tell; the API's validation remains the authority).
 	Required []string
@@ -75,6 +79,10 @@ type spec struct {
 	// Platform marks routes that do not act in a tenant (users, OIDC
 	// mappings, the tenant list): no tenant_id argument.
 	Platform bool
+	// SessionOnly marks routes whose handler refuses API keys although no
+	// role gate on the router shows it (the tenant list). Hidden from API-key
+	// sessions; the OpenAPI document lists only the session scheme.
+	SessionOnly bool
 }
 
 type multipart struct {
@@ -127,6 +135,7 @@ type Handler struct {
 	tools   []*tool
 	extras  []extraTool
 	stream  http.Handler
+	openapi *openAPIDocument
 
 	// resourceMetadata returns the RFC 9728 metadata URL advertised on a
 	// 401, which is how MCP clients discover OAuth sign-in.
@@ -141,7 +150,7 @@ type Handler struct {
 func NewHandler(log *logger.Logger, resourceMetadata func(*http.Request) string) *Handler {
 	return &Handler{
 		log:              log,
-		version:          buildVersion(),
+		version:          buildinfo.Version,
 		resourceMetadata: resourceMetadata,
 		servers:          map[capability]*mcp.Server{},
 	}
@@ -163,6 +172,10 @@ func (h *Handler) Bind(router chi.Router, extras []extraTool) error {
 	if err := checkCoverage(routes, tools); err != nil {
 		return err
 	}
+	// The REST API's OpenAPI document is the same catalog, bound to the same
+	// router (openapi_serve.go). A generation failure degrades only that
+	// endpoint; TestOpenAPIGolden is where it must be caught.
+	h.prepareOpenAPI(routes, tools)
 	h.router = router
 	h.tools = tools
 	h.extras = extras
@@ -299,9 +312,12 @@ func (h *Handler) Protect(auth func(http.Handler) http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = r.Clone(r.Context())
 		r.Header.Del("Cookie")
-		if r.Header.Get("X-Forwarded-For") == "" {
-			r.Header.Set("X-Forwarded-For", clientIP(r.RemoteAddr))
-		}
+		// The tool call reaches dispatch with only this request's headers,
+		// so the client address resolved here (shared/clientip, behind the
+		// trusted-proxy list) rides in a header the caller cannot set: Set
+		// overwrites anything they sent. buildRequest turns it into the
+		// inner request's RemoteAddr.
+		r.Header.Set(clientIPHeader, clientip.FromRequest(r))
 		var challenge string
 		if h.resourceMetadata != nil {
 			challenge = fmt.Sprintf(`Bearer resource_metadata=%q`, h.resourceMetadata(r))
@@ -382,7 +398,7 @@ func (h *Handler) visibleTools(c capability) []*tool {
 		switch {
 		case t.gate == gateSuperadmin && !c.superadmin:
 			continue
-		case t.gate == gateTenantAdmin && c.apiKey:
+		case (t.gate == gateTenantAdmin || t.spec.SessionOnly) && c.apiKey:
 			continue
 		case (!t.readOnly || t.spec.NeedsWrite) && !c.write:
 			continue
@@ -403,13 +419,4 @@ func (h *Handler) ToolNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// buildVersion reports the module version the binary was built at, for the
-// MCP server's implementation info.
-func buildVersion() string {
-	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
-	}
-	return "dev"
 }

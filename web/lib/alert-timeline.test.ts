@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   alertSegments,
+  alertSubject,
+  alertSubjectKey,
   buildTimeline,
   foldSuppressed,
   groupSegments,
@@ -51,6 +53,26 @@ test('alertSegments: an acknowledged alert is active until its acknowledgement',
   // No acknowledgement time (a live event): still one acknowledged span.
   const untimed = alert('c', 'm', { status: 'acknowledged' });
   assert.deepEqual(alertSegments(untimed, WINDOW, false).map((s) => s.tone), ['acknowledged']);
+});
+
+test('alertSegments: a snoozed alert is active until its snooze began, then muted', () => {
+  const a = alert('a', 'm', { triggered_at: at(10), snoozed_at: at(40), snoozed_until: at(180) });
+  assert.deepEqual(
+    alertSegments(a, WINDOW, false).map((s) => [s.tone, s.from - T0, s.to - T0]),
+    [
+      ['active', 10 * MIN, 40 * MIN],
+      ['snoozed', 40 * MIN, 120 * MIN],
+    ]
+  );
+  // A snooze that ran out by the window's end draws nothing muted.
+  const over = alert('b', 'm', { snoozed_at: at(40), snoozed_until: at(60) });
+  assert.deepEqual(alertSegments(over, WINDOW, false).map((s) => s.tone), ['active']);
+  // Acknowledgement and suppression win over a snooze.
+  const acked = alert('c', 'm', { status: 'acknowledged', acknowledged_at: at(5), snoozed_until: at(180) });
+  assert.deepEqual(alertSegments(acked, WINDOW, false).map((s) => s.tone), ['acknowledged']);
+  assert.deepEqual(alertSegments(alert('d', 'm', { snoozed_until: at(180) }), WINDOW, true).map((s) => s.tone), ['suppressed']);
+  // Without a start, the whole span is muted.
+  assert.deepEqual(alertSegments(alert('e', 'm', { snoozed_until: at(180) }), WINDOW, false).map((s) => s.tone), ['snoozed']);
 });
 
 test('alertSegments: resolved, suppressed and out-of-window alerts', () => {
@@ -211,4 +233,33 @@ test('timelineGroupOf: dashboard group tags first, else the monitor type', () =>
   assert.deepEqual(timelineGroupOf(a, { type: 'http' }, [], label), { key: 'type:http', label: 'HTTP' });
   assert.deepEqual(timelineGroupOf(a, undefined, ['payments'], label), { key: 'other', label: 'Other' });
   assert.deepEqual(timelineGroupOf(alert('e', '', { kind: 'mesh_edge' }), undefined, [], label), { key: 'mesh', label: 'Mesh' });
+});
+
+test('offline-location alerts: one lane per location, named by it, grouped apart', () => {
+  const offline = (id: string, loc: string) =>
+    alert(id, '', {
+      monitor_id: undefined,
+      monitor_name: 'factory-floor',
+      kind: 'location_offline',
+      source_location_id: loc,
+      source_location_name: 'factory-floor',
+    });
+  assert.equal(alertSubject(offline('a', 'l1')), 'factory-floor');
+  assert.equal(alertSubjectKey(offline('a', 'l1')), alertSubjectKey(offline('b', 'l1')));
+  assert.notEqual(alertSubjectKey(offline('a', 'l1')), alertSubjectKey(offline('c', 'l2')));
+  assert.deepEqual(timelineGroupOf(offline('a', 'l1'), undefined, ['team'], (t) => t), { key: 'locations', label: 'Locations' });
+});
+
+test('buildTimeline: a mesh edge held for an offline location draws suppressed', () => {
+  const held = alert('m', '', {
+    monitor_id: undefined,
+    kind: 'mesh_edge',
+    source_location_id: 'a',
+    target_location_id: 'b',
+    suppression_reason: 'location_offline',
+  });
+  const timeline = buildTimeline([held], WINDOW, () => ({ key: 'mesh', label: 'Mesh' }));
+  const lane = timeline.open[0];
+  assert.ok(lane, 'the held edge is still an open subject');
+  assert.ok(lane.segments.every((segment) => segment.tone === 'suppressed'), JSON.stringify(lane.segments));
 });

@@ -49,6 +49,11 @@ export const LOCATIONS_PAGE: DocPage = {
             ],
             ["`last_seen_at`", "Most recent accepted worker heartbeat"],
             [
+              "`offline`",
+              "Seen at least once, enabled for at least 180 seconds, and no heartbeat for 180 seconds: the rule the offline alert uses and the page's **Offline**",
+            ],
+            ["`open_alert_id`", "The location's open `location_offline` alert, when there is one"],
+            [
               "`mesh_endpoint`",
               "Optional host-and-port endpoint other locations probe for mesh health",
             ],
@@ -77,7 +82,22 @@ export const LOCATIONS_PAGE: DocPage = {
           language: "yaml",
           title: "Shape of generated worker environment",
           code:
-            "image: ghcr.io/yassinebenameur/probara-worker:latest\nenvironment:\n  NATS_URL: tls://nats.example.com:4222\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"",
+            "image: ghcr.io/yassinebenameur/probara-worker:<platform version>\nenvironment:\n  NATS_URL: wss://nats.example.com\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The snippet pins the worker to the platform's own release (the API's version tag), so a new location speaks the same queue contract as the scheduler that feeds it. An API built without a release version, such as a local build, references the moving `:alpha` channel tag instead. Set `LOCATION_WORKER_IMAGE` on the API (Helm: `api.locationWorkerImage`) to point remote sites at a mirror or a different tag. After a platform upgrade, upgrade existing location workers to the same tag.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A location worker from before [TCP monitors](/docs/monitors/#network-protocols) gained `tls_ca_pem` and `tls_server_name` ignores both fields: a TLS TCP monitor that relies on a private CA or on a server name other than its host fails on that location with a certificate error (unknown authority, or a name mismatch) until the worker is upgraded. Upgrade the location workers before giving TCP monitors either field.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Locations behind a firewall that allows only outbound HTTPS connect over `wss://` on 443: the broker's [websocket listener](/docs/deployment/#nats-websocket) behind an HTTPS ingress or reverse proxy. A `tls://` URL instead needs the broker's TCP port open outbound. The snippet carries a one-line comment naming which of the two it uses. A `wss://` URL may carry a path (`wss://probara.example.com/nats`) when the listener shares a host with the UI.",
         },
         {
           type: "callout",
@@ -198,7 +218,19 @@ export const LOCATIONS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Location workers publish lightweight core-NATS heartbeats approximately every 15 seconds with jitter. The API derives `connected` from the latest accepted heartbeat and treats a location as disconnected after about one minute without one.",
+            "Location workers publish lightweight core-NATS heartbeats approximately every 15 seconds with jitter. The API derives `connected` from the latest accepted heartbeat; after about one minute without one the Locations page shows the location as **Disconnected** (amber while monitors run from it), and after three minutes as **Offline**. The scheduler accepts a heartbeat only when the worker's clock is within 2 minutes of its own, so a worker whose clock drifted further reads offline while its checks keep flowing; the scheduler then logs a warning naming the location and the skew every 5 minutes. Keep worker hosts on NTP.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A location that stays silent for 180 seconds is **offline**: it is enabled, has reported at least once, has sent no accepted heartbeat since, and was enabled at least 180 seconds ago (a location re-enabled before its worker is back gets the same grace). Offline opens one `location_offline` [alert](/docs/alerting/#model) for the location, routed to the workspace's default channels, and resolves it when the location reports again or is disabled or deleted; the closing notification says which. An operator who resolves it while the location is still silent gets a \"closed by an operator\" notice, and a new alert opens and pages on the next evaluation. The alert is always on and the threshold is fixed. A location that never connected is never offline: nothing was lost. Only locations seen within the last 7 days alert, so upgrading never pages for long-abandoned ones. There is no flap damping: a link that drops for more than three minutes at a time pages each time it drops, and sends a resolve each time it comes back. The alert says when the location was last heard from and how many monitors run from it, and how many of those have no other location; those go `unknown` without fresh checks, while offline itself never changes a monitor's state. The Locations page links an offline location to its open alert, and the API reports `offline` and `open_alert_id` on each location.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "No storm when the platform loses heartbeats",
+          text:
+            "Heartbeats reach the database through NATS and the scheduler, so when that path or the database stalls, every location goes quiet at once, then crosses the threshold one by one. Once the installation's newest heartbeat is more than a minute old, the locations last heard within a minute of it (at least two of them) are held: no offline alert opens for them until that newest heartbeat is 15 minutes old, after which they alert like any other. A location that went quiet earlier is a real outage and alerts as usual, and so does a second site that dies long after a first. An alerter that has just restarted also waits until a heartbeat arrives after its start, or 180 seconds. Holds are logged by the alerter and exported as `probara_alerter_location_offline_guard{reason}` (limits in `probara_alerter_location_offline_guard_limit_seconds{reason}`); a single-location installation cannot tell a dead site from a platform fault and still alerts.",
         },
         {
           type: "callout",
@@ -252,7 +284,7 @@ export const LOCATIONS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Mesh alerts are directional and use the tenant's [default notification channels](/docs/alerting/#routing). They maintain their own lifecycle rather than changing an application monitor's state.",
+            "Mesh alerts are directional and use the tenant's [default notification channels](/docs/alerting/#routing). They maintain their own lifecycle rather than changing an application monitor's state. As soon as a location misses its heartbeat window (about one minute, well before it counts as offline), alerts on paths to or from it stay open but send nothing and read as suppressed, for as long as its [offline alert](#heartbeats) is about to open or is open: a dead site pages once, instead of once per path. While that alert cannot open (the location is beyond the 7-day horizon, or held by the platform-fault guard), its paths page for themselves.",
         },
         {
           type: "callout",

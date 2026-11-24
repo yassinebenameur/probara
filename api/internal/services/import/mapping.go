@@ -8,6 +8,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/validation"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // suggestMapping generates suggested field mappings based on field names
@@ -154,6 +155,12 @@ func (s *Service) suggestMapping(fields []string) models.FieldMapping {
 		}
 	}
 
+	// Recovery confirmation: only Probara's own name, since no other source
+	// has the setting (Uptime Kuma recovers on the first passing check).
+	if original, ok := fieldMap["recovery_threshold"]; ok {
+		mapping.RecoveryThreshold = original
+	}
+
 	return mapping
 }
 
@@ -168,6 +175,18 @@ const (
 // range the column accepts. Sources routinely carry 0 ("no retries", which
 // Probara spells as 1) or a value well above 10.
 func (s *Service) extractFailureThreshold(fields map[string]interface{}, fieldName string) *int {
+	return s.extractClampedInt(fields, fieldName, minConsecutiveFailuresThreshold, maxConsecutiveFailuresThreshold)
+}
+
+// extractRecoveryThreshold reads recovery_threshold, clamped into the range
+// the column accepts (monitorstate's S-T7 bounds).
+func (s *Service) extractRecoveryThreshold(fields map[string]interface{}, fieldName string) *int {
+	return s.extractClampedInt(fields, fieldName, monitorstate.MinRecoveryThreshold, monitorstate.MaxRecoveryThreshold)
+}
+
+// extractClampedInt reads an optional integer field clamped into [min, max];
+// nil when the field is unmapped or absent from the row.
+func (s *Service) extractClampedInt(fields map[string]interface{}, fieldName string, min, max int) *int {
 	if fieldName == "" {
 		return nil
 	}
@@ -175,14 +194,14 @@ func (s *Service) extractFailureThreshold(fields map[string]interface{}, fieldNa
 		return nil
 	}
 
-	threshold := s.extractInt(fields, fieldName)
-	if threshold < minConsecutiveFailuresThreshold {
-		threshold = minConsecutiveFailuresThreshold
+	value := s.extractInt(fields, fieldName)
+	if value < min {
+		value = min
 	}
-	if threshold > maxConsecutiveFailuresThreshold {
-		threshold = maxConsecutiveFailuresThreshold
+	if value > max {
+		value = max
 	}
-	return &threshold
+	return &value
 }
 
 // generateWarnings generates warnings about the import data
@@ -260,6 +279,11 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		// WebSocket aliases
 		"ws":  "websocket",
 		"wss": "websocket",
+		// Domain registration expiry aliases
+		"whois":         "domain",
+		"rdap":          "domain",
+		"domain_expiry": "domain",
+		"domain-expiry": "domain",
 	}
 
 	for _, row := range rows {

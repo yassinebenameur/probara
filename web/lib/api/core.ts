@@ -1,6 +1,13 @@
 import { clearApiKey, getApiKey } from '../auth';
-import { apiErrorFromBody } from '../errors';
-import { clearSelectedTenantId, emitTenantChange, getSelectedTenantId, setSelectedTenantId } from '../tenant';
+import { ApiRequestError, apiErrorFromBody } from '../errors';
+import {
+  WORKSPACE_NOT_FOUND,
+  clearSelectedTenantId,
+  emitTenantChange,
+  emitTenantsChanged,
+  getSelectedTenantId,
+  setSelectedTenantId,
+} from '../tenant';
 import type { TenantListResponse } from '../types';
 
 export { withQuery } from './query';
@@ -38,6 +45,36 @@ export async function errorFromResponse(response: Response, fallback: string): P
   return new Error(fallback);
 }
 
+// The refresh endpoint answered 429 every time (the address's failed-sign-in
+// budget is spent, typically someone else behind the same NAT). That is not
+// a lost session: keep it, fail this call, and the next call tries again.
+function refreshRateLimitedError(): ApiRequestError {
+  return new ApiRequestError(
+    'rate_limited',
+    'Too many requests from this network right now. Your session is kept; retry in a moment.'
+  );
+}
+
+// The API's answer when a session-cookie write comes from an origin it does
+// not trust (the UI is not where the API expects it).
+const CROSS_ORIGIN_REFUSED = 'cross_origin_refused';
+
+/** The configuration error a 403 cross_origin_refused carries, or null for any other 403. */
+async function originRefusal(response: Response): Promise<ApiRequestError | null> {
+  if (!(response.headers.get('content-type') ?? '').includes('application/json')) return null;
+  try {
+    const error = apiErrorFromBody(await response.json());
+    if (error.error !== CROSS_ORIGIN_REFUSED) return null;
+    return new ApiRequestError(
+      CROSS_ORIGIN_REFUSED,
+      `This page's address is not accepted by the API, so your session cannot be renewed. ` +
+        `An administrator must fix the deployment (${error.message}).`
+    );
+  } catch {
+    return null;
+  }
+}
+
 // A 401 that survived the refresh attempt: send the user back to sign in
 // (or to re-enter the key, which is dropped) and fail the call.
 function handleUnauthorized(hasApiKey: boolean): never {
@@ -52,7 +89,7 @@ function handleUnauthorized(hasApiKey: boolean): never {
   throw new Error('Unauthorized');
 }
 
-async function handleResponse<T>(response: Response, hasApiKey: boolean): Promise<T> {
+async function handleResponse<T>(response: Response, hasApiKey: boolean, sentTenantId: string | null): Promise<T> {
   if (response.status === 401) {
     handleUnauthorized(hasApiKey);
   }
@@ -68,17 +105,72 @@ async function handleResponse<T>(response: Response, hasApiKey: boolean): Promis
   const data = await response.json();
 
   if (!response.ok) {
-    throw apiErrorFromBody(data);
+    const error = apiErrorFromBody(data);
+    if (response.status === 404 && error.error === WORKSPACE_NOT_FOUND && sentTenantId) {
+      workspaceGone(sentTenantId);
+    }
+    throw error;
   }
 
   return data;
 }
 
+// The selected workspace is gone (deleted by someone else or in another tab,
+// or the member lost access): drop the selection, so no later request sends
+// it again, and have the switcher reload its list, which settles once on a
+// workspace that still exists and remounts the page on it. Idempotent: only
+// the selection the failing request carried is dropped, so the other
+// in-flight requests that fail the same way (even one answered after the
+// switcher has settled on another workspace) change and announce nothing,
+// and one deletion reloads the list once.
+function workspaceGone(failedTenantId: string): void {
+  if (getSelectedTenantId() !== failedTenantId) return;
+  tenantSelectionValidated = false;
+  clearSelectedTenantId();
+  emitTenantsChanged();
+}
+
+// A signed-in member who belongs to no workspace (theirs was deleted, or none
+// was ever granted) has nothing to scope a request to. Answer here instead of
+// sending it: the API would refuse it as unauthenticated and bounce them back
+// to the sign-in page they just left.
+function noWorkspaceError(): ApiRequestError {
+  return new ApiRequestError(
+    'no_workspace',
+    'You are not a member of any workspace. Ask a platform administrator to add you to one.'
+  );
+}
+
 const AUTH_PATH_PREFIX = '/v1/auth';
 
+// Workspace list and management routes are platform-scoped: they never carry
+// X-Tenant-ID, so a stale selection cannot make the very request that
+// recovers from it fail with workspace_not_found.
 const TENANTS_PATH = '/v1/tenants';
 
+// Every platform-scoped route the UI calls (not in a workspace): the
+// workspace list, the signed-in user's own account and MCP connections,
+// user and SSO-mapping management, the OpenAPI document. They never carry
+// X-Tenant-ID and are never answered with the no-workspace error, so a member
+// who belongs to no workspace can still manage their own sessions.
+const PLATFORM_PATHS = [
+  TENANTS_PATH,
+  '/v1/account',
+  '/v1/oauth/grants',
+  '/v1/users',
+  '/v1/oidc-group-mappings',
+  '/v1/openapi.json',
+];
+
+/** Whether path (with any query) is one of PLATFORM_PATHS or below it. */
+export function isPlatformPath(path: string): boolean {
+  const bare = path.split('?')[0];
+  return PLATFORM_PATHS.some((prefix) => bare === prefix || bare.startsWith(`${prefix}/`));
+}
+
 let tenantSelectionValidated = false;
+// The last tenant list loaded for this session was empty.
+let noWorkspaces = false;
 
 async function ensureTenantSelected(): Promise<void> {
   try {
@@ -93,6 +185,7 @@ async function ensureTenantSelected(): Promise<void> {
     const data = (await response.json()) as TenantListResponse;
     const storedTenantId = getSelectedTenantId();
     const tenantIDs = new Set((data.items || []).map((tenant) => tenant.id));
+    noWorkspaces = tenantIDs.size === 0;
 
     if (storedTenantId && tenantIDs.has(storedTenantId)) {
       tenantSelectionValidated = true;
@@ -129,11 +222,15 @@ export async function apiRequest<T>(
 
   const isAuthPath = path.startsWith(AUTH_PATH_PREFIX);
   const isTenantsPath = path.startsWith(TENANTS_PATH);
+  const isPlatform = isPlatformPath(path);
 
-  if (!apiKey && !isAuthPath && !isTenantsPath) {
+  if (!apiKey && !isAuthPath && !isPlatform) {
     // Ensure the selected tenant exists before attaching X-Tenant-ID.
     if (!tenantSelectionValidated || !getSelectedTenantId()) {
       await ensureTenantSelected();
+    }
+    if (noWorkspaces && !getSelectedTenantId()) {
+      throw noWorkspaceError();
     }
   }
 
@@ -148,7 +245,9 @@ export async function apiRequest<T>(
   }
 
   const tenantId = getSelectedTenantId();
-  if (tenantId) {
+  // The workspace this request is scoped to, if any (API keys are pinned).
+  const sentTenantId = tenantId && !isPlatform && !apiKey ? tenantId : null;
+  if (tenantId && !isPlatform) {
     headers['X-Tenant-ID'] = tenantId;
   }
 
@@ -166,13 +265,16 @@ export async function apiRequest<T>(
     const response = await fetch(getApiUrl(path), options);
     if (response.status === 401 && !apiKey) {
       tenantSelectionValidated = false;
-      const refreshed = await refreshSession();
-      if (refreshed) {
+      const refresh = await refreshSessionResult();
+      if (refresh.outcome === 'refreshed') {
         const retryResponse = await fetch(getApiUrl(path), options);
-        return await handleResponse<T>(retryResponse, Boolean(apiKey));
+        return await handleResponse<T>(retryResponse, Boolean(apiKey), sentTenantId);
+      }
+      if (refresh.error) {
+        throw refresh.error;
       }
     }
-    return await handleResponse<T>(response, Boolean(apiKey));
+    return await handleResponse<T>(response, Boolean(apiKey), sentTenantId);
   } catch (error) {
     if (error instanceof Error) {
       throw error;
@@ -181,12 +283,23 @@ export async function apiRequest<T>(
   }
 }
 
+// How a refresh ended: a new access token; the session is over (sign in
+// again); the API kept answering 429, which says nothing about the session;
+// or the API refused this page's origin (403 cross_origin_refused), a
+// deployment misconfiguration that signing in again would not fix. The last
+// two carry the error the failed call is answered with, and keep the session.
+export type RefreshOutcome = 'refreshed' | 'signed_out' | 'rate_limited' | 'origin_refused';
+export interface RefreshResult {
+  outcome: RefreshOutcome;
+  error?: ApiRequestError;
+}
+
 // Refresh rotates the token server-side, so concurrent calls would race and
 // all but one lose. Single-flight: every 401 handler (including the SSE
 // stream) awaits the same in-flight request.
-let refreshInFlight: Promise<boolean> | null = null;
+let refreshInFlight: Promise<RefreshResult> | null = null;
 
-export function refreshSession(): Promise<boolean> {
+export function refreshSessionResult(): Promise<RefreshResult> {
   if (!refreshInFlight) {
     refreshInFlight = doRefresh().finally(() => {
       refreshInFlight = null;
@@ -195,15 +308,47 @@ export function refreshSession(): Promise<boolean> {
   return refreshInFlight;
 }
 
-async function doRefresh(): Promise<boolean> {
-  try {
-    const response = await fetch(getApiUrl('/v1/auth/refresh'), {
-      method: 'POST',
-      credentials: 'include',
-    });
-    return response.ok;
-  } catch {
-    return false;
+/** True when the session was refreshed; false otherwise (including when rate limited). */
+export async function refreshSession(): Promise<boolean> {
+  return (await refreshSessionResult()).outcome === 'refreshed';
+}
+
+// A 429 on refresh is retried a few times, waiting what Retry-After asks
+// (bounded), before the call gives up for now.
+const REFRESH_RATE_LIMIT_RETRIES = 3;
+const REFRESH_MAX_WAIT_MS = 10_000;
+
+function retryAfterMs(response: Response, attempt: number): number {
+  const seconds = Number(response.headers.get('retry-after'));
+  const wait = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 1000 * 2 ** attempt;
+  return Math.min(wait, REFRESH_MAX_WAIT_MS);
+}
+
+async function doRefresh(): Promise<RefreshResult> {
+  for (let attempt = 0; ; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(getApiUrl('/v1/auth/refresh'), {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch {
+      return { outcome: 'signed_out' };
+    }
+    if (response.ok) return { outcome: 'refreshed' };
+    if (response.status === 403) {
+      const refused = await originRefusal(response);
+      if (refused) {
+        // Loud on purpose: every signed-in call fails until the deployment
+        // is fixed, and the message says what to set.
+        console.error(`Session refresh refused by the API: ${refused.message}`);
+        return { outcome: 'origin_refused', error: refused };
+      }
+    }
+    if (response.status !== 429) return { outcome: 'signed_out' };
+    if (attempt >= REFRESH_RATE_LIMIT_RETRIES) return { outcome: 'rate_limited', error: refreshRateLimitedError() };
+    const wait = retryAfterMs(response, attempt);
+    await new Promise((resolve) => setTimeout(resolve, wait));
   }
 }
 
@@ -233,8 +378,12 @@ export async function apiFetch(
   init: { method?: string; headers?: Record<string, string>; body?: BodyInit } = {}
 ): Promise<Response> {
   const apiKey = getApiKey();
-  if (!apiKey) {
+  const isPlatform = isPlatformPath(path);
+  if (!apiKey && !isPlatform) {
     await ensureTenantSelected();
+    if (noWorkspaces && !getSelectedTenantId()) {
+      throw noWorkspaceError();
+    }
   }
 
   const makeRequest = async (): Promise<Response> => {
@@ -242,7 +391,7 @@ export async function apiFetch(
 
     if (apiKey) {
       headers.Authorization = `Bearer ${apiKey}`;
-    } else {
+    } else if (!isPlatform) {
       const tenantId = getSelectedTenantId();
       if (tenantId) {
         headers['X-Tenant-ID'] = tenantId;
@@ -259,9 +408,11 @@ export async function apiFetch(
 
   let response = await makeRequest();
   if (response.status === 401 && !apiKey) {
-    const refreshed = await refreshSession();
-    if (refreshed) {
+    const refresh = await refreshSessionResult();
+    if (refresh.outcome === 'refreshed') {
       response = await makeRequest();
+    } else if (refresh.error) {
+      throw refresh.error;
     }
   }
 

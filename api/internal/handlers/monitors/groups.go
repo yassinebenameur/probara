@@ -3,6 +3,7 @@
 package monitors
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -55,7 +57,23 @@ func (h *Handlers) AddMonitorsToGroup(w http.ResponseWriter, r *http.Request) {
 		monitorIDs[i] = monitorID
 	}
 
-	err = h.groupService.AddMonitorsToGroup(r.Context(), tenantUUID, groupID, monitorIDs)
+	// The membership edit and the group's version, in one transaction.
+	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
+		// The group (FOR UPDATE: two membership edits of nested groups
+		// serialize, so the second one's cycle check sees the first) and its
+		// members (FOR KEY SHARE) are locked in lock order before the edges
+		// change (api/internal/dbtx); the group's configuration before the
+		// change is kept when it has no history yet.
+		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{groupID}, req.MonitorIDs); err != nil {
+			return err
+		}
+		h.captureBaseline(ctx, tenantUUID, groupID)
+		if err := h.groupService.AddMonitorsToGroup(ctx, tenantUUID, groupID, monitorIDs); err != nil {
+			return err
+		}
+		h.recordVersion(ctx, tenantUUID, groupID)
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrMonitorNotFound) || errors.Is(err, groupservice.ErrNotGroup) {
 			apierrors.WriteNotFoundError(w, err.Error())
@@ -63,6 +81,10 @@ func (h *Handlers) AddMonitorsToGroup(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, groupservice.ErrGroupCycleDetected) {
 			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
+		if dbtx.IsConflict(err) {
+			writeConflict(w)
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -120,10 +142,30 @@ func (h *Handlers) RemoveMonitorsFromGroup(w http.ResponseWriter, r *http.Reques
 		monitorIDs[i] = monitorID
 	}
 
-	err = h.groupService.RemoveMonitorsFromGroup(r.Context(), tenantUUID, groupID, monitorIDs)
+	// The membership edit and the group's version, in one transaction.
+	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
+		// The group (FOR UPDATE: two membership edits of nested groups
+		// serialize, so the second one's cycle check sees the first) and its
+		// members (FOR KEY SHARE) are locked in lock order before the edges
+		// change (api/internal/dbtx); the group's configuration before the
+		// change is kept when it has no history yet.
+		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{groupID}, req.MonitorIDs); err != nil {
+			return err
+		}
+		h.captureBaseline(ctx, tenantUUID, groupID)
+		if err := h.groupService.RemoveMonitorsFromGroup(ctx, tenantUUID, groupID, monitorIDs); err != nil {
+			return err
+		}
+		h.recordVersion(ctx, tenantUUID, groupID)
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrMonitorNotFound) || errors.Is(err, groupservice.ErrNotGroup) {
 			apierrors.WriteNotFoundError(w, err.Error())
+			return
+		}
+		if dbtx.IsConflict(err) {
+			writeConflict(w)
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{

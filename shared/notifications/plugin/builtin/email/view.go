@@ -65,6 +65,20 @@ func newAlertView(event notifications.AlertEvent, appBaseURL string) alertView {
 	return v
 }
 
+// withAck adds this delivery's acknowledge link (minted by Send, carried in
+// templates) on the events present gives one to: a created or reminder page
+// of an alert that is not resolved.
+func (v alertView) withAck(templates Templates) alertView {
+	if templates.AckURL == "" || v.Resolved || v.Message.EventType != present.EventCreated && v.Message.EventType != present.EventReminder {
+		return v
+	}
+	v.AckURL, v.AckLabel = templates.AckURL, templates.AckLabel
+	if v.AckLabel == "" {
+		v.AckLabel = present.AckLabel
+	}
+	return v
+}
+
 // DefaultLabel is the kind- and event-aware headline label, e.g.
 // "Alert Triggered" or "CPU Usage High". Shared by the subject line and the
 // email header so they always agree.

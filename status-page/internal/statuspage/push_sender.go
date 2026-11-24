@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/webpush"
 )
 
@@ -157,6 +157,9 @@ func (p *pushSender) pass() {
 		// Still try to send: a reconcile failure must not strand rows that
 		// are already pending.
 	}
+	if _, err := p.store.reconcileOutboxNotifications(ctx); err != nil {
+		p.logger.WithError(err).Warn("Failed to reconcile status page incident push notifications")
+	}
 
 	claimed, err := p.store.ClaimDeliveries(ctx, pushClaimBatch, pushClaimStaleAfter)
 	if err != nil {
@@ -191,7 +194,7 @@ func (p *pushSender) deliver(ctx context.Context, d pendingDelivery) {
 		return
 	}
 
-	body, err := json.Marshal(p.payloadFor(d))
+	bodies, err := payloadsByOrigin(p.payloadFor(d), subs)
 	if err != nil {
 		p.logger.WithError(err).Error("Failed to encode push payload")
 		_ = p.store.CompleteDelivery(ctx, d.ID, 0, len(subs))
@@ -205,7 +208,7 @@ func (p *pushSender) deliver(ctx context.Context, d pendingDelivery) {
 	group.SetLimit(pushSendConcurrency)
 	for _, sub := range subs {
 		group.Go(func() error {
-			ok := p.send(gctx, sub, body)
+			ok := p.send(gctx, sub, bodies[sub.OriginHost])
 			mu.Lock()
 			if ok {
 				sent++
@@ -223,6 +226,30 @@ func (p *pushSender) deliver(ctx context.Context, d pendingDelivery) {
 	if err := p.store.CompleteDelivery(ctx, d.ID, sent, failed); err != nil {
 		p.logger.WithError(err).Warn("Failed to record push delivery outcome")
 	}
+}
+
+// payloadsByOrigin encodes payload once per origin among subs. The bodies
+// differ only in the deep link, which opens the page on the origin each
+// browser subscribed from: a subscription made on a custom domain belongs to
+// that origin, so its notification opens the page there; one made on the
+// platform host keeps the platform URL.
+func payloadsByOrigin(payload pushPayload, subs []pushSubscriptionRow) (map[string][]byte, error) {
+	bodies := map[string][]byte{}
+	for _, sub := range subs {
+		if _, ok := bodies[sub.OriginHost]; ok {
+			continue
+		}
+		withURL := payload
+		if sub.OriginHost != "" {
+			withURL.URL = pagedomains.PageURL(sub.OriginHost)
+		}
+		b, err := json.Marshal(withURL)
+		if err != nil {
+			return nil, err
+		}
+		bodies[sub.OriginHost] = b
+	}
+	return bodies, nil
 }
 
 // pushOutcome is how one delivery attempt ended. Separating classification
@@ -345,8 +372,36 @@ func (p *pushSender) recordResult(ctx context.Context, id uuid.UUID, ok bool) {
 	}
 }
 
+// incidentPushBodies is what a visitor is told for each incident event.
+var incidentPushBodies = map[string]string{
+	"incident_published": "Incident: ",
+	"incident_updated":   "Update: ",
+	"incident_resolved":  "Resolved: ",
+}
+
 // payloadFor builds the notification a visitor sees.
 func (p *pushSender) payloadFor(d pendingDelivery) pushPayload {
+	if prefix, ok := incidentPushBodies[d.Kind]; ok {
+		title := strings.TrimSpace(d.PageTitle)
+		if title == "" {
+			title = "Status update"
+		}
+		subject := strings.TrimSpace(d.MonitorName)
+		if subject == "" {
+			subject = "an incident"
+		}
+		return pushPayload{
+			Version: 1,
+			Kind:    d.Kind,
+			Title:   title,
+			Body:    prefix + subject,
+			// One slot per incident, so its update or resolution replaces
+			// the earlier banner.
+			Tag: "i:" + d.IncidentID.String(),
+			TS:  time.Now().UTC().UnixMilli(),
+			URL: p.pageURL(d.Slug),
+		}
+	}
 	name := strings.TrimSpace(d.MonitorName)
 	if name == "" {
 		name = "A service"
@@ -379,9 +434,5 @@ func (p *pushSender) payloadFor(d pendingDelivery) pushPayload {
 // which case the service worker falls back to its own registration scope,
 // which is the page URL by construction -- never a guessed host.
 func (p *pushSender) pageURL(slug string) string {
-	base := strings.TrimRight(strings.TrimSpace(p.cfg.StatusPageBaseURL), "/")
-	if base == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s/public/status/%s", base, slug)
+	return publicPageURL(p.cfg.StatusPageBaseURL, slug)
 }

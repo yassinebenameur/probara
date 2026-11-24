@@ -12,7 +12,9 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	"github.com/yassinebenameur/probara/shared/auth"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // GroupMapping is one oidc_group_mappings row. A nil TenantID marks a
@@ -224,6 +226,15 @@ func (s *Service) syncMappedRoles(ctx context.Context, user *models.AdminUser, g
 	}
 	defer tx.Rollback()
 
+	// A sync that may demote takes the superadmin-set lock first (before the
+	// row lock, the order every path uses), so the last-superadmin check
+	// below cannot race another demotion or deletion.
+	if wantPlatform == auth.PlatformRoleMember {
+		if err := adminusers.LockSuperadmins(ctx, tx); err != nil {
+			return nil, fmt.Errorf("failed to lock superadmins for group sync: %w", err)
+		}
+	}
+
 	// Lock the user row so concurrent logins of the same user serialize.
 	var curPlatform string
 	if err := tx.QueryRowContext(ctx, `
@@ -255,11 +266,8 @@ func (s *Service) syncMappedRoles(ctx context.Context, user *models.AdminUser, g
 	}
 
 	if wantPlatform == auth.PlatformRoleMember && curPlatform == auth.PlatformRoleSuperadmin {
-		var otherSuperadmins int
-		if err := tx.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM admin_users
-			WHERE platform_role = $1 AND disabled_at IS NULL AND id <> $2
-		`, auth.PlatformRoleSuperadmin, user.ID).Scan(&otherSuperadmins); err != nil {
+		_, otherSuperadmins, err := adminusers.OtherActiveSuperadmins(ctx, tx, user.ID)
+		if err != nil {
 			return nil, fmt.Errorf("failed to count superadmins for group sync: %w", err)
 		}
 		if otherSuperadmins == 0 {
@@ -290,12 +298,13 @@ func (s *Service) syncMappedRoles(ctx context.Context, user *models.AdminUser, g
 		}
 		now := time.Now()
 		for _, tenantID := range sortedTenantIDs(wantMemberships) {
-			// EXISTS guard mirrors provisionUser: a tenant deleted between
-			// mapping load and insert must not fail the login.
+			// Live-workspace guard mirrors provisionUser: a workspace
+			// deleted between mapping load and insert must not fail the
+			// login, nor be granted.
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO tenant_memberships (id, admin_user_id, tenant_id, role, created_at, updated_at)
 				SELECT $1, $2, $3, $4, $5, $5
-				WHERE EXISTS (SELECT 1 FROM tenants WHERE id = $3)
+				WHERE `+tenancy.LiveTenantSQL("$3::uuid")+`
 			`, uuid.New(), user.ID, tenantID, wantMemberships[tenantID], now); err != nil {
 				return nil, fmt.Errorf("failed to insert mapped membership: %w", err)
 			}

@@ -9,13 +9,18 @@ import (
 )
 
 // mountStatusPageRoutes mounts status-page CRUD, the per-page template lifecycle and the template library.
-func mountStatusPageRoutes(r chi.Router, statusPageHandlers *statuspagehandlers.Handlers) {
+// perPage registers further /status-pages/{id}/… routes (email subscribers).
+func mountStatusPageRoutes(r chi.Router, statusPageHandlers *statuspagehandlers.Handlers, perPage ...func(chi.Router)) {
 	r.Route("/status-pages", func(r chi.Router) {
+		for _, register := range perPage {
+			register(r)
+		}
 		r.Post("/", statusPageHandlers.CreateStatusPage)
 		r.Get("/", statusPageHandlers.ListStatusPages)
 		r.Get("/{id}", statusPageHandlers.GetStatusPage)
 		r.Patch("/{id}", statusPageHandlers.UpdateStatusPage)
 		r.Delete("/{id}", statusPageHandlers.DeleteStatusPage)
+		registerStatusPageAccessRoutes(r, statusPageHandlers) // kiosk tokens (routes_statuspage_access.go)
 
 		// Custom UI template lifecycle: export default, draft, publish,
 		// revert, reset. Sources are validated against the shared

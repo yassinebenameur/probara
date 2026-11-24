@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -161,6 +162,10 @@ func (h *Handlers) DeleteLocation(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteNotFoundError(w, "location not found")
 			return
 		}
+		if dbtx.IsConflict(err) {
+			apierrors.WriteError(w, http.StatusServiceUnavailable, "conflict", dbtx.ErrConflict.Error())
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "location_id": id}).Error("Failed to delete location")
 		apierrors.WriteInternalError(w, "failed to delete location")
 		return
@@ -172,7 +177,7 @@ func (h *Handlers) DeleteLocation(w http.ResponseWriter, r *http.Request) {
 		"monitors_detached": affected,
 	}).Info("Location deleted")
 
-	httpx.WriteJSON(w, http.StatusOK, map[string]int{"monitors_detached": affected})
+	httpx.WriteJSON(w, http.StatusOK, models.DeleteLocationResponse{MonitorsDetached: affected})
 }
 
 // GetDeployInfo handles GET /api/v1/locations/{id}/deploy.

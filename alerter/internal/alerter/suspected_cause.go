@@ -94,7 +94,9 @@ func (a *Alerter) runSuspectedCauses(ctx context.Context) error {
 //   - the channel is active and its plugin advertises
 //     plugin.CapabilityFollowUp (paging tools do not);
 //   - the alert is not muted: openAlertDispatchablePredicate, shared with
-//     reminders (maintenance, roll-up, dependency suppression).
+//     reminders (maintenance, roll-up, dependency suppression). An
+//     acknowledged or snoozed alert still gets it: unlike a reminder, the
+//     hint helps whoever is working the alert (alertrouting.MuteHolds).
 //
 // The send goes through fireChannel → deliverNotification, whose one-shot
 // claim on suspected_cause_sent_at makes replicas safe, and whose FOR SHARE

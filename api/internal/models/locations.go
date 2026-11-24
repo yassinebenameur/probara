@@ -18,6 +18,11 @@ type Location struct {
 	// Connected is derived from LastSeenAt freshness (worker heartbeats).
 	Connected  bool       `json:"connected"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	// Offline is rule S-F6 (monitorstate.LocationOfflinePredicate, the
+	// alerter's own rule): enabled, seen before, silent for 180 seconds.
+	Offline bool `json:"offline"`
+	// OpenAlertID is the location's open location_offline alert, if any.
+	OpenAlertID *uuid.UUID `json:"open_alert_id,omitempty"`
 	// MeshEndpoint (host:port) opts the location into the connectivity mesh:
 	// other locations probe this address's /mesh/echo. Empty = not in mesh.
 	MeshEndpoint *string `json:"mesh_endpoint,omitempty"`
@@ -64,10 +69,11 @@ type LocationDeployInfo struct {
 // MonitorLocationStatus is the per-location breakdown embedded in a monitor:
 // the location's identity plus its per-location check state.
 type MonitorLocationStatus struct {
-	ID            uuid.UUID  `json:"id"`
-	Name          string     `json:"name"`
-	Connected     bool       `json:"connected"`
-	CurrentState  string     `json:"current_state"`
-	LastLatencyMs *int64     `json:"last_latency_ms,omitempty"`
-	LastCheckAt   *time.Time `json:"last_check_at,omitempty"`
+	ID                   uuid.UUID  `json:"id"`
+	Name                 string     `json:"name"`
+	Connected            bool       `json:"connected"`
+	CurrentState         string     `json:"current_state"`
+	ConsecutiveSuccesses int        `json:"consecutive_successes"` // Passes toward confirming this location's recovery (S-T7); non-zero only while down
+	LastLatencyMs        *int64     `json:"last_latency_ms,omitempty"`
+	LastCheckAt          *time.Time `json:"last_check_at,omitempty"`
 }

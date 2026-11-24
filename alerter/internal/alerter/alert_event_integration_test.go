@@ -49,7 +49,7 @@ func TestAlerterFiringAlertCreatesAndReusesAutoIncident(t *testing.T) {
 
 	// Resolve the first alert so the monitor has no open alert. The incident
 	// remains open (state = investigating) until an operator closes it.
-	if _, err := alerter.resolveAlert(ctx, firstAlert.ID, now.Add(30*time.Second)); err != nil {
+	if _, err := alerter.resolveAlertAt(ctx, firstAlert.ID, now.Add(30*time.Second), resolvedRecovered, ""); err != nil {
 		t.Fatalf("resolveAlert(first) error = %v", err)
 	}
 
@@ -99,7 +99,7 @@ func TestAlerterResolveAlertRecordsRecoveryTimeline(t *testing.T) {
 	incidentID := loadAlerterAutoIncidentID(ctx, t, dbClient, tenantID, monitorID)
 
 	// Resolve first alert; incident stays open (state = investigating).
-	if _, err := alerter.resolveAlert(ctx, firstAlert.ID, now.Add(time.Minute)); err != nil {
+	if _, err := alerter.resolveAlertAt(ctx, firstAlert.ID, now.Add(time.Minute), resolvedRecovered, ""); err != nil {
 		t.Fatalf("resolveAlert(first) error = %v", err)
 	}
 	// After first (and only) alert resolves, recovery IS recorded.
@@ -118,7 +118,7 @@ func TestAlerterResolveAlertRecordsRecoveryTimeline(t *testing.T) {
 	}
 
 	// Resolve second alert; all alerts now resolved → second recovery message.
-	if _, err := alerter.resolveAlert(ctx, secondAlert.ID, now.Add(3*time.Minute)); err != nil {
+	if _, err := alerter.resolveAlertAt(ctx, secondAlert.ID, now.Add(3*time.Minute), resolvedRecovered, ""); err != nil {
 		t.Fatalf("resolveAlert(second) error = %v", err)
 	}
 	if got := countAlerterTimelineMessages(ctx, t, dbClient, incidentID, "All linked alerts recovered"); got != 2 {
@@ -229,7 +229,7 @@ func TestAlerterResolveAlertSkipsDuplicateAfterLaterNonRecoveryEntry(t *testing.
 		t.Fatalf("fireTestAlert() error = %v", err)
 	}
 	incidentID := loadAlerterAutoIncidentID(ctx, t, dbClient, tenantID, monitorID)
-	if _, err := alerter.resolveAlert(ctx, alert.ID, now.Add(time.Minute)); err != nil {
+	if _, err := alerter.resolveAlertAt(ctx, alert.ID, now.Add(time.Minute), resolvedRecovered, ""); err != nil {
 		t.Fatalf("resolveAlert() error = %v", err)
 	}
 	if _, err := dbClient.ExecContext(ctx, `

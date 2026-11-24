@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="en"{{if not .AllowThemeToggle}} data-theme="{{.DefaultTheme}}"{{end}} data-allow-theme="{{if .AllowThemeToggle}}1{{else}}0{{end}}">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{.SEOTitle}}</title>
+  <meta name="description" content="{{.MetaDescription}}" />
+  <meta name="robots" content="{{.Robots}}" />
+  {{if .CanonicalURL}}<link rel="canonical" href="{{.CanonicalURL}}" />
+  <meta property="og:url" content="{{.CanonicalURL}}" />
+  {{end}}<meta property="og:type" content="website" />
+  <meta property="og:site_name" content="{{.SiteName}}" />
+  <meta property="og:title" content="{{.SEOTitle}}" />
+  <meta property="og:description" content="{{.MetaDescription}}" />
+  {{if .OGImageURL}}<meta property="og:image" content="{{.OGImageURL}}" />
+  {{end}}<meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="{{.SEOTitle}}" />
+  <meta name="twitter:description" content="{{.MetaDescription}}" />
+  <link rel="alternate" type="application/atom+xml" title="{{.SEOTitle}}" href="{{.FeedURL}}" />
+  <link rel="alternate" type="application/json" title="{{.SEOTitle}} summary" href="{{.SummaryURL}}" />
+  <!-- Monochrome trace mark, inlined as a data URI so it needs no asset route
+       and survives any path prefix or custom domain (same mark as the default
+       template). A page's CustomHeadHTML is injected after this and can
+       override it. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Cstyle%3E@media(prefers-color-scheme:dark){.t{fill:%23fff}.l{stroke:%23000}}%3C/style%3E%3Crect%20class='t'%20width='64'%20height='64'%20rx='15'%20fill='%23000'/%3E%3Cpath%20class='l'%20d='M10%2034h9l4-11%207%2023%207-29%205%2017h12'%20fill='none'%20stroke='%23fff'%20stroke-width='5.5'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <script nonce="{{cspNonce}}">
+    // Before first paint: the visitor's saved (or linked) theme and view, so
+    // the page never flashes the other one. Same keys as the default
+    // template, so a choice made on one page carries to the next.
+    (function () {
+      var root = document.documentElement;
+      var params = new URLSearchParams(window.location.search);
+      var stored = function (key) { try { return window.localStorage.getItem(key) || ''; } catch (e) { return ''; } };
+      if (root.getAttribute('data-allow-theme') === '1') {
+        var theme = params.get('theme') || stored('status-page-theme');
+        if (theme === 'light' || theme === 'dark') root.setAttribute('data-theme', theme);
+      }
+      var mode = params.get('mode') || stored('status-page-mode');
+      if (mode === 'compact' || mode === 'kiosk') root.setAttribute('data-mode', mode);
+    })();
+  </script>
+  <style>
+    /* The familiar status page (banner, component list with history bars,
+       incident history by day) drawn with the operator UI's tokens: flat
+       canvas, near-opaque panels with one hairline edge and one small
+       shadow. Status colours appear only on the banner, the bars and the
+       status words; the accent only on Subscribe and links. */
+    :root {
+      color-scheme: light;
+      --canvas: #f3f4f6;
+      --panel: #ffffff;
+      --edge: rgb(15 23 42 / .10);
+      --rule: rgb(15 23 42 / .08);
+      --well: rgb(15 23 42 / .04);
+      --hover: rgb(15 23 42 / .025);
+      --ink: #10141b;
+      --ink-2: #47505d;
+      --ink-3: #5f6876;
+      --ok: #1a9f5c;      --ok-ink: #12734a;    --ok-tint: rgb(26 159 92 / .09);
+      --warn: #c98609;    --warn-ink: #8a5a00;  --warn-tint: rgb(208 140 11 / .11);
+      --down: #dc3545;    --down-ink: #b3202f;  --down-tint: rgb(220 53 69 / .08);
+      --maint: #2f7fd6;   --maint-ink: #1c5fa8; --maint-tint: rgb(47 127 214 / .09);
+      --none: rgb(15 23 42 / .13);
+      --accent: {{.AccentColor}};
+      --accent-ink: {{.AccentInk}};
+      --shadow: 0 1px 2px rgb(15 23 42 / .05);
+      --tip-bg: #10141b;  --tip-ink: #eef1f6;
+      --logo: #10141b;    --logo-ink: #ffffff;
+      --sans: "Archivo", "Segoe UI", system-ui, -apple-system, sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+    /* Dark tokens apply on screen only, so a printout is always light. The
+       media block serves visitors without scripts or a saved choice. */
+    @media screen {
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --canvas: #0b0d12;
+        --panel: #13161d;
+        --edge: rgb(255 255 255 / .08);
+        --rule: rgb(255 255 255 / .08);
+        --well: rgb(255 255 255 / .045);
+        --hover: rgb(255 255 255 / .025);
+        --ink: #eef1f6;
+        --ink-2: #aeb6c2;
+        --ink-3: #8a929e;
+        --ok: #3cc47a;      --ok-ink: #5fd896;    --ok-tint: rgb(60 196 122 / .10);
+        --warn: #e0ab3a;    --warn-ink: #ecc061;  --warn-tint: rgb(224 171 58 / .11);
+        --down: #ee5261;    --down-ink: #f58590;  --down-tint: rgb(238 82 97 / .11);
+        --maint: #5aa3ec;   --maint-ink: #8cc0f5; --maint-tint: rgb(90 163 236 / .11);
+        --none: rgb(255 255 255 / .12);
+        --shadow: 0 1px 2px rgb(0 0 0 / .35);
+        --tip-bg: #eef1f6;  --tip-ink: #10141b;
+        --logo: #2a303b;    --logo-ink: #eef1f6;
+      }
+    }
+    @media screen and (prefers-color-scheme: dark) {
+      :root:not([data-theme]) {
+        color-scheme: dark;
+        --canvas: #0b0d12;
+        --panel: #13161d;
+        --edge: rgb(255 255 255 / .08);
+        --rule: rgb(255 255 255 / .08);
+        --well: rgb(255 255 255 / .045);
+        --hover: rgb(255 255 255 / .025);
+        --ink: #eef1f6;
+        --ink-2: #aeb6c2;
+        --ink-3: #8a929e;
+        --ok: #3cc47a;      --ok-ink: #5fd896;    --ok-tint: rgb(60 196 122 / .10);
+        --warn: #e0ab3a;    --warn-ink: #ecc061;  --warn-tint: rgb(224 171 58 / .11);
+        --down: #ee5261;    --down-ink: #f58590;  --down-tint: rgb(238 82 97 / .11);
+        --maint: #5aa3ec;   --maint-ink: #8cc0f5; --maint-tint: rgb(90 163 236 / .11);
+        --none: rgb(255 255 255 / .12);
+        --shadow: 0 1px 2px rgb(0 0 0 / .35);
+        --tip-bg: #eef1f6;  --tip-ink: #10141b;
+        --logo: #2a303b;    --logo-ink: #eef1f6;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--canvas); scroll-behavior: smooth; }
+    body { margin: 0; color: var(--ink); font: 400 15px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+    button, input { font: inherit; color: inherit; }
+    a { color: inherit; text-decoration-color: var(--accent); text-underline-offset: 2px; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+    [hidden] { display: none !important; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    .sm { display: none; }
+
+    .page { max-width: 840px; margin: 0 auto; padding: 0 24px 80px; }
+    .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 14px; box-shadow: var(--shadow); }
+    h2 { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
+    section { margin-top: 44px; }
+
+    /* Header */
+    .top { display: flex; align-items: center; gap: 12px; padding: 28px 0 36px; }
+    .logo { flex: none; width: 32px; height: 32px; border-radius: 8px; background: var(--logo); color: var(--logo-ink); display: grid; place-items: center; font-weight: 700; text-transform: uppercase; }
+    .logo-img { flex: none; height: 32px; width: auto; max-width: 160px; border-radius: 8px; object-fit: contain; }
+    .name { margin: 0; min-width: 0; font-size: 17px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+    .top-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    .top-actions .seg { margin-left: 0; height: 36px; align-items: center; }
+    .top-actions .seg button { height: 32px; }
+    .btn { height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--edge); background: var(--panel); font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow); display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; white-space: nowrap; transition: background-color .15s, filter .15s; }
+    .btn:hover { background: linear-gradient(var(--hover), var(--hover)), var(--panel); }
+    .btn-primary { border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 600; box-shadow: none; }
+    .btn-primary:hover { background: var(--accent); filter: brightness(.94); }
+    .btn-icon { width: 36px; padding: 0; color: var(--ink-2); }
+    .btn-icon[disabled] { opacity: .5; cursor: not-allowed; }
+    .btn-icon[aria-pressed="true"] { color: var(--ink); background: linear-gradient(var(--well), var(--well)), var(--panel); }
+    .icon-sun { display: none; }
+    :root[data-theme="dark"] .icon-sun { display: block; }
+    :root[data-theme="dark"] .icon-moon { display: none; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme]) .icon-sun { display: block; }
+      :root:not([data-theme]) .icon-moon { display: none; }
+    }
+
+    /* Overall status banner */
+    .banner { display: flex; align-items: center; gap: 14px; padding: 20px 22px; }
+    .banner-icon { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: var(--ok); }
+    .banner-text { min-width: 0; }
+    .banner-title { margin: 0; font-size: 20px; font-weight: 600; line-height: 1.25; letter-spacing: -.01em; }
+    .banner-sub { font-size: 14px; color: var(--ink-2); margin-top: 2px; }
+    .banner-time { margin-left: auto; font-size: 13px; color: var(--ink-3); white-space: nowrap; align-self: flex-start; padding-top: 4px; }
+    .banner[data-t="warn"] { background: linear-gradient(var(--warn-tint), var(--warn-tint)), var(--panel); } .banner[data-t="warn"] .banner-icon { background: var(--warn); }
+    .banner[data-t="down"] { background: linear-gradient(var(--down-tint), var(--down-tint)), var(--panel); } .banner[data-t="down"] .banner-icon { background: var(--down); }
+    .banner[data-t="maint"] { background: linear-gradient(var(--maint-tint), var(--maint-tint)), var(--panel); } .banner[data-t="maint"] .banner-icon { background: var(--maint); }
+    .banner[data-t="unknown"] .banner-icon { background: var(--ink-3); }
+
+    /* Incident / maintenance card with its updates */
+    .notice { margin-top: 14px; overflow: hidden; }
+    h2 + .notice { margin-top: 0; }
+    .notice-head { display: flex; align-items: baseline; gap: 4px 12px; padding: 16px 22px 0; }
+    .notice-title { margin: 0; min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+    .tag { margin-left: auto; font-size: 13px; font-weight: 600; white-space: nowrap; text-align: right; color: var(--ink-2); }
+    .tag-sub { display: block; font-weight: 400; color: var(--ink-3); }
+    .tag[data-t="warn"] { color: var(--warn-ink); } .tag[data-t="down"] { color: var(--down-ink); }
+    .tag[data-t="maint"] { color: var(--maint-ink); } .tag[data-t="ok"] { color: var(--ok-ink); }
+    .notice-affects { padding: 2px 22px 0; font-size: 13px; color: var(--ink-3); overflow-wrap: anywhere; }
+    .notice > .notice-affects:last-child { padding-bottom: 18px; }
+    .updates { list-style: none; margin: 14px 0 0; padding: 4px 22px 18px; border-top: 1px solid var(--rule); }
+    .updates li { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 16px; padding-top: 14px; }
+    .updates time { font-size: 13px; color: var(--ink-3); padding-top: 1px; font-variant-numeric: tabular-nums; }
+    .updates b { font-weight: 600; }
+    .updates span { color: var(--ink-2); white-space: pre-line; overflow-wrap: anywhere; }
+
+    /* Components */
+    .comp-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+    .comp-head h2 { margin: 0; }
+    .seg { margin-left: auto; display: flex; padding: 2px; gap: 2px; background: var(--well); border-radius: 10px; }
+    .seg button { height: 28px; padding: 0 11px; border: 0; border-radius: 8px; background: none; font-size: 13px; color: var(--ink-3); cursor: pointer; white-space: nowrap; transition: color .15s; }
+    .seg button:hover { color: var(--ink); }
+    .seg button[aria-pressed="true"] { background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+    :root[data-theme="dark"] .seg button[aria-pressed="true"] { background: rgb(255 255 255 / .12); }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme]) .seg button[aria-pressed="true"] { background: rgb(255 255 255 / .12); } }
+    .group-name { margin: 0; padding: 14px 22px 10px; font-size: 13px; font-weight: 600; color: var(--ink-3); background: var(--well); border-top: 1px solid var(--rule); overflow-wrap: anywhere; }
+    .comps > :first-child { border-top: 0; border-radius: 13px 13px 0 0; }
+    .comp { border-top: 1px solid var(--rule); }
+    .comp > summary { display: block; padding: 16px 22px 18px; list-style: none; cursor: pointer; transition: background-color .15s; }
+    .comp > summary::-webkit-details-marker { display: none; }
+    .comp > summary:hover { background: var(--hover); }
+    .comp > summary:focus-visible { outline-offset: -2px; border-radius: 0; }
+    .comps > .comp:last-child > summary, .comps > .comp:last-child:not([open]) { border-radius: 0 0 13px 13px; }
+    .comp-row { display: flex; align-items: baseline; gap: 12px; }
+    .comp-name { min-width: 0; margin-right: auto; font-weight: 500; overflow-wrap: anywhere; }
+    .comp-up { font-size: 13px; color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .comp-state { min-width: 96px; text-align: right; font-size: 14px; font-weight: 500; color: var(--ok-ink); white-space: nowrap; }
+    .comp-state[data-t="warn"] { color: var(--warn-ink); } .comp-state[data-t="down"] { color: var(--down-ink); } .comp-state[data-t="maint"] { color: var(--maint-ink); } .comp-state[data-t="unknown"] { color: var(--ink-3); }
+    .chev { flex: none; align-self: center; color: var(--ink-3); transition: transform .15s; }
+    .comp[open] .chev { transform: rotate(180deg); }
+    .bars { display: flex; gap: 2px; height: 30px; margin-top: 10px; }
+    .bars i { flex: 1; min-width: 1px; border-radius: 2px; background: var(--ok); }
+    .bars i[data-t="warn"] { background: var(--warn); } .bars i[data-t="down"] { background: var(--down); }
+    .bars i[data-t="maint"] { background: var(--maint); } .bars i[data-t="none"] { background: var(--none); }
+    .bars i:hover { filter: brightness(.88); }
+    .axis { display: flex; justify-content: space-between; padding: 12px 22px 14px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--ink-3); }
+    .empty { padding: 22px; font-size: 14px; color: var(--ink-3); }
+    .well { margin: 0 22px 18px; padding: 14px 16px; border-radius: 10px; background: var(--well); font-size: 13px; }
+    .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 16px; margin: 0; }
+    .facts div { min-width: 0; }
+    .facts .wide { grid-column: 1 / -1; }
+    .facts dt { color: var(--ink-3); }
+    .facts dd { margin: 2px 0 0; color: var(--ink); overflow-wrap: anywhere; }
+    .mono { font-family: var(--mono); font-size: 12.5px; }
+    .cert { margin: 12px 0 0; color: var(--warn-ink); }
+
+    /* History by day */
+    .day { padding: 18px 0; border-top: 1px solid var(--rule); }
+    .day:last-child { border-bottom: 1px solid var(--rule); }
+    .day-date { margin: 0; font-size: 14px; font-weight: 600; }
+    .day-none { margin: 4px 0 0; font-size: 14px; color: var(--ink-3); }
+    .day .notice-title { margin-top: 8px; font-size: 15px; }
+    .day .notice-title + .updates { margin-top: 0; }
+    .day .updates { border-top: 0; padding: 0; margin-top: 0; }
+    .day-inc + .day-inc { margin-top: 14px; }
+
+    /* Subscribe */
+    .sub { padding: 22px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: center; }
+    .sub h2 { margin: 0 0 4px; }
+    .sub p { margin: 0; font-size: 14px; color: var(--ink-2); }
+    .sub form { display: flex; gap: 8px; }
+    .sub input { flex: 1; min-width: 0; height: 38px; padding: 0 12px; border-radius: 10px; border: 1px solid rgb(127 127 127 / .45); background: transparent; }
+    .sub input::placeholder { color: var(--ink-3); }
+    .sub .btn-primary { height: 38px; }
+
+    .foot { margin-top: 56px; display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; font-size: 13px; color: var(--ink-3); }
+    .foot .by { margin-left: auto; overflow-wrap: anywhere; }
+    kbd { display: inline-block; min-width: 18px; padding: 0 4px; border: 1px solid var(--edge); border-radius: 4px; font: 500 11px/16px var(--sans); text-align: center; color: var(--ink-2); background: var(--panel); }
+    .keys kbd { margin-right: 3px; }
+    .keys kbd:not(:first-child) { margin-left: 8px; }
+
+    /* Bar tooltip */
+    .tip { position: fixed; z-index: 20; transform: translate(-50%, -100%); padding: 5px 8px; border-radius: 6px; background: var(--tip-bg); color: var(--tip-ink); font-size: 12px; line-height: 1.35; white-space: nowrap; pointer-events: none; box-shadow: 0 4px 12px rgb(0 0 0 / .18); }
+
+    /* Compact: same layout, tighter rows, thinner bars. */
+    :root[data-mode="compact"] .comp > summary { padding: 10px 22px 12px; }
+    :root[data-mode="compact"] .bars { height: 16px; margin-top: 7px; }
+    :root[data-mode="compact"] .group-name { padding: 10px 22px 8px; }
+    :root[data-mode="compact"] .banner { padding: 14px 22px; }
+    :root[data-mode="compact"] .top { padding: 20px 0 24px; }
+    :root[data-mode="compact"] section { margin-top: 32px; }
+
+    /* Kiosk: a wall view read from across the room. A slim top bar carries
+       the overall state, the fleet counts and the clock; below, every
+       service is a small tile in section groups, packed from the top left
+       at a fixed maximum size like the default template's kiosk (a few
+       services leave the wall empty, never a poster). fitKiosk() raises
+       data-density only when the wall would scroll: each step narrows the
+       tiles and the type (--k-s); past the first it sheds detail, figures
+       first, then the type line, then the strip. A tile
+       in trouble is tinted with an edge in its tone; healthy tiles stay
+       plain and their green history is dimmed, so problems stand out. */
+    .kiosk { display: none; --k-s: 1; --k-min: 300px; --k-max: 340px; }
+    .kiosk[data-density="2"] { --k-s: .94; --k-min: 260px; --k-max: 290px; }
+    .kiosk[data-density="3"] { --k-s: .88; --k-min: 220px; --k-max: 250px; }
+    .kiosk[data-density="4"] { --k-s: .84; --k-min: 200px; --k-max: 230px; }
+    .kiosk[data-density="5"] { --k-s: .8; --k-min: 180px; --k-max: 210px; }
+    :root[data-mode="kiosk"] body { overflow: hidden; }
+    :root[data-mode="kiosk"] .page, :root[data-mode="kiosk"] .tip { display: none; }
+    :root[data-mode="kiosk"] .kiosk { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+    .k-top { flex: none; display: flex; align-items: center; gap: 28px; min-height: 76px; padding: 12px 28px; border-bottom: 1px solid var(--edge); background: var(--panel); }
+    .k-top[data-t="warn"] { background: linear-gradient(var(--warn-tint), var(--warn-tint)), linear-gradient(var(--warn-tint), var(--warn-tint)), var(--panel); }
+    .k-top[data-t="down"] { background: linear-gradient(var(--down-tint), var(--down-tint)), linear-gradient(var(--down-tint), var(--down-tint)), var(--panel); }
+    .k-top[data-t="maint"] { background: linear-gradient(var(--maint-tint), var(--maint-tint)), linear-gradient(var(--maint-tint), var(--maint-tint)), var(--panel); }
+    .k-id { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 1 auto; }
+    .k-id .name { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .k-overall { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .k-overall .banner-icon { width: 34px; height: 34px; }
+    .k-top[data-t="warn"] .banner-icon { background: var(--warn); } .k-top[data-t="down"] .banner-icon { background: var(--down); }
+    .k-top[data-t="maint"] .banner-icon { background: var(--maint); } .k-top[data-t="unknown"] .banner-icon { background: var(--ink-3); }
+    .k-overall-title { margin: 0; font-size: 30px; font-weight: 600; line-height: 1.1; letter-spacing: -.015em; white-space: nowrap; }
+    .k-counts { display: flex; align-items: baseline; gap: 24px; margin: 0 auto; padding: 0; list-style: none; }
+    .k-count { display: flex; align-items: baseline; gap: 7px; font-size: 14px; color: var(--ink-3); white-space: nowrap; }
+    .k-count b { font-size: 26px; font-weight: 600; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+    .k-count[data-t="ok"] b { color: var(--ink); }
+    .k-count[data-t="ok"] { color: var(--ink-2); }
+    .k-count[data-hot] { font-weight: 600; }
+    .k-count[data-hot][data-t="warn"], .k-count[data-hot][data-t="warn"] b { color: var(--warn-ink); }
+    .k-count[data-hot][data-t="down"], .k-count[data-hot][data-t="down"] b { color: var(--down-ink); }
+    .k-count[data-hot][data-t="maint"], .k-count[data-hot][data-t="maint"] b { color: var(--maint-ink); }
+    .k-count[data-hot][data-t="unknown"], .k-count[data-hot][data-t="unknown"] b { color: var(--ink-2); }
+    .k-right { display: flex; align-items: center; gap: 16px; flex: none; }
+    .k-right .js-updated { font-size: 13px; color: var(--ink-3); white-space: nowrap; }
+    .k-clock { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+    .k-body { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 28px 24px; display: flex; flex-direction: column; gap: 18px; }
+    .k-sec { margin: 0; }
+    .k-sec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .k-sec-name { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+    .k-sec-count { padding: 0 7px; border-radius: 999px; background: var(--well); font-size: 12px; line-height: 20px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+    .k-rule { flex: 1; height: 1px; background: var(--rule); min-width: 16px; }
+    .k-sec-state { font-size: 14px; font-weight: 600; white-space: nowrap; color: var(--ink-3); }
+    .k-sec-state[data-t="ok"] { font-weight: 500; }
+    .k-sec-state[data-t="warn"] { color: var(--warn-ink); } .k-sec-state[data-t="down"] { color: var(--down-ink); } .k-sec-state[data-t="maint"] { color: var(--maint-ink); } .k-sec-state[data-t="unknown"] { color: var(--ink-2); }
+    .k-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--k-min), var(--k-max))); justify-content: start; gap: 12px; }
+    .k-tile { position: relative; min-width: 0; overflow: hidden; display: flex; flex-direction: column; gap: calc(5px * var(--k-s)); padding: calc(13px * var(--k-s)) calc(16px * var(--k-s)); background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; box-shadow: var(--shadow); }
+    .k-tile[data-t="warn"] { background: linear-gradient(var(--warn-tint), var(--warn-tint)), linear-gradient(var(--warn-tint), var(--warn-tint)), var(--panel); box-shadow: inset 4px 0 0 var(--warn), var(--shadow); }
+    .k-tile[data-t="down"] { background: linear-gradient(var(--down-tint), var(--down-tint)), linear-gradient(var(--down-tint), var(--down-tint)), var(--panel); box-shadow: inset 4px 0 0 var(--down), var(--shadow); }
+    .k-tile[data-t="maint"] { background: linear-gradient(var(--maint-tint), var(--maint-tint)), linear-gradient(var(--maint-tint), var(--maint-tint)), var(--panel); box-shadow: inset 4px 0 0 var(--maint), var(--shadow); }
+    .k-tile[data-t="unknown"] { background: linear-gradient(var(--well), var(--well)), var(--panel); box-shadow: inset 4px 0 0 var(--ink-3), var(--shadow); }
+    .k-tile-head { display: flex; align-items: baseline; gap: calc(10px * var(--k-s)); min-width: 0; }
+    .k-name { min-width: 0; font-size: calc(17px * var(--k-s)); font-weight: 500; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .k-state { margin-left: auto; flex: none; font-size: calc(16px * var(--k-s)); font-weight: 500; line-height: 1.25; color: var(--ok-ink); white-space: nowrap; }
+    .k-tile:not([data-t="ok"]) .k-state { font-weight: 700; }
+    .k-state[data-t="warn"] { color: var(--warn-ink); } .k-state[data-t="down"] { color: var(--down-ink); } .k-state[data-t="maint"] { color: var(--maint-ink); } .k-state[data-t="unknown"] { color: var(--ink-2); }
+    .k-sub { font-size: calc(13px * var(--k-s)); line-height: 1.3; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .k-metrics { display: flex; gap: calc(18px * var(--k-s)); font-size: calc(13px * var(--k-s)); line-height: 1.3; color: var(--ink-3); white-space: nowrap; overflow: hidden; }
+    .k-metrics b { font-size: calc(15px * var(--k-s)); font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+    .k-tile > * { flex: none; }
+    .k-tile .bars { height: calc(14px * var(--k-s)); margin-top: calc(5px * var(--k-s)); gap: 2px; }
+    .k-tile .bars i[data-t="ok"] { opacity: .5; }
+    .kiosk[data-density="3"] .k-metrics { display: none; }
+    .kiosk[data-density="4"] .k-metrics, .kiosk[data-density="4"] .k-sub { display: none; }
+    .kiosk[data-density="5"] .k-metrics, .kiosk[data-density="5"] .k-sub, .kiosk[data-density="5"] .k-tile .bars { display: none; }
+
+    @media (max-width: 640px) {
+      .page { padding: 0 14px 64px; }
+      .top { padding: 18px 0 22px; flex-wrap: wrap; }
+      .top-actions { width: 100%; margin-left: 0; flex-wrap: wrap; } .top-actions .btn-primary { margin-left: auto; }
+      .lg { display: none; } .sm { display: inline; }
+      .banner { flex-wrap: wrap; } .banner-time { width: 100%; margin: 0 0 0 42px; padding: 0; }
+      .notice-head { flex-wrap: wrap; } .tag { margin-left: 0; text-align: left; white-space: normal; }
+      .comp-up { display: none; }
+      .comp-state { min-width: 0; }
+      .notice-head, .notice-affects, .updates { padding-left: 16px; padding-right: 16px; }
+      .comp > summary, .group-name, .axis { padding-left: 16px; padding-right: 16px; }
+      .well { margin: 0 16px 16px; }
+      .facts { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+      .updates li { grid-template-columns: 1fr; gap: 2px; }
+      .sub { grid-template-columns: 1fr; padding: 18px 16px; }
+      .bars { gap: 1px; }
+      .keys { display: none; }
+      .k-top { flex-wrap: wrap; gap: 10px 16px; padding: 12px 14px; }
+      .k-counts { order: 3; width: 100%; margin: 0; gap: 14px; flex-wrap: wrap; }
+      .k-right { margin-left: auto; }
+      .k-overall-title { font-size: 22px; }
+      .k-clock { font-size: 20px; }
+      .k-right .js-updated { display: none; }
+      .k-body { padding: 14px; }
+    }
+    @media (hover: none) { .keys { display: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition: none !important; animation: none !important; }
+    }
+    @media print {
+      html, body { background: #fff; }
+      .top-actions, .seg, #subscribe, .keys, .kiosk, .tip, .chev { display: none !important; }
+      .page { max-width: none; padding: 0; }
+      .panel { box-shadow: none; break-inside: avoid; }
+      .comp { break-inside: avoid; }
+      .bars i, .banner, .banner-icon { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+{{if .CustomCSS}}  <style>{{.CustomCSS}}</style>
+{{end}}{{if .CustomHeadHTML}}{{.CustomHeadHTML}}
+{{end}}</head>
+<body
+  data-status-page-slug="{{.Slug}}"
+  data-default-range="{{.DefaultRange}}"
+  data-push-enabled="{{if .PushEnabled}}1{{else}}0{{end}}"
+  data-push-key="{{.PushPublicKey}}"
+>
+<div class="page">
+  <header class="top">
+    {{if .HasLogo}}<img class="logo-img" src="{{.LogoURL}}" alt="" />{{else}}<div class="logo" aria-hidden="true">{{printf "%.1s" .Title}}</div>{{end}}
+    <h1 class="name">{{.Title}}</h1>
+    <div class="top-actions" id="headerActions">
+      {{if .ShowLayoutControl}}<div class="seg views" role="group" aria-label="View"><button type="button" data-mode="default" aria-pressed="true">List</button><button type="button" data-mode="compact" aria-pressed="false">Compact</button><button type="button" data-mode="kiosk" aria-pressed="false">Kiosk</button></div>{{end}}
+      {{if .AllowThemeToggle}}<button type="button" class="btn btn-icon" id="themeToggleBtn" aria-label="Switch theme" title="Switch theme">
+        <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>{{end}}
+      {{if .PushEnabled}}<button type="button" class="btn btn-icon" id="pushToggleBtn" aria-pressed="false" aria-label="Enable notifications" hidden>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/><line id="pushBellSlash" x1="3.5" y1="3.5" x2="20.5" y2="20.5" hidden/></svg>
+      </button>{{end}}
+      {{if .SubscribeEnabled}}<a class="btn btn-primary" href="#subscribe" id="subscribeJump"><span class="lg">Subscribe to updates</span><span class="sm">Subscribe</span></a>{{end}}
+    </div>
+  </header>
+
+  <main id="main">
+    <div id="liveTop">
+      <div class="panel banner" data-t="{{.BannerTone}}" role="status">
+        <div class="banner-icon" aria-hidden="true">{{template "classicBannerIcon" .BannerTone}}</div>
+        <div class="banner-text">
+          <p class="banner-title">{{.BannerTitle}}</p>
+          {{if .BannerSummary}}<div class="banner-sub">{{.BannerSummary}}</div>{{end}}
+        </div>
+        <div class="banner-time js-updated" data-at="{{.RenderedAtISO}}">Updated at {{slice .RenderedAtISO 11 16}} UTC</div>
+      </div>
+      {{range .ActiveIncidents}}
+      <article class="panel notice" aria-label="Incident: {{.Title}}">
+        <div class="notice-head"><h2 class="notice-title">{{.Title}}</h2><span class="tag" data-t="{{.ToneClass}}">{{.StateLabel}}</span></div>
+        <div class="notice-affects">{{.AffectsText}}</div>
+        {{template "classicUpdates" .Updates}}
+      </article>
+      {{end}}
+    </div>
+
+    <section id="servicesSection" aria-labelledby="servicesHeading">
+      <div class="comp-head">
+        <h2 id="servicesHeading">Services</h2>
+        {{if and .ShowMonitorUptime .Monitors}}<div class="seg ranges" role="group" aria-label="History range"><button type="button" data-range-pill="24h" aria-pressed="true"><span class="lg">24 hours</span><span class="sm">24h</span></button><button type="button" data-range-pill="7d" aria-pressed="false"><span class="lg">7 days</span><span class="sm">7d</span></button><button type="button" data-range-pill="30d" aria-pressed="false"><span class="lg">30 days</span><span class="sm">30d</span></button><button type="button" data-range-pill="90d" aria-pressed="false"><span class="lg">90 days</span><span class="sm">90d</span></button></div>{{end}}
+      </div>
+      <div class="panel comps" id="servicesList">
+        {{range .Sections}}
+          {{if or (gt (len $.Sections) 1) (ne .Title "Services")}}<h3 class="group-name">{{.Title}}</h3>{{end}}
+          {{range .Monitors}}
+          <details class="comp" data-monitor-id="{{.ID}}">
+            <summary>
+              <span class="comp-row">
+                <span class="comp-name">{{.Name}}</span>
+                {{if $.ShowMonitorUptime}}<span class="comp-up" data-uptime data-range-value-24h="{{.Uptime24Value}}" data-range-value-7d="{{.Uptime7Value}}" data-range-value-30d="{{.Uptime30Value}}" data-range-value-90d="{{.Uptime90Value}}">{{if eq .Uptime24Value "—"}}No data{{else}}{{.Uptime24Value}} uptime{{end}}</span>{{end}}
+                <span class="comp-state" data-t="{{.ToneClass}}">{{.StatusWord}}</span>
+                <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"/></svg>
+              </span>
+              {{if $.ShowMonitorUptime}}<span class="bars js-strip" role="img" aria-label="Uptime history, last 24 hours" data-range-24h="{{.Bars24hJSON}}" data-range-7d="{{.Bars7dJSON}}" data-range-30d="{{.Bars30dJSON}}" data-range-90d="{{.Bars90dJSON}}">{{range .Bars}}<i data-t="{{.Tone}}" data-tip="{{.Tip}}"></i>{{end}}</span>{{end}}
+            </summary>
+            <div class="well">
+              <dl class="facts">
+                <div><dt>Type</dt><dd>{{.TypeLabel}}</dd></div>
+                <div><dt>Response time</dt><dd class="mono">{{.LatencyText}}</dd></div>
+                <div><dt>Last check</dt><dd data-ago="{{.LastCheckUnix}}">{{.LastCheckAgo}}</dd></div>
+                {{if .URL}}<div class="wide"><dt>Target</dt><dd class="mono">{{.URL}}</dd></div>{{end}}
+              </dl>
+              {{if .CertExpiresSoon}}<p class="cert">The TLS certificate expires soon. The service itself is operational.</p>{{end}}
+            </div>
+          </details>
+          {{end}}
+        {{else}}
+          <p class="empty">No services are listed on this page yet.</p>
+        {{end}}
+        {{if and .ShowMonitorUptime .Monitors}}<div class="axis" aria-hidden="true"><span data-axis-start>24 hours ago</span><span data-axis-end>Now</span></div>{{end}}
+      </div>
+    </section>
+
+    <section id="maintenanceSection" aria-labelledby="maintenanceHeading"{{if not .MaintenanceWindows}} hidden{{end}}>
+      {{if .MaintenanceWindows}}
+      <h2 id="maintenanceHeading">Scheduled maintenance</h2>
+      {{range .MaintenanceWindows}}
+      <article class="panel notice">
+        <div class="notice-head">
+          <h3 class="notice-title">{{.Title}}</h3>
+          <span class="tag" data-t="maint"><span class="js-maint-range" data-start="{{.StartsAtISO}}" data-end="{{.EndsAtISO}}">{{.TimeRangeText}}</span><span class="tag-sub" hidden></span></span>
+        </div>
+        <div class="notice-affects">{{if .IsActive}}In progress · {{end}}{{.AffectsText}}</div>
+        {{if .RepeatText}}<div class="notice-affects js-maint-next" data-starts="{{.NextStartsISO}}">{{.RepeatText}}</div>{{end}}
+        {{if .Description}}<ul class="updates"><li><time>{{if .IsActive}}In progress{{else}}Planned{{end}}</time><div><span>{{.Description}}</span></div></li></ul>{{end}}
+      </article>
+      {{end}}
+      {{end}}
+    </section>
+
+    <section id="historySection" aria-labelledby="historyHeading">
+      <h2 id="historyHeading">Past incidents</h2>
+      {{range .IncidentHistory}}
+      <div class="day">
+        <h3 class="day-date">{{.DateText}}</h3>
+        {{range .Incidents}}
+        <div class="day-inc">
+          <h4 class="notice-title">{{.Title}}</h4>
+          {{template "classicUpdates" .Updates}}
+        </div>
+        {{else}}
+        <p class="day-none">No incidents reported.</p>
+        {{end}}
+      </div>
+      {{end}}
+    </section>
+
+    {{if .SubscribeEnabled}}
+    <section id="subscribe" aria-labelledby="subscribeHeading">
+      <div class="panel sub">
+        <div><h2 id="subscribeHeading">Get updates by email</h2><p>One email when an incident is posted, updated or resolved, and when maintenance is scheduled. Confirm your address first; unsubscribe from any email.</p></div>
+        <form method="post" action="{{.SubscribeAction}}"><label class="sr-only" for="subscribeEmail">Email address</label><input id="subscribeEmail" name="email" type="email" autocomplete="email" inputmode="email" required maxlength="254" placeholder="you@example.com" /><button type="submit" class="btn btn-primary">Subscribe</button></form>
+      </div>
+    </section>
+    {{end}}
+  </main>
+
+  {{if .ShowFooter}}
+  <footer class="foot">
+    {{if .ShowLayoutControl}}<span class="keys" aria-hidden="true"><kbd>1</kbd>List<kbd>2</kbd>Compact<kbd>K</kbd>Kiosk{{if .AllowThemeToggle}}<kbd>T</kbd>Theme{{end}}</span>{{end}}
+    <span class="by">{{.FooterText}}</span>
+  </footer>
+  {{end}}
+</div>
+
+<div class="kiosk" id="kioskView">
+  <header class="k-top" id="kioskTop" data-t="{{.BannerTone}}">
+    <div class="k-id">
+      {{if .HasLogo}}<img class="logo-img" src="{{.LogoURL}}" alt="" />{{else}}<div class="logo" aria-hidden="true">{{printf "%.1s" .Title}}</div>{{end}}
+      <p class="name">{{.Title}}</p>
+    </div>
+    <div class="k-overall" role="status">
+      <span class="banner-icon" aria-hidden="true">{{template "classicBannerIcon" .BannerTone}}</span>
+      <p class="k-overall-title">{{.BannerTitle}}</p>
+    </div>
+    <ul class="k-counts" aria-label="Services by state">
+      <li class="k-count" data-t="ok"><b>{{.OperationalCount}}</b>Operational</li>
+      <li class="k-count" data-t="warn"{{if .DegradedCount}} data-hot{{end}}><b>{{.DegradedCount}}</b>Degraded</li>
+      <li class="k-count" data-t="down"{{if .DownCount}} data-hot{{end}}><b>{{.DownCount}}</b>Outage</li>
+      <li class="k-count" data-t="maint"{{if .MaintenanceCount}} data-hot{{end}}><b>{{.MaintenanceCount}}</b>Maintenance</li>
+      {{if .UnknownCount}}<li class="k-count" data-t="unknown" data-hot><b>{{.UnknownCount}}</b>Unknown</li>{{end}}
+    </ul>
+    <div class="k-right">
+      <span class="js-updated" data-at="{{.RenderedAtISO}}">Updated at {{slice .RenderedAtISO 11 16}} UTC</span>
+      <span class="k-clock" id="kioskTime"></span>
+      <button type="button" class="btn" id="kioskExitBtn">Exit <kbd>Esc</kbd></button>
+    </div>
+  </header>
+  <div class="k-body" id="kioskBody">
+    {{range .Sections}}
+    <section class="k-sec" aria-label="{{.Title}}">
+      {{if or (gt (len $.Sections) 1) (ne .Title "Services")}}<div class="k-sec-head"><h2 class="k-sec-name">{{.Title}}</h2><span class="k-sec-count">{{.MonitorCount}}</span><span class="k-rule"></span><span class="k-sec-state" data-t="{{.ToneClass}}">{{.StatusSummary}}</span></div>{{end}}
+      <div class="k-grid">
+        {{range .Monitors}}
+        <div class="k-tile" data-t="{{.ToneClass}}">
+          <div class="k-tile-head"><span class="k-name" title="{{.Name}}">{{.Name}}</span><span class="k-state" data-t="{{.ToneClass}}">{{.StatusWord}}</span></div>
+          <div class="k-sub">{{.TypeLabel}} · <span data-ago="{{.LastCheckUnix}}">{{.LastCheckAgo}}</span></div>
+          <div class="k-metrics"><span><b>{{.LatencyText}}</b> latency</span>{{if $.ShowMonitorUptime}}<span><b data-uptime-value data-range-value-24h="{{.Uptime24Value}}" data-range-value-7d="{{.Uptime7Value}}" data-range-value-30d="{{.Uptime30Value}}" data-range-value-90d="{{.Uptime90Value}}">{{.Uptime24Value}}</b> uptime</span>{{end}}</div>
+          {{if $.ShowMonitorUptime}}<span class="bars js-strip k-strip" aria-hidden="true" data-max-cells="48" data-range-24h="{{.Bars24hJSON}}" data-range-7d="{{.Bars7dJSON}}" data-range-30d="{{.Bars30dJSON}}" data-range-90d="{{.Bars90dJSON}}"></span>{{end}}
+        </div>
+        {{end}}
+      </div>
+    </section>
+    {{end}}
+  </div>
+</div>
+
+{{if .CustomFooterHTML}}{{.CustomFooterHTML}}
+{{end}}<script nonce="{{cspNonce}}">
+  (function () {
+    var root = document.documentElement;
+    var body = document.body;
+    var themeAllowed = root.getAttribute('data-allow-theme') === '1';
+    // The visitor ranges, in pill order. Each needs a pill, a
+    // data-range-<range> JSON strip on every .js-strip and a
+    // data-range-value-<range> on every uptime figure.
+    var RANGES = ['24h', '7d', '30d', '90d'];
+    var RANGE_TEXT = {
+      '24h': { start: '24 hours ago', end: 'Now', label: 'last 24 hours' },
+      '7d': { start: '7 days ago', end: 'Today', label: 'last 7 days' },
+      '30d': { start: '30 days ago', end: 'Today', label: 'last 30 days' },
+      '90d': { start: '90 days ago', end: 'Today', label: 'last 90 days' }
+    };
+    var MODES = ['default', 'compact', 'kiosk'];
+    var STRIP_CELLS = 90;
+    var defaultRange = RANGES.indexOf(body.dataset.defaultRange) >= 0 ? body.dataset.defaultRange : '24h';
+    var activeRange = defaultRange;
+    var refreshTimer = null;
+    var refreshInFlight = false;
+    var refreshQueued = false;
+
+    function all(selector) { return Array.prototype.slice.call(document.querySelectorAll(selector)); }
+
+    function setParam(name, value, fallback) {
+      var params = new URLSearchParams(window.location.search);
+      if (!value || value === fallback) params.delete(name); else params.set(name, value);
+      var query = params.toString();
+      window.history.replaceState({}, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+    }
+
+    function store(key, value) { try { window.localStorage.setItem(key, value); } catch (e) {} }
+
+    // ---- Uptime strips and range ---------------------------------------
+
+    function escapeAttr(value) {
+      return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function barTone(uptime) {
+      if (typeof uptime !== 'number' || uptime < 0) return 'none';
+      if (uptime >= 99) return 'ok';
+      if (uptime >= 95) return 'warn';
+      return 'down';
+    }
+
+    // The same text the server renders into data-tip (render_classic.go).
+    function barTip(point) {
+      var value = typeof point.uptime === 'number' && point.uptime >= 0 ? point.uptime.toFixed(2) + '%' : 'No data';
+      var label = String(point.label || '').trim();
+      return label ? label + ' · ' + value : value;
+    }
+
+    function renderStrip(el, range) {
+      var points;
+      try { points = JSON.parse(el.getAttribute('data-range-' + range) || '[]'); } catch (e) { points = []; }
+      if (!Array.isArray(points)) points = [];
+      // About STRIP_CELLS cells whatever the range: each native slot (an
+      // hour or a day) is repeated, the way render_classic.go draws it.
+      var target = parseInt(el.getAttribute('data-max-cells') || '', 10) || STRIP_CELLS;
+      if (points.length > target) points = points.slice(points.length - target);
+      var repeat = points.length ? Math.max(1, Math.floor(target / points.length)) : 1;
+      el.innerHTML = points.map(function (point) {
+        var cell = '<i data-t="' + barTone(point.uptime) + '" data-tip="' + escapeAttr(barTip(point)) + '"></i>';
+        return new Array(repeat + 1).join(cell);
+      }).join('');
+      if (el.getAttribute('role') === 'img') el.setAttribute('aria-label', 'Uptime history, ' + RANGE_TEXT[range].label);
+    }
+
+    function applyRange(range, syncUrl) {
+      activeRange = RANGES.indexOf(range) >= 0 ? range : defaultRange;
+      all('[data-range-pill]').forEach(function (btn) {
+        btn.setAttribute('aria-pressed', btn.getAttribute('data-range-pill') === activeRange ? 'true' : 'false');
+      });
+      all('.js-strip').forEach(function (el) { renderStrip(el, activeRange); });
+      all('[data-uptime]').forEach(function (el) {
+        var value = el.getAttribute('data-range-value-' + activeRange) || '—';
+        el.textContent = value === '—' ? 'No data' : value + ' uptime';
+      });
+      all('[data-uptime-value]').forEach(function (el) {
+        el.textContent = el.getAttribute('data-range-value-' + activeRange) || '—';
+      });
+      all('[data-axis-start]').forEach(function (el) { el.textContent = RANGE_TEXT[activeRange].start; });
+      all('[data-axis-end]').forEach(function (el) { el.textContent = RANGE_TEXT[activeRange].end; });
+      if (syncUrl) setParam('range', activeRange, defaultRange);
+    }
+
+    function setupTooltip() {
+      var tip = document.createElement('div');
+      tip.className = 'tip';
+      tip.setAttribute('aria-hidden', 'true');
+      tip.hidden = true;
+      body.appendChild(tip);
+      function hide() { tip.hidden = true; }
+      document.addEventListener('mouseover', function (event) {
+        var bar = event.target.closest ? event.target.closest('.js-strip i') : null;
+        if (!bar) { hide(); return; }
+        tip.textContent = bar.getAttribute('data-tip') || '';
+        tip.hidden = false;
+        var rect = bar.getBoundingClientRect();
+        var half = tip.offsetWidth / 2;
+        tip.style.left = Math.max(half + 8, Math.min(rect.left + rect.width / 2, window.innerWidth - half - 8)) + 'px';
+        tip.style.top = Math.max(rect.top - 6, tip.offsetHeight + 8) + 'px';
+      });
+      document.addEventListener('mouseout', function (event) { if (!event.relatedTarget) hide(); });
+      document.addEventListener('scroll', hide, true);
+    }
+
+    // ---- Theme and view -------------------------------------------------
+
+    function currentTheme() {
+      var theme = root.getAttribute('data-theme');
+      if (theme === 'light' || theme === 'dark') return theme;
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+
+    function labelThemeButton() {
+      var btn = document.getElementById('themeToggleBtn');
+      if (!btn) return;
+      var target = currentTheme() === 'dark' ? 'light' : 'dark';
+      btn.setAttribute('aria-label', 'Switch to ' + target + ' theme');
+      btn.title = 'Switch to ' + target + ' theme (T)';
+    }
+
+    function toggleTheme() {
+      if (!themeAllowed) return;
+      var next = currentTheme() === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      store('status-page-theme', next);
+      labelThemeButton();
+    }
+
+    function currentMode() {
+      var mode = root.getAttribute('data-mode');
+      return MODES.indexOf(mode) >= 0 ? mode : 'default';
+    }
+
+    function setMode(mode, syncUrl) {
+      var next = MODES.indexOf(mode) >= 0 ? mode : 'default';
+      if (next === 'default') root.removeAttribute('data-mode'); else root.setAttribute('data-mode', next);
+      all('[data-mode]').forEach(function (btn) {
+        if (btn.tagName === 'BUTTON') btn.setAttribute('aria-pressed', btn.getAttribute('data-mode') === next ? 'true' : 'false');
+      });
+      if (syncUrl) {
+        setParam('mode', next, 'default');
+        store('status-page-mode', next);
+      }
+      if (next === 'kiosk') { updateClock(); scheduleFit(); }
+    }
+
+    // Kiosk fit: tiles keep their CSS size; only when the wall would scroll
+    // does the density rise, each step narrowing the tiles and shedding
+    // detail. Past the last step the body scrolls. Strips get as many cells
+    // as the tile width holds.
+    var fitScheduled = false;
+    function fitKioskStrips(view) {
+      var tile = document.querySelector('#kioskBody .k-tile');
+      if (!tile) return;
+      var scale = parseFloat(window.getComputedStyle(view).getPropertyValue('--k-s')) || 1;
+      var cells = String(Math.max(12, Math.min(60, Math.floor((tile.clientWidth - 32 * scale) / (4 + 2 * scale)))));
+      all('#kioskBody .k-strip').forEach(function (el) {
+        if (el.getAttribute('data-max-cells') !== cells) {
+          el.setAttribute('data-max-cells', cells);
+          renderStrip(el, activeRange);
+        }
+      });
+    }
+    function fitKiosk() {
+      if (currentMode() !== 'kiosk') return;
+      var view = document.getElementById('kioskView');
+      var bodyEl = document.getElementById('kioskBody');
+      if (!view || !bodyEl) return;
+      for (var tier = 1; tier <= 5; tier++) {
+        view.setAttribute('data-density', String(tier));
+        if (bodyEl.scrollHeight <= bodyEl.clientHeight + 1) break;
+      }
+      fitKioskStrips(view);
+    }
+    function scheduleFit() {
+      if (fitScheduled) return;
+      fitScheduled = true;
+      window.requestAnimationFrame(function () { fitScheduled = false; fitKiosk(); });
+    }
+
+    function updateClock() {
+      var el = document.getElementById('kioskTime');
+      if (el) el.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // ---- Times ----------------------------------------------------------
+
+    function plural(n, unit) { return n + ' ' + unit + (n === 1 ? '' : 's'); }
+
+    function ago(seconds) {
+      if (seconds < 60) return plural(Math.max(0, Math.floor(seconds)), 'second') + ' ago';
+      if (seconds < 3600) return plural(Math.floor(seconds / 60), 'minute') + ' ago';
+      if (seconds < 86400) return plural(Math.floor(seconds / 3600), 'hour') + ' ago';
+      return plural(Math.floor(seconds / 86400), 'day') + ' ago';
+    }
+
+    // "Updated N seconds ago" from the render time, so a cached render says
+    // how old it is; last-check times age the same way.
+    function updateAges() {
+      var now = Date.now();
+      all('.js-updated').forEach(function (el) {
+        var at = Date.parse(el.getAttribute('data-at') || '');
+        if (!isNaN(at)) el.textContent = 'Updated ' + ago((now - at) / 1000);
+      });
+      all('[data-ago]').forEach(function (el) {
+        var unix = parseInt(el.getAttribute('data-ago') || '0', 10);
+        if (!unix) return;
+        var seconds = now / 1000 - unix;
+        el.textContent = seconds < 60 ? 'Just now' : ago(seconds);
+      });
+    }
+
+    var fmt = {};
+    try {
+      fmt.time = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+      fmt.dayTime = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      fmt.utcTime = new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
+      fmt.utcDayTime = new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch (e) { fmt = null; }
+
+    function isoDay(d) {
+      var m = d.getMonth() + 1, day = d.getDate();
+      return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (day < 10 ? '0' : '') + day;
+    }
+
+    // Times arrive in UTC (what visitors without scripts see). Show the
+    // visitor's own time: update times plainly, prefixed with the date when
+    // it is not the day they are listed under; maintenance windows with the
+    // UTC text alongside. Idempotent, so it reruns after a live refresh.
+    function localizeTimes() {
+      if (!fmt) return;
+      var valid = function (d) { return !isNaN(d.getTime()); };
+      var isUTC = function (d) { return d.getTimezoneOffset() === 0; };
+      all('time[data-at]').forEach(function (el) {
+        var at = new Date(el.getAttribute('data-at') || '');
+        if (!valid(at) || isUTC(at)) return;
+        el.textContent = isoDay(at) === el.getAttribute('data-day') ? fmt.time.format(at) : fmt.dayTime.format(at);
+      });
+      all('.js-maint-range').forEach(function (el) {
+        var start = new Date(el.getAttribute('data-start') || '');
+        var end = new Date(el.getAttribute('data-end') || '');
+        if (!valid(start) || !valid(end) || (isUTC(start) && isUTC(end))) return;
+        if (!el.hasAttribute('data-utc')) el.setAttribute('data-utc', el.textContent);
+        el.textContent = fmt.dayTime.format(start) + ' – ' + (start.toDateString() === end.toDateString() ? fmt.time.format(end) : fmt.dayTime.format(end));
+        var sub = el.nextElementSibling;
+        if (sub) { sub.textContent = el.getAttribute('data-utc'); sub.hidden = false; }
+      });
+      all('.js-maint-next').forEach(function (el) {
+        var starts = (el.getAttribute('data-starts') || '').split(' ').filter(Boolean)
+          .map(function (s) { return new Date(s); }).filter(valid);
+        if (!starts.length || starts.every(isUTC)) return;
+        el.textContent = 'Repeats · next: ' + starts.map(function (d) {
+          return fmt.dayTime.format(d) + ' (' + (d.getUTCDate() === d.getDate() ? fmt.utcTime : fmt.utcDayTime).format(d) + ' UTC)';
+        }).join(', ');
+      });
+    }
+
+    // ---- Controls -------------------------------------------------------
+
+    function setupControls() {
+      document.addEventListener('click', function (event) {
+        var target = event.target;
+        if (!target.closest) return;
+        var rangeBtn = target.closest('[data-range-pill]');
+        if (rangeBtn) { applyRange(rangeBtn.getAttribute('data-range-pill'), true); return; }
+        var modeBtn = target.closest('button[data-mode]');
+        if (modeBtn) { setMode(modeBtn.getAttribute('data-mode'), true); return; }
+        if (target.closest('#themeToggleBtn')) { toggleTheme(); return; }
+        if (target.closest('#kioskExitBtn')) { setMode('default', true); return; }
+        if (target.closest('#subscribeJump')) {
+          var input = document.getElementById('subscribeEmail');
+          if (input) window.setTimeout(function () { input.focus({ preventScroll: true }); }, 0);
+        }
+      });
+      document.addEventListener('keydown', function (event) {
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        var tag = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : '';
+        if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+        if (event.key === '1') setMode('default', true);
+        else if (event.key === '2') setMode('compact', true);
+        else if (event.key === 'k' || event.key === 'K') setMode('kiosk', true);
+        else if ((event.key === 't' || event.key === 'T') && themeAllowed) toggleTheme();
+        else if (event.key === 'Escape' && currentMode() === 'kiosk') setMode('default', true);
+      });
+    }
+
+    // ---- Live refresh ---------------------------------------------------
+
+    var LIVE_REGIONS = ['liveTop', 'servicesList', 'maintenanceSection', 'historySection', 'kioskTop', 'kioskBody'];
+
+    function replaceRegion(id, nextDoc) {
+      var current = document.getElementById(id);
+      var incoming = nextDoc.getElementById(id);
+      if (current && incoming && current.parentNode) current.parentNode.replaceChild(document.importNode(incoming, true), current);
+    }
+
+    function refreshLiveContent() {
+      if (refreshInFlight) { refreshQueued = true; return; }
+      refreshInFlight = true;
+      refreshQueued = false;
+      var open = all('details.comp[open]').map(function (el) { return el.getAttribute('data-monitor-id'); });
+      fetch(window.location.pathname + window.location.search, {
+        cache: 'no-store',
+        headers: { 'X-Requested-With': 'status-page-live-refresh' }
+      }).then(function (response) {
+        if (response.status === 401 || response.status === 404) {
+          // The page went away or this visitor's access ended: show that
+          // rather than freezing on the last good render.
+          window.location.reload();
+          return null;
+        }
+        return response.ok ? response.text() : null;
+      }).then(function (html) {
+        if (!html) return;
+        var nextDoc = new DOMParser().parseFromString(html, 'text/html');
+        document.title = nextDoc.title || document.title;
+        LIVE_REGIONS.forEach(function (id) { replaceRegion(id, nextDoc); });
+        all('details.comp').forEach(function (el) { el.open = open.indexOf(el.getAttribute('data-monitor-id')) >= 0; });
+        applyRange(activeRange, false);
+        localizeTimes();
+        updateAges();
+        updateClock();
+        scheduleFit();
+      }).catch(function () {}).then(function () {
+        refreshInFlight = false;
+        if (refreshQueued) { refreshQueued = false; refreshLiveContent(); }
+      });
+    }
+
+    function setupLiveRefresh() {
+      if (!body.dataset.statusPageSlug || typeof EventSource === 'undefined') return;
+      try {
+        // Derived from the current path so the stream is found on a custom
+        // domain and behind a path prefix; the draft preview sits one level
+        // below its page.
+        var pagePath = window.location.pathname.replace(/\/+$/, '').replace(/\/preview\/draft$/, '');
+        var source = new EventSource(pagePath + '/stream');
+        source.addEventListener('update', function () {
+          if (refreshTimer) window.clearTimeout(refreshTimer);
+          refreshTimer = window.setTimeout(function () { refreshTimer = null; refreshLiveContent(); }, 900);
+        });
+        source.addEventListener('error', function () {
+          // CLOSED means the server refused the reconnect: check the page,
+          // which reloads if access ended.
+          if (source.readyState === EventSource.CLOSED) refreshLiveContent();
+        });
+      } catch (e) {}
+    }
+
+    // ---- Browser notifications (Web Push) -------------------------------
+    //
+    // Same protocol as the default template: register the worker served at
+    // /public/status/sw.js with a scope narrowed to this page, and store the
+    // subscription server-side.
+
+    var pushSlug = body.dataset.statusPageSlug || '';
+    var PUSH_STATE_KEY = 'status-page-push-' + pushSlug;
+    var PUSH_SEEN_KEY = 'status-page-push-seen-' + pushSlug;
+    var PUSH_LABELS = {
+      on: { aria: 'Turn off notifications', title: 'Notifications are on for this page. Click to turn them off.' },
+      off: { aria: 'Enable notifications', title: 'Get a browser notification when a service on this page goes down or recovers.' },
+      blocked: { aria: 'Notifications blocked', title: 'Notifications are blocked for this site in your browser settings.' },
+      unavailable: { aria: 'Notifications unavailable', title: 'Add this page to your Home Screen to enable notifications.' }
+    };
+
+    function pushSupported() {
+      return body.dataset.pushEnabled === '1' && !!body.dataset.pushKey && window.isSecureContext &&
+        'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    }
+
+    function iosNeedsHomeScreen() {
+      var iOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      return iOS && !window.navigator.standalone;
+    }
+
+    function pushPaths() {
+      var path = window.location.pathname.replace(/\/+$/, '');
+      var base = path.replace(/\/[^/]*$/, '');
+      return { worker: base + '/sw.js', scope: path + '/', subscribe: path + '/push/subscribe', unsubscribe: path + '/push/unsubscribe' };
+    }
+
+    function urlBase64ToUint8Array(value) {
+      var padded = (value + '='.repeat((4 - (value.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+      var raw = window.atob(padded);
+      var out = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
+      return out;
+    }
+
+    function setPushButton(state) {
+      var btn = document.getElementById('pushToggleBtn');
+      if (!btn) return;
+      var copy = PUSH_LABELS[state] || PUSH_LABELS.off;
+      btn.hidden = false;
+      btn.setAttribute('aria-pressed', state === 'on' ? 'true' : 'false');
+      btn.setAttribute('aria-label', copy.aria);
+      btn.title = copy.title;
+      btn.disabled = state === 'blocked' || state === 'unavailable';
+      var slash = document.getElementById('pushBellSlash');
+      if (slash) slash.hidden = state !== 'blocked';
+    }
+
+    function postPushJSON(url, payload) {
+      return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    }
+
+    function refreshPushSubscription(registration) {
+      // Touch the server roughly daily so the stale sweep keeps an active
+      // subscriber.
+      var last = 0;
+      try { last = parseInt(window.localStorage.getItem(PUSH_SEEN_KEY) || '0', 10) || 0; } catch (e) {}
+      if (Date.now() - last < 24 * 60 * 60 * 1000) return;
+      registration.pushManager.getSubscription().then(function (sub) {
+        if (!sub) return;
+        return postPushJSON(pushPaths().subscribe, sub.toJSON()).then(function () { store(PUSH_SEEN_KEY, String(Date.now())); });
+      }).catch(function () {});
+    }
+
+    function enablePush() {
+      // requestPermission must run from the click itself (Safari, Firefox).
+      return Notification.requestPermission().then(function (permission) {
+        if (permission === 'denied') { setPushButton('blocked'); return; }
+        if (permission !== 'granted') { setPushButton('off'); return; }
+        var paths = pushPaths();
+        return navigator.serviceWorker.register(paths.worker, { scope: paths.scope }).then(function (registration) {
+          return registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(body.dataset.pushKey) });
+        }).then(function (sub) {
+          return postPushJSON(pushPaths().subscribe, sub.toJSON()).then(function (res) {
+            if (!res.ok) throw new Error('subscribe rejected');
+            store(PUSH_STATE_KEY, '1');
+            store(PUSH_SEEN_KEY, String(Date.now()));
+            setPushButton('on');
+          });
+        });
+      }).catch(function () { setPushButton('off'); });
+    }
+
+    function disablePush() {
+      // getRegistration(scope), not serviceWorker.ready: the worker's scope
+      // does not cover the page URL itself, so ready never resolves.
+      return navigator.serviceWorker.getRegistration(pushPaths().scope).then(function (registration) {
+        return registration ? registration.pushManager.getSubscription() : null;
+      }).then(function (sub) {
+        if (!sub) return;
+        // Tell the server before unsubscribing locally, so a failed request
+        // never leaves a row the visitor cannot remove.
+        return postPushJSON(pushPaths().unsubscribe, { endpoint: sub.endpoint }).then(function () { return sub.unsubscribe(); });
+      }).then(function () {
+        try { window.localStorage.removeItem(PUSH_STATE_KEY); } catch (e) {}
+        setPushButton('off');
+      }).catch(function () { setPushButton('off'); });
+    }
+
+    function setupPush() {
+      var btn = document.getElementById('pushToggleBtn');
+      if (!btn || !pushSupported()) return;
+      if (iosNeedsHomeScreen()) { setPushButton('unavailable'); return; }
+      if (Notification.permission === 'denied') { setPushButton('blocked'); return; }
+      // The browser is the source of truth: permission can be revoked in its
+      // settings without the page knowing.
+      navigator.serviceWorker.getRegistration(pushPaths().scope).then(function (registration) {
+        if (!registration) { setPushButton('off'); return; }
+        return registration.pushManager.getSubscription().then(function (sub) {
+          setPushButton(sub ? 'on' : 'off');
+          if (sub) refreshPushSubscription(registration);
+        });
+      }).catch(function () { setPushButton('off'); });
+      btn.addEventListener('click', function () {
+        if (btn.disabled) return;
+        var on = btn.getAttribute('aria-pressed') === 'true';
+        btn.disabled = true;
+        var done = function () { btn.disabled = false; };
+        (on ? disablePush() : enablePush()).then(done, done);
+      });
+    }
+
+    // ---- Start ----------------------------------------------------------
+
+    var requested = new URLSearchParams(window.location.search).get('range');
+    applyRange(RANGES.indexOf(requested) >= 0 ? requested : defaultRange, false);
+    setMode(currentMode(), false);
+    labelThemeButton();
+    if (window.matchMedia) {
+      var scheme = window.matchMedia('(prefers-color-scheme: dark)');
+      if (scheme.addEventListener) scheme.addEventListener('change', labelThemeButton);
+    }
+    setupControls();
+    setupTooltip();
+    localizeTimes();
+    updateAges();
+    window.setInterval(updateAges, 1000);
+    window.setInterval(updateClock, 15000);
+    window.addEventListener('resize', scheduleFit);
+    setupLiveRefresh();
+    setupPush();
+  })();
+</script>
+</body>
+</html>
+{{define "classicBannerIcon"}}{{if eq . "ok"}}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>{{else if eq . "warn"}}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" focusable="false"><path d="M12 6v8M12 18h.01"/></svg>{{else if eq . "down"}}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" focusable="false"><path d="M7 7l10 10M17 7L7 17"/></svg>{{else if eq . "maint"}}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L4 17v3h3l5.2-5.2a4 4 0 0 0 5.3-5.3L15 12l-3-3z"/></svg>{{else}}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M9.2 9a3 3 0 0 1 5.7 1c0 2-3 2.6-3 4.5M12 18h.01"/></svg>{{end}}{{end}}
+{{define "classicUpdates"}}<ul class="updates">{{range .}}<li>{{if .AtISO}}<time datetime="{{.AtISO}}" data-at="{{.AtISO}}" data-day="{{.DayISO}}" title="{{.TimeText}}">{{.TimeText}}</time>{{else}}<span></span>{{end}}<div><b>{{.StateLabel}}</b> <span>— {{.Message}}</span></div></li>{{end}}</ul>{{end}}

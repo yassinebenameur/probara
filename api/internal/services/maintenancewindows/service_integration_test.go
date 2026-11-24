@@ -135,16 +135,38 @@ func TestMaintenanceWindowCRUD(t *testing.T) {
 		require.ErrorIs(t, err, maintenancewindows.ErrNotFound)
 	})
 
-	t.Run("Delete cascades join rows", func(t *testing.T) {
+	// S-M5: a window that already covered time is history. Delete hides it
+	// and stops it now, but keeps its started occurrence and targets.
+	t.Run("Delete keeps history of a started window", func(t *testing.T) {
 		require.NoError(t, svc.Delete(ctx, tenantID, windowID))
 		_, err := svc.Get(ctx, tenantID, windowID)
 		require.ErrorIs(t, err, maintenancewindows.ErrNotFound)
+		require.ErrorIs(t, svc.Delete(ctx, tenantID, windowID), maintenancewindows.ErrNotFound)
 
-		var joinCount int
+		var links, occurrences int
+		var endedBy time.Time
 		require.NoError(t, dbClient.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM maintenance_window_monitors WHERE maintenance_window_id = $1`,
-			windowID).Scan(&joinCount))
-		require.Equal(t, 0, joinCount)
+			windowID).Scan(&links))
+		require.NoError(t, dbClient.QueryRowContext(ctx,
+			`SELECT COUNT(*), MAX(ends_at) FROM maintenance_window_occurrences WHERE window_id = $1`,
+			windowID).Scan(&occurrences, &endedBy))
+		require.Equal(t, 1, links)
+		require.Equal(t, 1, occurrences)
+		require.True(t, endedBy.Before(time.Now().Add(time.Second)), "the running occurrence ends at the delete")
+	})
+
+	t.Run("Delete removes a window that never started", func(t *testing.T) {
+		w, err := svc.Create(ctx, tenantID, &models.CreateMaintenanceWindowRequest{
+			Title: "later", StartsAt: now.Add(48 * time.Hour), EndsAt: now.Add(49 * time.Hour),
+			MonitorIDs: []string{monitorA.String()},
+		})
+		require.NoError(t, err)
+		require.NoError(t, svc.Delete(ctx, tenantID, w.ID))
+		var rows int
+		require.NoError(t, dbClient.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM maintenance_windows WHERE id = $1`, w.ID).Scan(&rows))
+		require.Equal(t, 0, rows)
 	})
 }
 
@@ -192,6 +214,7 @@ func TestMaintenanceWindowListOrderPerStatus(t *testing.T) {
 			INSERT INTO maintenance_windows (id, tenant_id, title, description, starts_at, ends_at)
 			VALUES ($1, $2, $3, '', $4, $5)`, id, tenantID, title, start, end)
 		require.NoError(t, err)
+		testutil.MaterializeOneOffMaintenance(ctx, t, dbClient, id)
 		_, err = dbClient.ExecContext(ctx, `
 			INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id) VALUES ($1, $2)`, id, monitorID)
 		require.NoError(t, err)

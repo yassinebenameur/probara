@@ -26,6 +26,7 @@ export function storedMonitor(type: MonitorType, config: MonitorConfig, override
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-02T00:00:00Z',
     consecutive_failures_threshold: 4,
+    recovery_threshold: 3,
     notification_mode: 'custom',
     dependency_suppression: 'off',
     notification_channels: [{ channel_id: 'ch-1', channel_name: 'On-call', channel_type: 'slack', delay_seconds: 300 }],
@@ -52,6 +53,7 @@ export function cloneSource(
     enabled: false,
     tags: ['copied', 'clone'],
     consecutive_failures_threshold: 5,
+    recovery_threshold: 4,
     notification_mode: 'custom',
     dependency_suppression: 'off',
     notification_channels: [{ channel_id: 'ch-7', delay_seconds: 30 }],
@@ -74,6 +76,7 @@ export const CLONED_TAIL = {
 /** The shared request fields storedMonitor round-trips to, in wire order. */
 export const STORED_ALERTING = {
   consecutive_failures_threshold: 4,
+  recovery_threshold: 3,
   notification_mode: 'custom',
   dependency_suppression: 'off',
   notification_channels: [{ channel_id: 'ch-1', channel_name: 'On-call', channel_type: 'slack', delay_seconds: 300 }],
@@ -82,6 +85,7 @@ export const STORED_ALERTING = {
 /** Defaults a fresh create submits for the shared alerting fields. */
 export const DEFAULT_ALERTING = {
   consecutive_failures_threshold: 2,
+  recovery_threshold: 1,
   notification_mode: 'default',
   dependency_suppression: 'inherit',
   notification_channels: [],

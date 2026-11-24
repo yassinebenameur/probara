@@ -17,6 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 var (
@@ -25,7 +26,7 @@ var (
 	// ErrDuplicate is returned when an equivalent mapping already exists.
 	ErrDuplicate = errors.New("an equivalent OIDC group mapping already exists")
 	// ErrTenantNotFound is returned when the referenced tenant does not exist.
-	ErrTenantNotFound = errors.New("tenant not found")
+	ErrTenantNotFound = errors.New("workspace not found")
 	// ErrInvalidMapping is returned for validation failures.
 	ErrInvalidMapping = errors.New("invalid OIDC group mapping")
 )
@@ -152,8 +153,11 @@ func (s *Service) Create(ctx context.Context, req *models.CreateOIDCGroupMapping
 
 	row := s.db.QueryRowContext(ctx, `
 		WITH inserted AS (
+			-- A workspace mapping needs a live workspace: a deleted one's row
+			-- still satisfies the foreign key until it is purged.
 			INSERT INTO oidc_group_mappings (group_name, label, tenant_id, role)
-			VALUES ($1, $2, $3, $4)
+			SELECT $1, $2, $3::uuid, $4
+			WHERE $3::uuid IS NULL OR `+tenancy.LiveTenantSQL("$3::uuid")+`
 			RETURNING id, group_name, label, tenant_id, role, created_at, updated_at
 		)
 		SELECT m.id, m.group_name, m.label, m.tenant_id, t.name, m.role, m.created_at, m.updated_at
@@ -165,7 +169,7 @@ func (s *Service) Create(ctx context.Context, req *models.CreateOIDCGroupMapping
 		if pgerr.IsUniqueViolation(err) {
 			return nil, ErrDuplicate
 		}
-		if isForeignKeyViolation(err) {
+		if isForeignKeyViolation(err) || errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrTenantNotFound
 		}
 		return nil, fmt.Errorf("failed to create OIDC group mapping: %w", err)

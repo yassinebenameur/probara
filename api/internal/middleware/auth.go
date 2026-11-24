@@ -40,26 +40,46 @@ func GetAdminID(ctx context.Context) (string, error) {
 
 // identityQuery resolves the admin's platform role plus their membership role
 // for the requested tenant in one round trip. $2 is uuid.Nil when no tenant
-// was requested (m.role comes back NULL).
+// was requested (m.role comes back NULL). The last column is true when a
+// tenant was requested and no live workspace has that ID: deleted (soft, or
+// already purged) or never created. Every caller is then refused,
+// superadmins included.
+//
+// Unlike tenancy.LiveTenantSQL, it reads deleted_at through to_jsonb, the one
+// lookup kept tolerant of a schema without the column: a missing column here
+// would land in the missing-schema fallback below, which treats every admin
+// as a superadmin. It is a single primary-key probe, so the expression costs
+// the planner nothing.
 const identityQuery = `
-	SELECT u.platform_role, u.disabled_at, m.role
+	SELECT u.platform_role, u.disabled_at, m.role,
+		$2::uuid <> '00000000-0000-0000-0000-000000000000'::uuid AND NOT EXISTS (
+			SELECT 1 FROM tenants requested
+			WHERE requested.id = $2 AND to_jsonb(requested) ->> 'deleted_at' IS NULL)
 	FROM admin_users u
 	LEFT JOIN tenant_memberships m ON m.admin_user_id = u.id AND m.tenant_id = $2
 	WHERE u.id = $1
 `
 
 // AuthMiddleware validates admin JWT cookies or API keys and injects
-// identity (tenant, platform role, tenant role, scope) into context.
-func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) func(http.Handler) http.Handler {
+// identity (tenant, platform role, tenant role, scope) into context. A
+// request the cookie authenticates is the one a browser attaches by itself,
+// so its unsafe methods must also pass origins (origin.go) -- before anything
+// is looked up.
+func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string, origins *OriginPolicy) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			applyCORSHeaders(w, r)
-
 			// Prefer admin JWT cookie if present
 			if cookie, err := r.Cookie("admin_access"); err == nil && cookie.Value != "" {
 				claims, err := auth.ParseAdminToken(cookie.Value, jwtSecret)
 				if err == nil && claims.AdminID != "" {
 					if adminID, err := uuid.Parse(claims.AdminID); err == nil {
+						if !origins.admitCookieRequest(w, r) {
+							return
+						}
+						r, ok := checkSession(w, r, dbClient, log, adminID, claims)
+						if !ok {
+							return
+						}
 						handleAdminRequest(w, r, next, dbClient, log, adminID)
 						return
 					}
@@ -97,6 +117,11 @@ func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) f
 			ctx = ctxpkg.WithActorType(ctx, ctxpkg.ActorTypeAPIKey)
 			ctx = ctxpkg.WithAPIKeyID(ctx, identity.KeyID)
 			ctx = ctxpkg.WithAuthScope(ctx, identity.Scope)
+			var keyExpiry time.Time
+			if identity.ExpiresAt != nil {
+				keyExpiry = *identity.ExpiresAt
+			}
+			ctx = WithCredentialCheck(ctx, apiKeyRecheck(dbClient, identity.KeyID), keyExpiry)
 
 			touchAPIKeyLastUsed(dbClient, identity.KeyID)
 
@@ -114,6 +139,7 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 	if tenantValue != "" {
 		parsed, err := uuid.Parse(tenantValue)
 		if err != nil {
+			noteAuthenticatedRefusal(r, adminID)
 			writeBadRequestError(w, "invalid tenant identifier")
 			return
 		}
@@ -123,13 +149,15 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 	var platformRole string
 	var disabledAt *time.Time
 	var membershipRole sql.NullString
+	var tenantGone bool
 
 	err := dbClient.QueryRowContext(r.Context(), identityQuery, adminID, tenantUUID).
-		Scan(&platformRole, &disabledAt, &membershipRole)
+		Scan(&platformRole, &disabledAt, &membershipRole, &tenantGone)
 	switch {
 	case pgerr.IsMissingSchema(err):
-		// Deploy-ordering tolerance: migrations run as a post-upgrade job, so
-		// this binary may briefly see the old schema. Pre-migration every
+		// Deploy-ordering tolerance: the chart and Compose migrate before new
+		// pods start, but a deployment that skips that step can run this
+		// binary on the old schema. Pre-migration every
 		// admin is a global superuser, so legacy behavior is correct here.
 		log.WithError(err).Warn("RBAC schema not migrated yet; treating admin as superadmin")
 		platformRole = auth.PlatformRoleSuperadmin
@@ -146,8 +174,17 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 		writeAuthError(w, "account disabled")
 		return
 	}
+	if tenantGone {
+		// A deleted workspace is gone for everyone, at once, and stays gone
+		// once purged: its routes answer as for an ID that never existed. The
+		// web client recognises the code and re-selects a workspace.
+		noteAuthenticatedRefusal(r, adminID)
+		writeWorkspaceNotFound(w)
+		return
+	}
 
 	ctx := ctxpkg.WithAdminID(r.Context(), adminID.String())
+	ctx = WithCredentialCheck(ctx, adminIdentityRecheck(dbClient, adminID, tenantUUID), time.Time{})
 	ctx = ctxpkg.WithActorType(ctx, ctxpkg.ActorTypeAdminUser)
 	ctx = ctxpkg.WithPlatformRole(ctx, platformRole)
 
@@ -166,7 +203,10 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 	// with identity only; tenant-dependent handlers fail via GetTenantID.
 	if tenantUUID != uuid.Nil {
 		if !membershipRole.Valid {
-			writeForbiddenError(w, "no access to this tenant")
+			// The same answer as for a deleted or unknown workspace, so a
+			// member learns nothing about workspaces they cannot open.
+			noteAuthenticatedRefusal(r, adminID)
+			writeWorkspaceNotFound(w)
 			return
 		}
 		ctx = ctxpkg.WithTenantID(ctx, tenantUUID.String())
@@ -205,6 +245,7 @@ func handleMCPTokenRequest(w http.ResponseWriter, r *http.Request, next http.Han
 		r = r.Clone(r.Context())
 		r.Header.Set("X-Tenant-ID", identity.TenantID.String())
 	}
+	r = r.WithContext(WithCredentialCheck(r.Context(), mcpTokenRecheck(dbClient, token), time.Time{}))
 	scoped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r.WithContext(ctxpkg.WithAuthScope(r.Context(), identity.Scope)))
 	})
@@ -237,14 +278,6 @@ func touchAPIKeyLastUsed(dbClient *db.Client, keyID string) {
 	}()
 }
 
-func applyCORSHeaders(w http.ResponseWriter, r *http.Request) {
-	if origin := r.Header.Get("Origin"); origin != "" {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Vary", "Origin")
-	}
-}
-
 func writeAuthError(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
@@ -255,6 +288,17 @@ func writeForbiddenError(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	w.Write([]byte(`{"error":"forbidden","message":"` + message + `"}`))
+}
+
+// WorkspaceNotFoundCode is the error code of a request scoped to a workspace
+// the caller cannot open: deleted, never created, or (for a member) one they
+// do not belong to.
+const WorkspaceNotFoundCode = "workspace_not_found"
+
+func writeWorkspaceNotFound(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	w.Write([]byte(`{"error":"` + WorkspaceNotFoundCode + `","message":"workspace not found"}`))
 }
 
 func writeBadRequestError(w http.ResponseWriter, message string) {

@@ -34,6 +34,7 @@ import (
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -124,6 +125,7 @@ func (s *Scheduler) watchdogActivePass(ctx context.Context) error {
 		rows, err := s.db.QueryContext(ctx, `
 			SELECT m.id FROM monitors m
 			WHERE m.enabled = TRUE AND m.deleted_at IS NULL
+			  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 			  AND m.type <> ALL($5)
 			  AND m.current_state <> 'unknown'
 			  AND NOT EXISTS (SELECT 1 FROM monitor_locations ml WHERE ml.monitor_id = m.id)
@@ -177,7 +179,10 @@ func (s *Scheduler) markMonitorUnknown(ctx context.Context, monitorID uuid.UUID)
 
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE monitors
-		SET current_state = 'unknown', consecutive_failures = 0,
+		SET current_state = 'unknown', consecutive_failures = 0, consecutive_successes = 0,
+			-- A stream that was down (confirmed or recovering) still owes a
+			-- recovery confirmation when results resume (S-T7).
+			recovery_pending = (current_state = 'down' OR recovery_pending),
 			last_state_change_at = NOW(), updated_at = NOW()
 		WHERE id = $1
 	`, monitorID); err != nil {
@@ -213,6 +218,7 @@ func (s *Scheduler) watchdogQuorumPass(ctx context.Context) error {
 			LEFT JOIN monitor_location_state mls
 				ON mls.monitor_id = m.id AND mls.location_id = ml.location_id AND l.id IS NOT NULL
 			WHERE m.enabled = TRUE AND m.deleted_at IS NULL
+			  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 			  AND m.id > $4
 			  AND (l.id IS NULL
 			       OR mls.last_check_at IS NULL
@@ -262,22 +268,33 @@ func (s *Scheduler) reaggregateMonitor(ctx context.Context, monitorID uuid.UUID)
 		return err
 	}
 
-	counts, maxFailures, err := monitorstate.LoadFreshLocationCounts(
-		ctx, tx, monitorID, monitorstate.FreshnessHorizonSeconds(intervalSeconds))
+	freshness := monitorstate.FreshnessHorizonSeconds(intervalSeconds)
+	// Locations that were down when their evidence went stale drop their
+	// recovery count but keep owing the confirmation (S-T7).
+	if err := monitorstate.ResetStaleDownLocationsTx(ctx, tx, monitorID, freshness); err != nil {
+		return err
+	}
+	fresh, err := monitorstate.LoadFreshLocationCounts(ctx, tx, monitorID, freshness)
 	if err != nil {
 		return err
 	}
-	newState := monitorstate.AggregateLocations(counts, quorum)
+	newState := monitorstate.AggregateLocations(fresh.Counts, quorum)
 	if string(newState) == current {
+		// The state stands, but the stale locations no longer count toward
+		// the display-only recovery progress.
+		if err := monitorstate.RefreshRecoveryProgressTx(ctx, tx, monitorID); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE monitors
-		SET current_state = $1, consecutive_failures = $2,
+		SET current_state = $1, consecutive_failures = $2, consecutive_successes = $4,
 			last_state_change_at = NOW(), updated_at = NOW()
 		WHERE id = $3
-	`, string(newState), maxFailures, monitorID); err != nil {
+	`, string(newState), fresh.MaxFailures, monitorID,
+		monitorstate.RecoveryProgress(fresh.DownSuccesses, quorum, fresh.Counts.Selected)); err != nil {
 		return err
 	}
 	if err := monitorstate.RecordIntervalTx(ctx, tx, tenantID, monitorID,
@@ -322,6 +339,7 @@ func (s *Scheduler) watchdogHeartbeatPass(ctx context.Context, monitorType strin
 			       COALESCE(m.last_result_at, m.created_at)
 			FROM monitors m
 			WHERE m.type = $1 AND m.enabled = TRUE AND m.deleted_at IS NULL
+			  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 			  AND m.id > $4
 			  AND COALESCE(m.last_result_at, m.created_at) < NOW() - make_interval(secs => GREATEST(m.interval_seconds * $2, $3))
 			ORDER BY m.id

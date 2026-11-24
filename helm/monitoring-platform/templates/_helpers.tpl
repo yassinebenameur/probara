@@ -173,6 +173,20 @@ NATS connection URL
 {{- .Values.nats.externalUrl }}
 {{- end }}
 {{- end }}{{/*
+Broker URL baked into private-location deploy snippets (PUBLIC_NATS_URL):
+api.publicNatsURL, else wss://<host><path> of the NATS websocket ingress,
+else empty (deploy snippets disabled).
+*/}}
+{{- define "monitoring-platform.publicNatsUrl" -}}
+{{- if .Values.api.publicNatsURL }}
+{{- .Values.api.publicNatsURL }}
+{{- else if and .Values.nats.enabled .Values.nats.websocket.enabled .Values.nats.websocket.ingress.enabled }}
+{{- $path := trimSuffix "/" (.Values.nats.websocket.ingress.path | default "/") }}
+{{- printf "wss://%s%s" .Values.nats.websocket.ingress.host $path }}
+{{- end }}
+{{- end }}
+
+{{/*
 PostgreSQL host
 */}}
 {{- define "monitoring-platform.postgresHost" -}}
@@ -347,3 +361,149 @@ worker.<field> against it. Args (dict): ctx (root context), field.
 {{- end -}}
 {{- $name -}}
 {{- end -}}
+
+{{/*
+Edge env for the workloads browsers reach directly (.component: api or
+status-page), from the top-level trustedProxyCIDRs and security values:
+TRUSTED_PROXY_CIDRS (client-IP resolution) and SECURITY_HSTS_MAX_AGE on both;
+the general rate limit and CORS allowlist on the api; APP_BASE_URL on the
+status page, whose CSP frame-ancestors admits the operator UI (template
+editor preview). The api gets APP_BASE_URL from smtpEnv already.
+*/}}
+{{- define "monitoring-platform.edgeEnv" -}}
+{{- $v := .ctx.Values -}}
+{{- with $v.trustedProxyCIDRs }}
+- name: TRUSTED_PROXY_CIDRS
+  value: {{ join "," . | quote }}
+{{- end }}
+- name: SECURITY_HSTS_MAX_AGE
+  value: {{ include "monitoring-platform.hstsMaxAge" .ctx | quote }}
+{{- if eq .component "api" }}
+- name: API_RATE_LIMIT_PER_MINUTE
+  value: {{ $v.security.apiRateLimitPerMinute | int64 | quote }}
+- name: API_RATE_LIMIT_BURST
+  value: {{ $v.security.apiRateLimitBurst | int64 | quote }}
+{{- with $v.security.apiAllowedOrigins }}
+- name: API_ALLOWED_ORIGINS
+  value: {{ join "," . | quote }}
+{{- end }}
+{{- end }}
+{{- if eq .component "status-page" }}
+{{- with $v.appBaseURL }}
+- name: APP_BASE_URL
+  value: {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Effective SECURITY_HSTS_MAX_AGE: security.hstsMaxAge when set, else one year
+when the chart's ingress terminates TLS, else 0 (off).
+*/}}
+{{- define "monitoring-platform.hstsMaxAge" -}}
+{{- if ne (toString .Values.security.hstsMaxAge) "" -}}
+{{- .Values.security.hstsMaxAge | int64 -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.tls -}}
+31536000
+{{- else -}}
+0
+{{- end -}}
+{{- end }}
+
+{{/*
+Worker pod securityContext: podSecurityContext plus, when pingGroupRange is
+set, the net.ipv4.ping_group_range sysctl that unprivileged ICMP sockets
+need (ping monitors). Takes (dict "ctx" $ "pingGroupRange" value): the
+default worker fleet passes worker.pingGroupRange, a worker.locations entry
+its own pingGroupRange when it has the key. A ping_group_range entry already
+in podSecurityContext.sysctls wins.
+*/}}
+{{- define "monitoring-platform.workerPodSecurityContext" -}}
+{{- $psc := deepCopy (default dict .ctx.Values.podSecurityContext) -}}
+{{- with .pingGroupRange -}}
+{{- $sysctls := list -}}
+{{- $present := false -}}
+{{- range ($psc.sysctls | default list) -}}
+{{- $sysctls = append $sysctls . -}}
+{{- if eq .name "net.ipv4.ping_group_range" }}{{ $present = true }}{{ end -}}
+{{- end -}}
+{{- if not $present -}}
+{{- $sysctls = append $sysctls (dict "name" "net.ipv4.ping_group_range" "value" (toString .)) -}}
+{{- end -}}
+{{- $_ := set $psc "sysctls" $sysctls -}}
+{{- end -}}
+{{- toYaml $psc -}}
+{{- end -}}
+
+{{/*
+STATUS_PAGE_SESSION_SECRET for the chart-managed Secret: secrets.statusPageSessionSecret,
+else derived from a chart-managed adminJwtSecret (stable across renders; never
+randAlphaNum or lookup), else empty when the chart cannot derive it (the JWT
+secret comes from an existing Secret), which leaves gated pages closed.
+*/}}
+{{- define "monitoring-platform.statusPageSessionSecret" -}}
+{{- if .Values.secrets.statusPageSessionSecret -}}
+{{- .Values.secrets.statusPageSessionSecret -}}
+{{- else if and .Values.secrets.adminJwtSecret (not .Values.secrets.adminJwtSecretExistingSecret) -}}
+{{- sha256sum (printf "probara/status-page-session/v1:%s" .Values.secrets.adminJwtSecret) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+STATUS_PAGE_INTERNAL_TOKEN for the chart-managed Secret, which the
+status-page service presents when it forwards a visitor's email
+subscription to the API: secrets.statusPageInternalToken, else derived from a
+chart-managed adminJwtSecret like the session secret (stable across renders),
+else empty when the chart cannot derive it, which leaves subscriptions off.
+*/}}
+{{- define "monitoring-platform.statusPageInternalToken" -}}
+{{- if .Values.secrets.statusPageInternalToken -}}
+{{- .Values.secrets.statusPageInternalToken -}}
+{{- else if and .Values.secrets.adminJwtSecret (not .Values.secrets.adminJwtSecretExistingSecret) -}}
+{{- sha256sum (printf "probara/status-page-internal-token/v1:%s" .Values.secrets.adminJwtSecret) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+STATUS_PAGE_CNAME_TARGET for the api: statusPage.cnameTarget, else the host of
+statusPage.baseUrl (the host the chart's Ingress already serves status pages
+on), else empty, which turns custom domains off.
+*/}}
+{{- define "monitoring-platform.statusPageCnameTarget" -}}
+{{- if .Values.statusPage.cnameTarget -}}
+{{- .Values.statusPage.cnameTarget -}}
+{{- else if .Values.statusPage.baseUrl -}}
+{{- (urlParse .Values.statusPage.baseUrl).hostname -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The STATUS_PAGE_INTERNAL_TOKEN env entry for the api and status-page
+containers: a per-field Secret (must hold the key), the chart-wide Secret
+(key optional, so an older Secret keeps working with subscriptions off), or
+the chart-managed Secret with a literal or derived value.
+*/}}
+{{- define "monitoring-platform.statusPageInternalTokenEnv" -}}
+{{- if or .Values.secrets.statusPageInternalTokenExistingSecret .Values.secrets.existingSecret (include "monitoring-platform.statusPageInternalToken" .) }}
+{{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_INTERNAL_TOKEN" "key" "status_page_internal_token" "secret" .Values.secrets.statusPageInternalTokenExistingSecret "secretKey" .Values.secrets.statusPageInternalTokenExistingSecretKey "optional" (and (not .Values.secrets.statusPageInternalTokenExistingSecret) .Values.secrets.existingSecret)) }}
+{{- end }}
+{{- end }}
+
+{{/*
+STATUS_PAGE_PLATFORM_HOSTS for the status-page: the ingress.hosts (when the
+chart's Ingress is on) and statusPage.platformHosts, comma-separated. Those
+hosts serve every page under /public/status/; any other public hostname is
+served only as a verified custom domain, else answered not found.
+*/}}
+{{- define "monitoring-platform.statusPagePlatformHosts" -}}
+{{- $hosts := list -}}
+{{- if .Values.ingress.enabled -}}
+{{- range .Values.ingress.hosts -}}
+{{- $hosts = append $hosts (lower .host) -}}
+{{- end -}}
+{{- end -}}
+{{- range .Values.statusPage.platformHosts -}}
+{{- $hosts = append $hosts (lower .) -}}
+{{- end -}}
+{{- $hosts | uniq | join "," -}}
+{{- end }}

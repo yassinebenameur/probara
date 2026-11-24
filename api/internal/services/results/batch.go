@@ -172,7 +172,7 @@ func (s *Service) GetMonitorResultsBatch(ctx context.Context, tenantID uuid.UUID
 			return nil
 		}, `
 			SELECT req.monitor_id, cr.id, cr.status, cr.result_source, cr.http_status, cr.latency_ms,
-				cr.error_message, cr.created_at, COALESCE(cr.metrics_data::text, ''), cr.location_id, l.name
+				cr.error_message, cr.created_at, `+listMetricsDataSQL("cr.metrics_data")+`, cr.location_id, l.name
 			FROM unnest($1::uuid[]) AS req(monitor_id)
 			CROSS JOIN LATERAL (
 				SELECT c.id, c.status, c.result_source, c.http_status, c.latency_ms, c.error_message,

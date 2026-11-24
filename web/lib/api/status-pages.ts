@@ -1,9 +1,13 @@
 import type {
+  CreatedStatusPageAccessToken,
   CreateStatusPageRequest,
   StatusPage,
+  StatusPageAccessToken,
+  StatusPageAccessTokenListResponse,
   StatusPageLibraryTemplate,
   StatusPageLibraryTemplateListResponse,
   StatusPageListResponse,
+  StatusPageTemplateName,
   StatusPageTemplateState,
   UpdateStatusPageRequest,
 } from '../types';
@@ -82,8 +86,13 @@ export async function resetStatusPageTemplate(id: string): Promise<StatusPageTem
   return apiRequest<StatusPageTemplateState>('DELETE', `/v1/status-pages/${id}/template`);
 }
 
-export async function getStatusPageDefaultTemplateSource(id: string): Promise<string> {
-  return apiRequestText(`/v1/status-pages/${id}/template/default`);
+/** A built-in template's source; `name` picks one (absent: the default). */
+export async function getStatusPageDefaultTemplateSource(
+  id: string,
+  name?: StatusPageTemplateName
+): Promise<string> {
+  const query = name && name !== 'default' ? `?name=${encodeURIComponent(name)}` : '';
+  return apiRequestText(`/v1/status-pages/${id}/template/default${query}`);
 }
 
 export async function getStatusPageTemplateVersionSource(
@@ -120,4 +129,19 @@ export async function deleteLibraryTemplate(id: string): Promise<void> {
 
 export async function getLibraryTemplateSource(id: string): Promise<string> {
   return apiRequestText(`/v1/status-page-templates/${id}/source`);
+}
+
+// Status page kiosk tokens (open password and private pages)
+
+export async function getStatusPageAccessTokens(id: string): Promise<StatusPageAccessToken[]> {
+  const response = await apiRequest<StatusPageAccessTokenListResponse>('GET', `/v1/status-pages/${id}/access-tokens`);
+  return response?.items || [];
+}
+
+export async function createStatusPageAccessToken(id: string, label: string): Promise<CreatedStatusPageAccessToken> {
+  return apiRequest<CreatedStatusPageAccessToken>('POST', `/v1/status-pages/${id}/access-tokens`, { label });
+}
+
+export async function revokeStatusPageAccessToken(id: string, tokenId: string): Promise<void> {
+  return apiRequest<void>('POST', `/v1/status-pages/${id}/access-tokens/${tokenId}/revoke`);
 }

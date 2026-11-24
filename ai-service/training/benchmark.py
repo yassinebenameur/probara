@@ -25,10 +25,19 @@ def request(path, body=None):
         return json.load(response)
 
 
+def pair(i):
+    """A full v2 pair rendering nearly every format-3 sentence, so latency covers the longest states."""
+    return {"co_fires": 5+i%8, "a_leads_seconds": -(30000+i*5), "reverse_co_fires": 1+i%3, "shared_service": True,
+            "shared_group": True, "naming_signal": True, "common_upstream": bool(i%2), "a_windows": 40000+i,
+            "b_windows": 50000+i, "window_monitors": 4000+i, "shared_tag_monitors": 60000+i,
+            "shared_group_monitors": 70000+i, "shared_name_prefix": 80000+i, "a_extends_b": True, "b_extends_a": True,
+            "same_type": False, "a_infra": True, "b_infra": False, "peers": True}
+
+
 def fixture(task, size):
     decisions = []
     for i in range(size):
-        evidence = {"checks": 12+i, "failures": 4+i%4, "dns_failures": 4+i%4, "max_dns_ms": 250+i*11} if task == "rca" else {"co_fires": 5+i%8, "a_leads_seconds": 30+i*5, "reverse_co_fires": 0, "shared_service": True, "shared_group": bool(i%2), "naming_signal": False, "common_upstream": False}
+        evidence = {"checks": 12+i, "failures": 4+i%4, "dns_failures": 4+i%4, "max_dns_ms": 250+i*11} if task == "rca" else pair(i)
         decisions.append({"id": f"bench_{i}", "task": task, "evidence": evidence, "choices": options(task)})
     return {"decisions": decisions}
 

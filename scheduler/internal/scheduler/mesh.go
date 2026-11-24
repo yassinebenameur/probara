@@ -11,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // meshSuspectRecheckInterval mirrors suspectRecheckInterval for mesh edges:
@@ -101,6 +102,7 @@ func (s *Scheduler) syncMeshEdges(ctx context.Context, tx *sql.Tx) error {
 		JOIN locations b ON b.tenant_id = a.tenant_id AND b.id <> a.id
 		WHERE a.deleted_at IS NULL AND a.enabled = TRUE
 		  AND COALESCE(a.mesh_endpoint, '') <> ''
+		  AND `+tenancy.LiveTenantSQL("a.tenant_id")+`
 		  AND b.deleted_at IS NULL AND b.enabled = TRUE
 		  AND COALESCE(b.mesh_endpoint, '') <> ''
 		ON CONFLICT (source_location_id, target_location_id) DO NOTHING
@@ -134,6 +136,9 @@ func (s *Scheduler) fetchDueMeshEdges(ctx context.Context, tx *sql.Tx) ([]meshEd
 		FROM location_mesh_state ms
 		JOIN locations l ON l.id = ms.target_location_id
 		WHERE ms.next_run_at <= NOW()
+		  -- Filtered before the LIMIT: a deleted workspace's edges stay due
+		  -- until the purge removes them and must not fill every batch.
+		  AND `+tenancy.LiveTenantSQL("ms.tenant_id")+`
 		ORDER BY ms.next_run_at
 		LIMIT $1
 		FOR UPDATE OF ms SKIP LOCKED

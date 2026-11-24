@@ -22,6 +22,8 @@ ALLOWED_SKIPS = {
         "Opt-in local email preview generator.",
     ("status-page/internal/statuspage", "TestWritePreviewHTML"):
         "Opt-in local status-page preview generator.",
+    ("status-page/internal/statuspage", "TestWriteClassicPreviewHTML"):
+        "Opt-in local status-page preview generator.",
 }
 
 

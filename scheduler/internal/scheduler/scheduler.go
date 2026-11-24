@@ -20,8 +20,10 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -33,23 +35,24 @@ const (
 	meshBatchTickerInterval        = 10 * time.Second
 
 	// suspectRecheckInterval is the fast cadence used while a monitor is in the
-	// suspect state, confirming or clearing a potential outage (spec §5).
-	suspectRecheckInterval = 20 * time.Second
+	// suspect state, confirming or clearing a potential outage (spec §5), and
+	// while it is down confirming a recovery (S-T7).
+	suspectRecheckInterval = monitorstate.FastRecheckInterval
 )
 
 // nextCheckDelay returns how long after now the monitor should run again.
-// Only 'suspect' (temporal, mid-confirmation) gets the fast recheck;
+// Only 'suspect' (temporal, mid-confirmation) and a recovering monitor (down
+// while passes are counted toward confirming its recovery, S-T7) get the
+// fast recheck;
 // 'degraded' (spatial: some locations down, below quorum) can persist
-// indefinitely and runs at the normal interval. Side-effecting checks (SIP
-// INVITE test calls) never get the fast recheck (S-A9): their interval floor
-// (models.SIPCallMinIntervalSeconds) is the call-rate limit, and a 20 s
-// recheck would also overlap a call that can run 24 s (timeout plus teardown
-// reserve). IsSIPCallConfig reads only non-secret fields, so the encrypted
-// config answers the same.
+// indefinitely and runs at the normal interval. Monitors whose schedule
+// floor is a rate limit never get the fast recheck: SIP INVITE test calls
+// (S-A9) and domain monitors — the one table is
+// monitorstate.FastRecheckExempt.
 func nextCheckDelay(m Monitor) time.Duration {
 	interval := time.Duration(m.IntervalSeconds) * time.Second
-	if m.CurrentState == "suspect" && suspectRecheckInterval < interval &&
-		!models.IsSIPCallConfig(m.Type, m.Config) {
+	if (m.CurrentState == "suspect" || m.Recovering) && suspectRecheckInterval < interval &&
+		!monitorstate.FastRecheckExempt(m.Type, m.Config) {
 		return suspectRecheckInterval
 	}
 	return interval
@@ -64,6 +67,9 @@ type Monitor struct {
 	IntervalSeconds int
 	TimeoutSeconds  int
 	CurrentState    string
+	// Recovering: down while a stream counts passes toward confirming its
+	// recovery (monitorstate.RecoveringPredicate).
+	Recovering bool
 	// DueAt is the next_run_at this dispatch serves (NULL for a row that
 	// never had one): the slot behind each job's Nats-Msg-Id.
 	DueAt sql.NullTime
@@ -121,6 +127,11 @@ type Scheduler struct {
 	publish func(ctx context.Context, subject string, job *models.Job, headers map[string][]string) error
 
 	purger *purger
+
+	occurrences *occurrenceRoller
+
+	// workspacePurge removes soft-deleted workspaces (purger_tenants.go).
+	workspacePurge *workspacePurger
 }
 
 // NewScheduler creates a new scheduler instance
@@ -248,6 +259,27 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		BatchSize:     cfg.MonitorPurgeBatchSize,
 		MaxRowsPerRun: cfg.MonitorPurgeMaxRowsPerRun,
 	})
+	s.workspacePurge = newWorkspacePurger(dbClient, log, &workspacePurgeMetrics{
+		rows: metricsRegistry.NewCounter(
+			"workspace_purge_rows_total", "Rows deleted by the purge of deleted workspaces", []string{}).With(prometheus.Labels{}),
+		workspaces: metricsRegistry.NewCounter(
+			"workspace_purge_workspaces_total", "Deleted workspaces fully purged", []string{}).With(prometheus.Labels{}),
+		errors: metricsRegistry.NewCounter(
+			"workspace_purge_errors_total", "Failed workspace purge runs", []string{}).With(prometheus.Labels{}),
+		pending: metricsRegistry.NewGauge(
+			"workspace_purge_pending", "Deleted workspaces whose data is still being purged", []string{}).With(prometheus.Labels{}),
+		runDuration: metricsRegistry.NewHistogram(
+			"workspace_purge_run_duration_seconds", "Duration of workspace purge runs", []string{}, nil).With(prometheus.Labels{}),
+	}, purgerOptions{
+		BatchSize:     cfg.MonitorPurgeBatchSize,
+		MaxRowsPerRun: cfg.MonitorPurgeMaxRowsPerRun,
+	})
+	s.occurrences = &occurrenceRoller{
+		added: metricsRegistry.NewCounter(
+			"maintenance_occurrences_added_total", "Maintenance occurrences materialized by the horizon roll", []string{}),
+		errors: metricsRegistry.NewCounter(
+			"maintenance_occurrence_roll_errors_total", "Failed maintenance occurrence rolls", []string{}),
+	}
 
 	return s
 }
@@ -308,12 +340,15 @@ func (s *Scheduler) Start() error {
 	defer meshTicker.Stop()
 	watchdogTicker := time.NewTicker(watchdogTickerInterval)
 	defer watchdogTicker.Stop()
+	occurrenceTicker := time.NewTicker(maintenanceOccurrenceRollInterval)
+	defer occurrenceTicker.Stop()
 
 	// Initial run
 	s.scheduleBatch(s.ctx)
 	s.triggerRetentionCleanup()
 	s.triggerRollupMaintenance()
 	s.triggerWatchdog()
+	s.triggerOccurrenceRoll()
 	if s.config.MeshEnabled {
 		s.runMeshBatch(s.ctx)
 	}
@@ -334,12 +369,17 @@ func (s *Scheduler) Start() error {
 			s.triggerRollupMaintenance()
 		case <-purgeTicker.C:
 			s.triggerMonitorPurge()
+			if s.config.MonitorPurgeEnabled {
+				s.workspacePurge.trigger(s.ctx)
+			}
 		case <-meshTicker.C:
 			if s.config.MeshEnabled {
 				s.runMeshBatch(s.ctx)
 			}
 		case <-watchdogTicker.C:
 			s.triggerWatchdog()
+		case <-occurrenceTicker.C:
+			s.triggerOccurrenceRoll()
 		}
 	}
 }
@@ -429,9 +469,12 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 	// Every tenant, including data_retention_days = 0: raw check results are
 	// capped at monitorstate.CheckResultsRawRetentionDays even when the tenant
 	// keeps telemetry forever.
+	// Deleted workspaces are left to the workspace purge, which removes
+	// everything they hold.
 	query := `
 		SELECT id, data_retention_days
 		FROM tenants
+		WHERE ` + tenancy.LiveTenantSQL("tenants.id") + `
 		ORDER BY id
 	`
 	rows, err := s.db.QueryContext(ctx, query)
@@ -463,7 +506,8 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 
 	// Mesh results and metric samples follow data_retention_days (0 = keep
 	// forever); raw check results ignore it and use the fixed hour-aligned
-	// horizon (pruneTenantCheckResults).
+	// horizon (pruneTenantCheckResults). The notification delivery history
+	// is kept a fixed 90 days for everyone (retention_deliveries.go).
 	stores := []struct {
 		name  string
 		prune func(ctx context.Context, tenantID uuid.UUID, tenantDays int) (int64, error)
@@ -478,6 +522,7 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 			func(ctx context.Context, _ int) (time.Time, error) { return s.checkResultsPruneCutoff(ctx) }},
 		{"mesh_probe_results", s.pruneTenantMeshResults, tenantDaysCutoff},
 		{"metric_samples", s.pruneTenantMetricSamples, tenantDaysCutoff},
+		{"alert_notification_deliveries", s.pruneTenantDeliveries, deliveriesCutoff},
 	}
 	var totalDeleted int64
 	backlogged := make(map[string]int)
@@ -587,11 +632,14 @@ func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.U
 // fetchDueMonitors fetches monitors that are due to run within a transaction
 func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize int) ([]Monitor, error) {
 	query := `
-		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds, current_state, next_run_at
+		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds, current_state, next_run_at,
+			` + monitorstate.RecoveringPredicate("monitors") + `
 		FROM monitors
 		WHERE enabled = true
 		  AND deleted_at IS NULL
 		  AND type <> ALL($2)
+		  -- A deleted workspace's monitors are never dispatched again.
+		  AND ` + tenancy.LiveTenantSQL("monitors.tenant_id") + `
 		  AND (next_run_at IS NULL OR next_run_at <= NOW())
 		ORDER BY next_run_at NULLS FIRST, id
 		LIMIT $1
@@ -610,7 +658,7 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 
 		err := rows.Scan(
 			&m.ID, &m.TenantID, &m.Type, &m.Config,
-			&m.IntervalSeconds, &m.TimeoutSeconds, &m.CurrentState, &m.DueAt,
+			&m.IntervalSeconds, &m.TimeoutSeconds, &m.CurrentState, &m.DueAt, &m.Recovering,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan monitor: %w", err)
@@ -704,7 +752,10 @@ func (s *Scheduler) createCheckJob(monitor Monitor, locationID string) (*models.
 		if credential == "" {
 			return nil, fmt.Errorf("missing worker credential for location %s", locationID)
 		}
-		if secrets.HasMonitorSecrets(monitor.Type) {
+		// Byte-level fast path: a config with no secret key (most http
+		// monitors, now that http is secret-bearing) is dispatched as-is,
+		// with no decrypt, key derivation or re-encrypt.
+		if secrets.HasSecretValues(monitor.Type, configJSON) {
 			plaintext, err := secrets.DecryptMonitorConfig(s.secretsEncryptor, monitor.Type, configJSON)
 			if err != nil {
 				return nil, fmt.Errorf("decrypt monitor config for location %s: %w", locationID, err)

@@ -63,11 +63,12 @@ type HTTPMonitorConfig struct {
 	TLSServerName            *string               `json:"tls_server_name,omitempty"`
 	TLSCAPem                 *string               `json:"tls_ca_pem,omitempty"`
 	CollectTiming            *bool                 `json:"collect_timing,omitempty"`
-}
-
-// PingMonitorConfig represents configuration for ping monitors
-type PingMonitorConfig struct {
-	Host string `json:"host"`
+	// SecretHeaders are request headers whose values are secrets, and
+	// BasicAuthPassword is one (shared/secrets registry); Headers stays
+	// plaintext. The worker sends both maps, secret headers last.
+	SecretHeaders     map[string]string `json:"secret_headers,omitempty"`
+	BasicAuthUsername string            `json:"basic_auth_username,omitempty"`
+	BasicAuthPassword string            `json:"basic_auth_password,omitempty"`
 }
 
 // DNSMonitorConfig represents configuration for DNS monitors
@@ -87,16 +88,10 @@ type GRPCMonitorConfig struct {
 	Port    int    `json:"port,omitempty"`
 	Service string `json:"service,omitempty"`
 	UseTLS  *bool  `json:"use_tls,omitempty"`
-}
-
-// TCPMonitorConfig represents configuration for raw TCP connect monitors. It
-// validates that a host:port accepts a connection (route/SG/listener
-// reachability), optionally completing a TLS handshake.
-type TCPMonitorConfig struct {
-	Host          string `json:"host"`
-	Port          int    `json:"port"`
-	UseTLS        *bool  `json:"use_tls,omitempty"`         // perform a TLS handshake after connecting
-	TLSSkipVerify *bool  `json:"tls_skip_verify,omitempty"` // accept self-signed / mismatched certs
+	// Metadata is sent with the health RPC; SecretMetadata too, but its
+	// values are secrets (shared/secrets registry).
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	SecretMetadata map[string]string `json:"secret_metadata,omitempty"`
 }
 
 // GroupMonitorConfig represents configuration for group monitors
@@ -110,6 +105,10 @@ type SyntheticAPIMonitorConfig struct {
 	FailureMode string                   `json:"failure_mode,omitempty"` // fail_fast (default) | continue
 	Variables   map[string]string        `json:"variables,omitempty"`
 	Steps       []SyntheticAPIStepConfig `json:"steps"`
+	// SecretVariables resolve {{name}} like Variables, but are secrets
+	// (shared/secrets registry) and the worker redacts their values from
+	// everything a check reports.
+	SecretVariables map[string]string `json:"secret_variables,omitempty"`
 }
 
 type SyntheticAPIStepConfig struct {
@@ -172,6 +171,8 @@ type SyntheticBrowserMonitorConfig struct {
 	Variables   map[string]string            `json:"variables,omitempty"`
 	Artifacts   SyntheticBrowserArtifacts    `json:"artifacts,omitempty"`
 	Steps       []SyntheticBrowserStepConfig `json:"steps"`
+	// SecretVariables: see SyntheticAPIMonitorConfig.SecretVariables.
+	SecretVariables map[string]string `json:"secret_variables,omitempty"`
 }
 
 type SyntheticBrowserArtifacts struct {

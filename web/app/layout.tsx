@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
 import { Archivo, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
 import Layout from '@/components/layout/Layout';
@@ -36,15 +37,19 @@ const THEME_BOOT = `(function(){var d=document.documentElement,m=window.matchMed
 // sidebar width in CSS, so a collapsed sidebar never paints expanded first.
 const SIDEBAR_BOOT = `(function(){try{if(localStorage.getItem('probara-sidebar')==='collapsed')document.documentElement.dataset.sidebar='collapsed'}catch(e){}})();`;
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  // proxy.ts mints a CSP nonce per request; the boot script needs it to run
+  // under the policy. Reading headers() also makes every page dynamic, which
+  // a per-request nonce requires. No inline <script> without this nonce.
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   return (
     <html lang="en" className={`${archivo.variable} ${plexMono.variable}`} suppressHydrationWarning>
       <body suppressHydrationWarning>
-        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT + SIDEBAR_BOOT }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: THEME_BOOT + SIDEBAR_BOOT }} />
         <ToastProvider>
           <Layout>{children}</Layout>
         </ToastProvider>

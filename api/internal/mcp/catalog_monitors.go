@@ -25,6 +25,8 @@ var monitorFieldDocs = map[string]string{
 	"depends_on_ids":                 "Upstream monitor IDs this monitor depends on (for root-cause alert suppression).",
 	"location_ids":                   "Private location IDs to run from (list_locations); empty means the default worker fleet.",
 	"location_quorum":                "How many locations must fail before the monitor is down (multi-location monitors).",
+	"recovery_threshold":             "Passing checks in a row before a down monitor is up again and its alert resolves, 1-10 (default 1). Unconfirmed time counts as downtime.",
+	"key":                            "Config-as-code key (apply_monitors): lowercase letters, digits, '.', '_' or '-', at most 64, unique in the workspace. On update \"\" removes it.",
 }
 
 var monitorEnums = func() map[string][]string {
@@ -113,8 +115,9 @@ func monitorTools() []spec {
 			Description: "Queue an immediate check outside the schedule. The result is recorded like a scheduled " +
 				"check and can open or resolve alerts. Not for group, push or agent monitors.",
 			Method: http.MethodPost, Route: "/monitors/{id}/run",
-			PathDocs: map[string]string{"id": "Monitor ID."},
-			Body:     typeOf[monitorhandlers.RunMonitorNowRequest](),
+			PathDocs:     map[string]string{"id": "Monitor ID."},
+			Body:         typeOf[monitorhandlers.RunMonitorNowRequest](),
+			BodyOptional: true,
 			FieldDocs: map[string]string{
 				"location_id": "Run only from this one of the monitor's locations (default: every selected location).",
 			},
@@ -132,13 +135,23 @@ func monitorTools() []spec {
 			Name:  "get_monitor_results",
 			Title: "Get check results",
 			Description: "Recent raw check results (status, latency, error, per-location, metrics_data), newest " +
-				"first. Raw results are kept 30 days; use get_monitor_analytics for longer windows.",
+				"first. Raw results are kept 30 days; use get_monitor_analytics for longer windows. A failed HTTP " +
+				"check's captured response is omitted here (get_monitor_result has it).",
 			Method: http.MethodGet, Route: "/monitors/{id}/results",
 			PathDocs: map[string]string{"id": "Monitor ID."},
 			Query: []param{
 				{Name: "limit", Type: "integer", Description: "Maximum results (default 50). Keep it small; results can be large."},
 				{Name: "since", Description: "RFC 3339 timestamp; only results after it."},
 			},
+		},
+		{
+			Name:  "get_monitor_result",
+			Title: "Get one check result",
+			Description: "One raw check result, whole. Unlike get_monitor_results it includes a failed HTTP check's " +
+				"captured response (metrics_data.http.failure_response: status line, redacted headers, body excerpt), " +
+				"which list reads replace with http.failure_response_omitted.",
+			Method: http.MethodGet, Route: "/monitors/{id}/results/{resultId}",
+			PathDocs: map[string]string{"id": "Monitor ID.", "resultId": "Check result ID (from get_monitor_results)."},
 		},
 		{
 			Name:  "get_monitor_results_batch",
@@ -239,8 +252,10 @@ func monitorTools() []spec {
 		{
 			Name:  "suggest_dependencies",
 			Title: "Suggest dependencies (AI)",
-			Description: "Ask the local AI model to propose dependency edges from alerts that fire together, with " +
-				"reasons and confidence. Read-only; can take a while. 503 when local AI is off or busy (retry).",
+			Description: "Ask the local AI model to propose dependency edges, each with its basis (timing: alerts that " +
+				"fire in order; variant: a monitor variant failing after its base; structural: a service and a backing " +
+				"resource sharing a rare tag or name prefix), reasons and confidence. Read-only; can take a while. 503 " +
+				"when local AI is off or busy (retry).",
 			Method: http.MethodPost, Route: "/monitors/dependency-suggestions",
 		},
 		{
@@ -274,14 +289,17 @@ func monitorTools() []spec {
 		{
 			Name:  "export_monitors",
 			Title: "Export monitors",
-			Description: "Every monitor in the workspace as portable YAML (secrets masked), suitable for " +
-				"preview_monitor_import / import_monitors in another workspace. Can be large.",
+			Description: "Every monitor in the workspace as portable YAML, version 2 (secrets masked), suitable for " +
+				"preview_monitor_import / import_monitors in another workspace, or with keyed=true as the " +
+				"document plan_monitor_apply and apply_monitors take. Can be large.",
 			Method: http.MethodGet, Route: "/monitors/export",
+			Query: []param{{Name: "keyed", Type: "boolean", Description: "Only the monitors with a key (config-as-code)."}},
 		},
 		{
 			Name:  "preview_monitor_import",
 			Title: "Preview monitor import",
-			Description: "Parse an import file (Probara export YAML/JSON, Uptime Kuma backup JSON, or CSV) without " +
+			Description: "Parse an import file (Probara export YAML/JSON, Uptime Kuma backup JSON, Better Stack or " +
+				"UptimeRobot API JSON, Gatus config YAML, or CSV) without " +
 				"creating anything. Returns rows, a suggested field mapping and type mapping, warnings and skipped " +
 				"records. Pass its rows and suggested_mapping to import_monitors.",
 			Method: http.MethodPost, Route: "/monitors/import/preview",

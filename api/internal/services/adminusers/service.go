@@ -13,9 +13,12 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
+	"github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	"github.com/yassinebenameur/probara/shared/auth"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 var (
@@ -26,10 +29,13 @@ var (
 	ErrCannotDeleteLastUser  = errors.New("cannot delete the last active superadmin")
 	ErrCannotDemoteLastAdmin = errors.New("cannot demote the last active superadmin")
 	ErrBootstrapClosed       = errors.New("admin bootstrap is disabled because an admin already exists")
+	// ErrWorkspaceNotFound: a membership names a workspace that does not
+	// exist or was deleted.
+	ErrWorkspaceNotFound = errors.New("workspace not found")
 )
 
 const (
-	defaultTenantID   = "00000000-0000-0000-0000-000000000001"
+	defaultTenantID   = tenancy.DefaultTenantID
 	defaultTenantName = "Default"
 )
 
@@ -37,11 +43,12 @@ type repository interface {
 	ListUsers(ctx context.Context, page, pageSize int) ([]models.AdminUser, int, error)
 	GetUser(ctx context.Context, userID uuid.UUID) (*models.AdminUser, error)
 	CreateUser(ctx context.Context, id uuid.UUID, username string, email, passwordHash *string, platformRole string, memberships []models.MembershipInput, now time.Time) (*models.AdminUser, error)
-	CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error)
+	CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time, untilSuperadmin bool) (*models.AdminUser, error)
 	UpdateUser(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error)
-	RevokeSessionsByAdminID(ctx context.Context, adminID uuid.UUID) error
-	CountActiveAdmins(ctx context.Context) (int, error)
-	IsLastActiveSuperadmin(ctx context.Context, userID uuid.UUID) (bool, error)
+	RevokeSessionsByAdminID(ctx context.Context, adminID, keep uuid.UUID) error
+	AttachLockState(ctx context.Context, users []models.AdminUser) error
+	AttachSignInFactors(ctx context.Context, users []models.AdminUser) error
+	BootstrapClosed(ctx context.Context, untilSuperadmin bool) (bool, error)
 	DeleteUser(ctx context.Context, userID uuid.UUID) error
 	AttachMemberships(ctx context.Context, users []models.AdminUser) error
 }
@@ -54,6 +61,12 @@ type sqlRepository struct {
 type Service struct {
 	repo       repository
 	bcryptCost int
+	// bootstrapUntilSuperadmin keeps first-admin bootstrap open until an
+	// active superadmin exists, instead of until any active user exists. Set
+	// when BOOTSTRAP_SETUP_CODE gates the form: SSO sign-ins then create
+	// ordinary members (oidcauth), and the local form must stay available to
+	// create the first superadmin.
+	bootstrapUntilSuperadmin bool
 }
 
 // NewService creates a new admin users service.
@@ -62,6 +75,15 @@ func NewService(dbClient *db.Client, bcryptCost int) *Service {
 		repo:       &sqlRepository{db: dbClient},
 		bcryptCost: bcryptCost,
 	}
+}
+
+// ConfigureSetupCode tells the service whether a setup code gates first-admin
+// creation (BOOTSTRAP_SETUP_CODE is set). Then bootstrap is open until an
+// active superadmin exists; otherwise, as before, until any active user does.
+// Either way it closes for good once a superadmin has ever existed
+// (SuperadminEverExisted).
+func (s *Service) ConfigureSetupCode(required bool) {
+	s.bootstrapUntilSuperadmin = required
 }
 
 // ListUsers returns paginated admin users with memberships.
@@ -75,6 +97,12 @@ func (s *Service) ListUsers(ctx context.Context, page, pageSize int) (*models.Ad
 
 	if err := s.repo.AttachMemberships(ctx, items); err != nil {
 		return nil, fmt.Errorf("failed to load memberships: %w", err)
+	}
+	if err := s.repo.AttachLockState(ctx, items); err != nil {
+		return nil, fmt.Errorf("failed to load lock state: %w", err)
+	}
+	if err := s.repo.AttachSignInFactors(ctx, items); err != nil {
+		return nil, fmt.Errorf("failed to load sign-in factors: %w", err)
 	}
 
 	return &models.AdminUserListResponse{
@@ -98,6 +126,12 @@ func (s *Service) GetUser(ctx context.Context, userID uuid.UUID) (*models.AdminU
 	users := []models.AdminUser{*user}
 	if err := s.repo.AttachMemberships(ctx, users); err != nil {
 		return nil, fmt.Errorf("failed to load memberships: %w", err)
+	}
+	if err := s.repo.AttachLockState(ctx, users); err != nil {
+		return nil, fmt.Errorf("failed to load lock state: %w", err)
+	}
+	if err := s.repo.AttachSignInFactors(ctx, users); err != nil {
+		return nil, fmt.Errorf("failed to load sign-in factors: %w", err)
 	}
 	return &users[0], nil
 }
@@ -143,17 +177,19 @@ func (s *Service) CreateUser(ctx context.Context, req *models.CreateAdminUserReq
 	return &users[0], nil
 }
 
-// HasActiveUsers reports whether at least one active admin user exists.
+// HasActiveUsers reports whether first-admin bootstrap is closed: a
+// superadmin has ever existed, or at least one active user exists (with a
+// setup code configured, at least one active superadmin).
 func (s *Service) HasActiveUsers(ctx context.Context) (bool, error) {
-	count, err := s.repo.CountActiveAdmins(ctx)
+	closed, err := s.repo.BootstrapClosed(ctx, s.bootstrapUntilSuperadmin)
 	if err != nil {
-		return false, fmt.Errorf("failed to count active admin users: %w", err)
+		return false, fmt.Errorf("failed to check admin bootstrap state: %w", err)
 	}
-	return count > 0, nil
+	return closed, nil
 }
 
-// CreateFirstUser creates the first admin user (as superadmin) only when no
-// active admin exists.
+// CreateFirstUser creates the first admin user (as superadmin) only while
+// bootstrap is open (see HasActiveUsers).
 func (s *Service) CreateFirstUser(ctx context.Context, req *models.CreateAdminUserRequest) (*models.AdminUser, error) {
 	if req == nil {
 		return nil, fmt.Errorf("create request is required")
@@ -167,7 +203,7 @@ func (s *Service) CreateFirstUser(ctx context.Context, req *models.CreateAdminUs
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	user, err := s.repo.CreateFirstUser(ctx, uuid.New(), strings.TrimSpace(req.Username), passwordHash, time.Now())
+	user, err := s.repo.CreateFirstUser(ctx, uuid.New(), strings.TrimSpace(req.Username), passwordHash, time.Now(), s.bootstrapUntilSuperadmin)
 	if err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -205,16 +241,9 @@ func (s *Service) UpdateUser(ctx context.Context, userID uuid.UUID, req *models.
 		if !auth.ValidPlatformRole(*req.PlatformRole) {
 			return nil, fmt.Errorf("invalid platform role %q", *req.PlatformRole)
 		}
-		// Demoting the last active superadmin would orphan the install.
-		if *req.PlatformRole == auth.PlatformRoleMember {
-			isLast, err := s.repo.IsLastActiveSuperadmin(ctx, userID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to check superadmin count: %w", err)
-			}
-			if isLast {
-				return nil, ErrCannotDemoteLastAdmin
-			}
-		}
+		// Demoting the last active superadmin would orphan the install; the
+		// repository refuses it (ErrCannotDemoteLastAdmin) under the
+		// superadmin-set lock, in the transaction that writes the role.
 	}
 
 	if req.Memberships != nil {
@@ -227,14 +256,26 @@ func (s *Service) UpdateUser(ctx context.Context, userID uuid.UUID, req *models.
 
 	user, err := s.repo.UpdateUser(ctx, userID, username, normalizeEmail(req.Email), passwordHash, req.PlatformRole, req.Memberships, time.Now())
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
 			return nil, ErrUserNotFound
+		case errors.Is(err, ErrCannotDemoteLastAdmin):
+			return nil, err
 		}
 		return nil, mapUserWriteError(err)
 	}
 
 	if passwordHash != nil {
-		if err := s.repo.RevokeSessionsByAdminID(ctx, userID); err != nil {
+		// A new password ends the user's sessions, except the one making
+		// the change when users set their own password: signing yourself
+		// out of the device you are using is never the intent.
+		keep := uuid.Nil
+		if actor, ok := ctxpkg.GetAdminID(ctx); ok && actor == userID.String() {
+			if sid, ok := adminauth.SessionIDFromContext(ctx); ok {
+				keep = sid
+			}
+		}
+		if err := s.repo.RevokeSessionsByAdminID(ctx, userID, keep); err != nil {
 			return nil, fmt.Errorf("failed to revoke admin sessions: %w", err)
 		}
 	}
@@ -252,17 +293,14 @@ func (s *Service) DeleteUser(ctx context.Context, actorUserID, targetUserID uuid
 		return ErrCannotDeleteSelf
 	}
 
-	isLast, err := s.repo.IsLastActiveSuperadmin(ctx, targetUserID)
-	if err != nil {
-		return fmt.Errorf("failed to check superadmin count: %w", err)
-	}
-	if isLast {
-		return ErrCannotDeleteLastUser
-	}
-
+	// The repository refuses to delete the last active superadmin
+	// (ErrCannotDeleteLastUser) under the superadmin-set lock.
 	if err := s.repo.DeleteUser(ctx, targetUserID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
 			return ErrUserNotFound
+		case errors.Is(err, ErrCannotDeleteLastUser):
+			return err
 		}
 		return fmt.Errorf("failed to delete admin user: %w", err)
 	}
@@ -393,13 +431,22 @@ func (r *sqlRepository) CreateUser(ctx context.Context, id uuid.UUID, username s
 	return user, nil
 }
 
-func (r *sqlRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error) {
+func (r *sqlRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time, untilSuperadmin bool) (*models.AdminUser, error) {
+	// The flag only ever goes from false to true, and only when a
+	// superadmin appears, which the statement below also guards against, so
+	// checking it first leaves no window.
+	if ever, err := SuperadminEverExisted(ctx, r.db); err != nil {
+		return nil, err
+	} else if ever {
+		return nil, sql.ErrNoRows
+	}
 	query := `
 		WITH inserted AS (
 			INSERT INTO admin_users (id, username, password_hash, platform_role, created_at, updated_at)
 			SELECT $1, $2, $3, 'superadmin', $4, $4
 			WHERE NOT EXISTS (
-				SELECT 1 FROM admin_users WHERE disabled_at IS NULL
+				SELECT 1 FROM admin_users
+				WHERE disabled_at IS NULL AND (NOT $7::bool OR platform_role = 'superadmin')
 			)
 			RETURNING id, username, email, platform_role, external_subject, created_at, updated_at, last_login_at, disabled_at
 		),
@@ -418,7 +465,7 @@ func (r *sqlRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, usern
 		FROM inserted
 	`
 
-	row := r.db.QueryRowContext(ctx, query, id, username, passwordHash, now, defaultTenantID, defaultTenantName)
+	row := r.db.QueryRowContext(ctx, query, id, username, passwordHash, now, defaultTenantID, defaultTenantName, untilSuperadmin)
 	return scanUser(row)
 }
 
@@ -428,6 +475,24 @@ func (r *sqlRepository) UpdateUser(ctx context.Context, userID uuid.UUID, userna
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+
+	if platformRole != nil && *platformRole != auth.PlatformRoleSuperadmin {
+		if err := LockSuperadmins(ctx, tx); err != nil {
+			return nil, fmt.Errorf("failed to lock superadmins: %w", err)
+		}
+		isSuperadmin, others, err := OtherActiveSuperadmins(ctx, tx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check superadmin count: %w", err)
+		}
+		if isSuperadmin && others == 0 {
+			return nil, ErrCannotDemoteLastAdmin
+		}
+	}
+
+	var oldEmail sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT email FROM admin_users WHERE id = $1 FOR UPDATE`, userID).Scan(&oldEmail); err != nil {
+		return nil, err
+	}
 
 	row := tx.QueryRowContext(ctx, `
 		UPDATE admin_users
@@ -443,6 +508,13 @@ func (r *sqlRepository) UpdateUser(ctx context.Context, userID uuid.UUID, userna
 	user, err := scanUser(row)
 	if err != nil {
 		return nil, err
+	}
+	if email != nil && !strings.EqualFold(oldEmail.String, *email) {
+		// Invite and reset links went to the old address, which may be the
+		// reason for the change: they stop working.
+		if err := adminauth.RetireMailedLinksTx(ctx, tx, userID); err != nil {
+			return nil, fmt.Errorf("failed to retire account links: %w", err)
+		}
 	}
 
 	if memberships != nil {
@@ -462,53 +534,173 @@ func (r *sqlRepository) UpdateUser(ctx context.Context, userID uuid.UUID, userna
 
 func insertMembershipsTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID, memberships []models.MembershipInput, now time.Time) error {
 	for _, m := range memberships {
-		if _, err := tx.ExecContext(ctx, `
+		// Only a live workspace: a deleted one's tenant row still satisfies
+		// the foreign key until the purge removes it, and the membership
+		// would be invisible and refused anyway.
+		res, err := tx.ExecContext(ctx, `
 			INSERT INTO tenant_memberships (id, admin_user_id, tenant_id, role, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $5)
-		`, uuid.New(), userID, m.TenantID, m.Role, now); err != nil {
+			SELECT $1, $2, $3::uuid, $4, $5, $5
+			WHERE `+tenancy.LiveTenantSQL("$3::uuid")+`
+		`, uuid.New(), userID, m.TenantID, m.Role, now)
+		if err != nil {
 			return fmt.Errorf("failed to insert membership for tenant %s: %w", m.TenantID, err)
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return fmt.Errorf("%w: %s", ErrWorkspaceNotFound, m.TenantID)
 		}
 	}
 	return nil
 }
 
-func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID uuid.UUID) error {
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE admin_sessions
-		SET revoked_at = NOW(), last_used_at = NOW()
-		WHERE admin_user_id = $1 AND revoked_at IS NULL
-	`, adminID)
-	return err
-}
-
-func (r *sqlRepository) CountActiveAdmins(ctx context.Context) (int, error) {
-	var count int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_users WHERE disabled_at IS NULL`).Scan(&count); err != nil {
-		return 0, err
+// RevokeSessionsByAdminID runs after a password is set through user
+// management: it ends the user's sessions (but keep) and MCP connections,
+// and retires every open invite, reset and email-change link and sign-in
+// challenge, so nothing started under the old password outlives it.
+// Workspace API keys are not the user's credentials and stay.
+func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID, keep uuid.UUID) error {
+	if _, err := adminauth.RevokeUserSessions(ctx, r.db, adminID, keep, adminauth.RevokeReasonPasswordReset); err != nil {
+		return err
 	}
-	return count, nil
-}
-
-func (r *sqlRepository) IsLastActiveSuperadmin(ctx context.Context, userID uuid.UUID) (bool, error) {
-	var targetIsSuperadmin bool
-	var otherSuperadmins int
-	err := r.db.QueryRowContext(ctx, `
-		SELECT
-			EXISTS (SELECT 1 FROM admin_users WHERE id = $1 AND platform_role = 'superadmin' AND disabled_at IS NULL),
-			(SELECT COUNT(*) FROM admin_users WHERE id <> $1 AND platform_role = 'superadmin' AND disabled_at IS NULL)
-	`, userID).Scan(&targetIsSuperadmin, &otherSuperadmins)
-	if err != nil {
-		return false, err
+	if _, err := adminauth.RevokeMCPAccess(ctx, r.db, adminID); err != nil {
+		return err
 	}
-	return targetIsSuperadmin && otherSuperadmins == 0, nil
+	return adminauth.RetireAccountTokens(ctx, r.db, adminID)
 }
 
-func (r *sqlRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error {
-	result, err := r.db.ExecContext(ctx, `DELETE FROM admin_users WHERE id = $1`, userID)
+// AttachSignInFactors fills HasPassword, TwoFactorEnabled and the
+// second-factor lockout state (migration 000124; before it nobody has a
+// second factor). Second-factor lockouts older than the window read as none.
+func (r *sqlRepository) AttachSignInFactors(ctx context.Context, users []models.AdminUser) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(users))
+	index := make(map[uuid.UUID]int, len(users))
+	for i, u := range users {
+		ids[i] = u.ID
+		index[u.ID] = i
+	}
+	const query = `
+		SELECT id, COALESCE(password_hash, '') <> '', %s
+		FROM admin_users WHERE id = ANY($1)
+	`
+	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(query, `totp_enabled_at IS NOT NULL,
+		CASE WHEN second_factor_lockout_at > NOW() - make_interval(secs => $2) THEN second_factor_lockouts ELSE 0 END,
+		CASE WHEN second_factor_lockout_at > NOW() - make_interval(secs => $2) THEN second_factor_lockout_at END,
+		lockout_held AND locked_until > NOW()`), pq.Array(ids), adminauth.SecondFactorLockoutWindow.Seconds())
+	if pgerr.IsUndefinedColumn(err) {
+		rows, err = r.db.QueryContext(ctx, fmt.Sprintf(query, `FALSE, 0, NULL::timestamptz, FALSE`), pq.Array(ids))
+	}
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var hasPassword, twoFactor, held bool
+		var lockouts int
+		var lastLockout *time.Time
+		if err := rows.Scan(&id, &hasPassword, &twoFactor, &lockouts, &lastLockout, &held); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			users[i].HasPassword = &hasPassword
+			users[i].TwoFactorEnabled = twoFactor
+			users[i].SecondFactorLockouts = lockouts
+			users[i].LastSecondFactorLockoutAt = lastLockout
+			users[i].LockoutHeld = held
+		}
+	}
+	return rows.Err()
+}
 
+// AttachLockState fills the sign-in lockout fields (migration 000116): the
+// live failure streak, and the lock's end while it is in force (database
+// clock, as the lockout itself). Before the
+// migration nothing is locked.
+func (r *sqlRepository) AttachLockState(ctx context.Context, users []models.AdminUser) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(users))
+	index := make(map[uuid.UUID]int, len(users))
+	for i, u := range users {
+		ids[i] = u.ID
+		index[u.ID] = i
+	}
+	// A streak whose last failure is older than the lockout's memory is
+	// already forgotten (the next failure starts at 1), so it shows as 0.
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id,
+		       CASE WHEN last_failed_login_at > NOW() - make_interval(secs => $2) THEN failed_login_count ELSE 0 END,
+		       CASE WHEN locked_until > NOW() THEN locked_until END
+		FROM admin_users
+		WHERE id = ANY($1)
+		  AND ((failed_login_count <> 0 AND last_failed_login_at > NOW() - make_interval(secs => $2))
+		       OR locked_until > NOW())
+	`, pq.Array(ids), adminauth.LockoutStreakMemory.Seconds())
+	if pgerr.IsMissingSchema(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var count int
+		var lockedUntil *time.Time
+		if err := rows.Scan(&id, &count, &lockedUntil); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			users[i].FailedLoginCount = count
+			users[i].LockedUntil = lockedUntil
+		}
+	}
+	return rows.Err()
+}
+
+func (r *sqlRepository) BootstrapClosed(ctx context.Context, untilSuperadmin bool) (bool, error) {
+	if ever, err := SuperadminEverExisted(ctx, r.db); err != nil || ever {
+		return ever, err
+	}
+	var exists bool
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM admin_users
+			WHERE disabled_at IS NULL AND (NOT $1::bool OR platform_role = 'superadmin')
+		)
+	`, untilSuperadmin).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (r *sqlRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := LockSuperadmins(ctx, tx); err != nil {
+		return fmt.Errorf("failed to lock superadmins: %w", err)
+	}
+	isSuperadmin, others, err := OtherActiveSuperadmins(ctx, tx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to check superadmin count: %w", err)
+	}
+	if isSuperadmin && others == 0 {
+		return ErrCannotDeleteLastUser
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM admin_users WHERE id = $1`, userID)
+	if err != nil {
+		return err
+	}
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return err
@@ -516,8 +708,7 @@ func (r *sqlRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error 
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
-
-	return nil
+	return tx.Commit()
 }
 
 func (r *sqlRepository) AttachMemberships(ctx context.Context, users []models.AdminUser) error {
@@ -538,6 +729,7 @@ func (r *sqlRepository) AttachMemberships(ctx context.Context, users []models.Ad
 		FROM tenant_memberships m
 		JOIN tenants t ON t.id = m.tenant_id
 		WHERE m.admin_user_id = ANY($1)
+		  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 		ORDER BY t.name ASC
 	`, pq.Array(ids))
 	if err != nil {

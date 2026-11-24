@@ -15,9 +15,11 @@ import (
 	"github.com/yassinebenameur/probara/shared/models"
 )
 
-// DefaultSource is the built-in public status page template. It is the
-// template served when a status page has no published custom template, and
-// the source handed to customers as the starting point for customization.
+// DefaultSource is the default built-in public status page template. It is
+// the template served when a status page has no published custom template
+// and its template setting is "default" (builtin.go lists every built-in),
+// and the source handed to customers as the starting point for
+// customization.
 //
 //go:embed default.gohtml
 var DefaultSource string
@@ -77,6 +79,7 @@ var typeIcons = map[models.MonitorType]string{
 	models.MonitorTypeTCP:              "link",
 	models.MonitorTypeWebSocket:        "repeat",
 	models.MonitorTypePrometheus:       "bar-chart-2",
+	models.MonitorTypeDomain:           "calendar",
 }
 
 // TypeIcon maps a monitor type to the feather-style icon name templates get
@@ -130,6 +133,22 @@ func ExpandedStripCells(rangeName string) int {
 	}
 }
 
+// NoncePlaceholder is what {{cspNonce}} renders. The status-page service
+// swaps it for a fresh per-response nonce after the (cached) render, so one
+// rendered page serves many responses, each with its own nonce matching its
+// own Content-Security-Policy header. It is plain ASCII letters and
+// underscores, so html/template emits it unchanged in every context.
+const NoncePlaceholder = "__probara_csp_nonce_c7f19e2a__"
+
+// NonceToken is the literal a page's custom head/footer HTML may contain to
+// receive the nonce (that HTML is data, not template source, so the template
+// function cannot run inside it); the renderer substitutes it too.
+const NonceToken = "{{cspNonce}}"
+
+// CSPNonce is the cspNonce template function: inline <script> elements carry
+// nonce="{{cspNonce}}" to run under the strict status-page CSP.
+func CSPNonce() string { return NoncePlaceholder }
+
 // FuncMap is the complete set of functions available to status page
 // templates, custom or default. Adding a function here extends the customer
 // template contract; removing or renaming one breaks published templates, so
@@ -141,6 +160,7 @@ func FuncMap() template.FuncMap {
 		"join":               strings.Join,
 		"monitorStripCells":  MonitorStripCells,
 		"typeIcon":           TypeIcon,
+		"cspNonce":           CSPNonce,
 	}
 }
 

@@ -75,11 +75,25 @@ type AlertDetails struct {
 	// Mesh-edge annotation: populated when Kind == "mesh_edge". The alert's
 	// subject is the directed source→target location path (MonitorID is the
 	// zero UUID for these; MonitorName carries a readable "mesh: A → B" label
-	// so existing channel templates render something meaningful).
+	// so existing channel templates render something meaningful). A
+	// location_offline alert names its location in the Source pair alone.
 	SourceLocationID   *string `json:"source_location_id,omitempty"`
 	SourceLocationName *string `json:"source_location_name,omitempty"`
 	TargetLocationID   *string `json:"target_location_id,omitempty"`
 	TargetLocationName *string `json:"target_location_name,omitempty"`
+
+	// Offline-location annotation, populated when Kind == "location_offline":
+	// LocationLastSeenAt is the location's last accepted heartbeat,
+	// LocationMonitorCount how many live monitors run from it, and
+	// LocationOnlyMonitorCount how many of those have no other enabled
+	// location, so they get no fresh checks at all while it is offline.
+	LocationLastSeenAt       *time.Time `json:"location_last_seen_at,omitempty"`
+	LocationMonitorCount     int        `json:"location_monitor_count,omitempty"`
+	LocationOnlyMonitorCount int        `json:"location_only_monitor_count,omitempty"`
+
+	// ResolveReason says why the alerter closed a resolved alert when that is
+	// not its condition clearing (ResolveReason* values; empty otherwise).
+	ResolveReason string `json:"resolve_reason,omitempty"`
 
 	// SuspectedCause is set only on the "suspected_cause" event: the opt-in
 	// follow-up the alerter sends once per paged channel when the alert's
@@ -89,6 +103,30 @@ type AlertDetails struct {
 	// alert's own value (active or acknowledged): receivers branch on the
 	// event type, never on status.
 	SuspectedCause *SuspectedCause `json:"suspected_cause,omitempty"`
+
+	// Relapse annotation: set once the alert has reopened within its
+	// workspace's reopen cooldown (shared/alertrouting relapse.go).
+	// RelapseCount is how many times it reopened and names the paging
+	// episode an event belongs to (0 = the first); ReopenedAt is the latest
+	// reopen and LastRecoveredAt the recovery that reopen interrupted. A
+	// relapse notice is a "created" event with RelapseCount > 0.
+	RelapseCount    int        `json:"relapse_count,omitempty"`
+	ReopenedAt      *time.Time `json:"reopened_at,omitempty"`
+	LastRecoveredAt *time.Time `json:"last_recovered_at,omitempty"`
+
+	// Per-delivery relapse context, set by the alerter's claim for one
+	// channel. RelapseNotice marks the one send that tells this channel the
+	// alert relapsed (a "created" event; present words only it as a
+	// relapse). PagedRelapse is the episode of the page this channel's
+	// provider incident belongs to, and PreviousPagedRelapse, on a relapse
+	// notice, the episode of the channel's page before it: paging providers
+	// key their incident per episode (pagerduty.DedupKey, opsgenie.Alias), so
+	// a relapse notice closes the earlier incident and opens a new one,
+	// which pages even if the earlier one was acknowledged and never
+	// resolved, and a late resolve closes only the incident it was for.
+	RelapseNotice        bool `json:"relapse_notice,omitempty"`
+	PagedRelapse         int  `json:"paged_relapse,omitempty"`
+	PreviousPagedRelapse *int `json:"previous_paged_relapse,omitempty"`
 }
 
 // SuspectedCause is a triage's named cause as a follow-up carries it.
@@ -130,14 +168,39 @@ func (d AlertDetails) ImpactedMonitorNames() []string {
 	return names
 }
 
-// KindAvailability, KindLatencyAnomaly, KindHostMetric, KindMeshEdge and
-// KindTLSExpiry are the alert kinds.
+// The alert kinds. This block mirrors the alerts_kind_check SQL constraint
+// (latest rewrite: migration 000100); change them together.
 const (
 	KindAvailability   = "availability"
 	KindLatencyAnomaly = "latency_anomaly"
 	KindHostMetric     = "host_metric"
 	KindMeshEdge       = "mesh_edge"
 	KindTLSExpiry      = "tls_expiry"
+	// KindDomainExpiry: a domain registration is inside its expiry window.
+	// MetricValue is the days left (negative once expired), ThresholdValue
+	// the warning window in days, as for KindTLSExpiry. A nil MetricValue
+	// means the expiry date could not be determined (LastError says why).
+	KindDomainExpiry = "domain_expiry"
+	// KindLocationOffline: a check location stopped reporting. The location
+	// is named by SourceLocationID/SourceLocationName.
+	KindLocationOffline = "location_offline"
+)
+
+// Why an alert closed (alerts.resolve_reason) when it is not its condition
+// clearing: the location_offline reasons are set by the alerter, manual by
+// the API. Every other resolve leaves the reason empty.
+const (
+	// ResolveReasonRecovered: the location reports again.
+	ResolveReasonRecovered = "recovered"
+	// ResolveReasonLocationDisabled: the location was disabled, so it is no
+	// longer expected to report.
+	ResolveReasonLocationDisabled = "location_disabled"
+	// ResolveReasonLocationDeleted: the location was deleted.
+	ResolveReasonLocationDeleted = "location_deleted"
+	// ResolveReasonManual: an operator resolved the alert (the API sets it
+	// for every kind); the condition may still hold, and if it does the
+	// alerter opens a new alert on its next evaluation.
+	ResolveReasonManual = "manual"
 )
 
 // IsLatencyAnomaly reports whether this alert is a latency degradation alert.
@@ -158,6 +221,18 @@ func (d AlertDetails) IsMeshEdge() bool {
 // IsTLSExpiry reports whether this alert is a TLS-certificate-expiry warning.
 func (d AlertDetails) IsTLSExpiry() bool {
 	return d.Kind == KindTLSExpiry
+}
+
+// IsDomainExpiry reports whether this alert is a domain-registration-expiry
+// warning.
+func (d AlertDetails) IsDomainExpiry() bool {
+	return d.Kind == KindDomainExpiry
+}
+
+// IsLocationOffline reports whether this alert is a check location that
+// stopped reporting.
+func (d AlertDetails) IsLocationOffline() bool {
+	return d.Kind == KindLocationOffline
 }
 
 // TLSExpiryLabel returns a header label for a tls_expiry alert, for use in

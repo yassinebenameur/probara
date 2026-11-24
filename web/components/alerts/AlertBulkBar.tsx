@@ -2,12 +2,13 @@
 
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CircleCheck, UserCheck, X } from 'lucide-react';
-import { bulkAcknowledgeAlerts, bulkResolveAlerts } from '@/lib/api';
+import { AlarmClock, CircleCheck, Undo2, UserCheck, X } from 'lucide-react';
+import { bulkAcknowledgeAlerts, bulkResolveAlerts, bulkSnoozeAlerts, bulkUnacknowledgeAlerts } from '@/lib/api';
 import { bulkOutcome, bulkTargets, type BulkAction } from '@/lib/alert-bulk';
 import type { Alert, AlertBulkResult } from '@/lib/types';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { useOptionalAlertEvents } from '@/components/alerts/AlertStreamProvider';
+import SnoozeAlertDialog from '@/components/alerts/SnoozeAlertDialog';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import { useToast } from '@/components/ui/ToastProvider';
@@ -26,7 +27,7 @@ interface AlertBulkBarProps {
 
 /**
  * The alerts list's bulk triage bar: "N selected · Acknowledge · Resolve ·
- * Clear", floating over the page while a selection exists (so the list never
+ * Unacknowledge · Snooze · Clear", floating over the page while a selection exists (so the list never
  * shifts), like the monitors list's. Portaled: a fixed bar inside a .glass
  * would be offset and clipped. Writers only; each action sends just the
  * selected alerts it can move and reports the rest (POST /alerts/bulk/*).
@@ -36,28 +37,42 @@ export default function AlertBulkBar({ selected, onApplied, onClear }: AlertBulk
   const stream = useOptionalAlertEvents();
   const { showToast } = useToast();
   const [busy, setBusy] = useState<BulkAction | null>(null);
+  const [snoozing, setSnoozing] = useState(false);
 
   if (!canWrite || selected.length === 0 || typeof document === 'undefined') return null;
 
   const targets = bulkTargets(selected);
 
-  const run = async (action: BulkAction) => {
+  const report = (action: BulkAction, result: AlertBulkResult) => {
+    onApplied(result);
+    onClear();
+    const outcome = bulkOutcome(action, result);
+    showToast(outcome.message, outcome.tone);
+  };
+
+  const run = async (action: Exclude<BulkAction, 'snooze'>) => {
     const ids = targets[action];
     if (ids.length === 0) return;
     setBusy(action);
     // The stream echoes each change; marking them keeps those echoes silent.
     ids.forEach((id) => stream?.markLocalAction(id));
     try {
-      const result = action === 'acknowledge' ? await bulkAcknowledgeAlerts(ids) : await bulkResolveAlerts(ids);
-      onApplied(result);
-      onClear();
-      const outcome = bulkOutcome(action, result);
-      showToast(outcome.message, outcome.tone);
+      const apply = { acknowledge: bulkAcknowledgeAlerts, resolve: bulkResolveAlerts, unacknowledge: bulkUnacknowledgeAlerts }[action];
+      report(action, await apply(ids));
     } catch (err) {
       showToast(err instanceof Error && err.message ? err.message : `Failed to ${action} alerts`, 'error');
     } finally {
       setBusy(null);
     }
+  };
+
+  // The dialog shows a failure itself and stays open for another try.
+  const snooze = async (body: { duration_minutes: number } | { until: string }) => {
+    const ids = targets.snooze;
+    ids.forEach((id) => stream?.markLocalAction(id));
+    const result = await bulkSnoozeAlerts(ids, body);
+    setSnoozing(false);
+    report('snooze', result);
   };
 
   // A count on the button only when it covers part of the selection.
@@ -101,11 +116,40 @@ export default function AlertBulkBar({ selected, onApplied, onClear }: AlertBulk
         >
           Resolve{count(targets.resolve.length)}
         </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          icon={<Undo2 strokeWidth={1.75} />}
+          onClick={() => void run('unacknowledge')}
+          disabled={targets.unacknowledge.length === 0 || busy !== null}
+          loading={busy === 'unacknowledge'}
+          title={targets.unacknowledge.length === 0 ? 'None of the selected alerts is acknowledged' : undefined}
+        >
+          Unacknowledge{count(targets.unacknowledge.length)}
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          icon={<AlarmClock strokeWidth={1.75} />}
+          onClick={() => setSnoozing(true)}
+          disabled={targets.snooze.length === 0 || busy !== null}
+          title={targets.snooze.length === 0 ? 'None of the selected alerts is active and unsnoozed' : undefined}
+        >
+          Snooze{count(targets.snooze.length)}
+        </Button>
 
         <div className="h-4 w-px bg-divider max-sm:hidden" />
 
         <IconButton label="Clear selection (Esc)" icon={<X strokeWidth={1.75} />} onClick={onClear} size="sm" />
       </div>
+      {snoozing && (
+        <SnoozeAlertDialog
+          subject={`${targets.snooze.length} ${targets.snooze.length === 1 ? 'alert' : 'alerts'}`}
+          count={targets.snooze.length}
+          onClose={() => setSnoozing(false)}
+          onSubmit={snooze}
+        />
+      )}
     </div>,
     document.body
   );

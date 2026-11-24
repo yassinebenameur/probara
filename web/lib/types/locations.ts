@@ -8,6 +8,10 @@ export interface Location {
   enabled: boolean;
   connected: boolean;
   last_seen_at?: string;
+  // Seen before and silent for 180 s: the alerter's own offline rule.
+  offline: boolean;
+  // The location's open location_offline alert, if any.
+  open_alert_id?: string;
   // host:port other locations probe; set = participates in the mesh.
   mesh_endpoint?: string;
   monitor_count: number;
@@ -89,6 +93,8 @@ export interface MonitorLocationStatus {
   name: string;
   connected: boolean;
   current_state: 'unknown' | 'up' | 'suspect' | 'down';
+  /** Passes so far toward confirming this location's recovery; non-zero only while down. */
+  consecutive_successes?: number;
   last_latency_ms?: number;
   last_check_at?: string;
 }

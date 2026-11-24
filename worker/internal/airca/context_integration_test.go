@@ -57,11 +57,13 @@ func TestIncidentWindowTenantIsolationAndConsumerIdempotency(t *testing.T) {
 	}
 	exec(`INSERT INTO check_results(monitor_id,tenant_id,job_id,status,error_message,created_at,started_at,completed_at) VALUES($1,$2,$3,'failure','connection refused',$4,$4,$4)`, up, tenant, uuid.New(), anchor.Add(-time.Minute))
 	exec(`INSERT INTO maintenance_windows(id,tenant_id,title,starts_at,ends_at) VALUES($1,$2,'old maintenance',$3,$4)`, mw, tenant, anchor.Add(5*time.Minute), anchor.Add(10*time.Minute))
+	testutil.MaterializeOneOffMaintenance(ctx, t, dbc, mw)
 	exec(`INSERT INTO maintenance_window_monitors(maintenance_window_id,monitor_id) VALUES($1,$2)`, mw, m)
 	group := testutil.InsertGroupMonitor(ctx, t, dbc, tenant, "maintenance group")
 	exec(`INSERT INTO monitor_groups(group_id,monitor_id) VALUES($1,$2)`, group, up)
 	groupMaintenance := uuid.New()
 	exec(`INSERT INTO maintenance_windows(id,tenant_id,title,starts_at,ends_at) VALUES($1,$2,'upstream group maintenance',$3,$4)`, groupMaintenance, tenant, anchor.Add(-2*time.Minute), anchor)
+	testutil.MaterializeOneOffMaintenance(ctx, t, dbc, groupMaintenance)
 	exec(`INSERT INTO maintenance_window_monitors(maintenance_window_id,monitor_id) VALUES($1,$2)`, groupMaintenance, group)
 	in, err := buildAnalysisInput(ctx, dbc, tenant, incident, requested)
 	if err != nil {
@@ -286,6 +288,7 @@ func TestPlatformRowsAreNotEvidenceAndMeshAlertsArePersisted(t *testing.T) {
 	}
 	mw := uuid.New()
 	exec(`INSERT INTO maintenance_windows(id,tenant_id,title,starts_at,ends_at) VALUES($1,$2,'maintenance',$3,$4)`, mw, tenant, anchor.Add(-time.Minute), anchor.Add(10*time.Minute))
+	testutil.MaterializeOneOffMaintenance(ctx, t, dbc, mw)
 	exec(`INSERT INTO maintenance_window_monitors(maintenance_window_id,monitor_id) VALUES($1,$2)`, mw, m)
 
 	incident := uuid.New()
@@ -450,6 +453,7 @@ func TestIncidentAndAlertEvidenceParity(t *testing.T) {
 	}
 	mw := uuid.New()
 	exec(`INSERT INTO maintenance_windows(id,tenant_id,title,starts_at,ends_at) VALUES($1,$2,'mw',$3,$4)`, mw, tenant, anchor.Add(5*time.Minute), anchor.Add(10*time.Minute))
+	testutil.MaterializeOneOffMaintenance(ctx, t, dbc, mw)
 	exec(`INSERT INTO maintenance_window_monitors(maintenance_window_id,monitor_id) VALUES($1,$2)`, mw, m)
 	alert := uuid.New()
 	exec(`INSERT INTO alerts(id,tenant_id,monitor_id,root_cause_monitor_id,triggered_at,failure_count) VALUES($1,$2,$3,$4,$5,1)`, alert, tenant, m, root, anchor)
